@@ -2,6 +2,7 @@
 
 > 定位：本文档是 **双平台协作机制 + Windows 平台适配路线图**，配套 `设计思路.md`（接口单一真相源）与 `版本规划.md`（版本里程碑）。
 > 状态：**规划阶段，未动工。**
+> 修订：v0.0.2 项目总监审查——补 Spike W1 穿透验收标准、v0.8 危险确认一致性、S2 打包 Spike。
 > 背景：两人协作，一人 macOS、一人 Windows，**双侧都主动开发**，不存在单侧追赶。接口契约已冻结，但实现路线初版只写了 macOS。
 > 协作模式：**双侧并行开发 + 互相适配对方提交的共享代码**。同一套接口契约，共享核心由双侧共同演进，平台差异集中隔离；任一侧提交的共享代码若引用了平台 API，另一侧照**平台差异登记表**做对应适配。
 
@@ -125,12 +126,13 @@ Windows: ──────────→ ──────────→ ─
 
 | 风险 | 验证版 | 说明 |
 |---|---|---|
-| 透明点击穿透 | Spike W1（v0.1 前） | `WS_EX_TRANSPARENT`+`WS_EX_LAYERED` 组合有已知坑（穿透区 vs 绘制区），先验证再写 window |
+| 透明点击穿透 | Spike W1（v0.1 前） | `WS_EX_TRANSPARENT`+`WS_EX_LAYERED` 组合有已知坑（穿透区 vs 绘制区）。**Spike 必须明确**：窗口背景透明可穿透，但宠物所在区域（emoji 渲染矩形）**不可穿透**（需响应单击/双击/拖拽）。若全窗口穿透无法局部豁免，需拆为两层窗口（透明穿透背景层 + 宠物交互层），提前在 W1 结论中决定架构。 |
 | 吃鼠标对管理员窗口失效（UIPI） | Spike W2（v0.7 前） | `WH_MOUSE_LL` 收不到 UAC/管理员窗口的输入事件；降级策略：检测到该情况只发气泡不吃鼠标 |
 | LL 鼠标钩子被杀软拦截/误报 | Spike W2 + v0.12 | 说明文档 + 白名单建议；打包签名可缓解 |
 | 高 DPI 多屏坐标 | v0.3 | 不同缩放率屏幕的工作区计算（`GetDpiForMonitor` / Qt 逻辑坐标） |
 | PyInstaller 报毒 | v0.12 | 签名或使用说明兜底 |
 | 防锁死 | 共用看门狗 | 与 macOS 同一 watchdog 逻辑，平台只换"释放实现"（取消钩子 + 恢复光标位置） |
+| 打包 | Spike S2（v0.5 后，双平台共用） | py2app + PyInstaller 最小功能集试跑，提前发现 bundle 内 QML/assets 路径、keyring 后端、codesign 等问题 |
 
 > macOS 的 S0/S1 Spike 照旧；Windows 侧新增 W1/W2，均为**并行 Spike，不阻塞主线**。
 
@@ -147,7 +149,7 @@ Windows: ──────────→ ──────────→ ─
 | v0.5 | 年龄进化+分支+fast-mode | 进化可视化 | 进化可视化 | 无新平台依赖 |
 | v0.6 | ProactiveScheduler+链式唤醒+提醒 | 空闲传感器 | GetLastInputInfo 空闲传感器 | idle gate 双条件对齐 |
 | v0.7 | EatMouseSession+看门狗+安全铁律；FSM 加 EAT_MOUSE | Spike S1 → CGEventTap | Spike W2 → WH_MOUSE_LL+钉光标 | 释放实现平台化（看门狗逻辑共享） |
-| v0.8 | tools_schema 危险拦截+黑名单；**permissions 权限页（QML 共享）** | tools_mac 补全；NSAlert | tools_win 补全；Qt 确认框 | 权限自检项不同（win 基本无需特权） |
+| v0.8 | tools_schema 危险拦截+黑名单；**permissions 权限页（QML 共享）** | tools_mac 补全；NSAlert | tools_win 补全；Qt 确认框 | 权限自检项不同（win 基本无需特权）；**危险操作确认对话框双平台一致**：按钮文案（确认/取消）、显示内容（命令+风险描述）双平台对齐 |
 | v0.9 | memory 记忆/遗忘/摘要；**记忆管理 UI（QML 共享）** | 拖放 | Qt 拖放 | 无新平台依赖 |
 | v0.10 | AIArtProvider+S0 选型 | provider 平台无关 | provider 平台无关 | 无新平台依赖 |
 | v0.11 | hotkey 统一管理；自启逻辑 | pyobjc 热键+LaunchAgents | RegisterHotKey+注册表 Run | 热键冲突处理平台化 |
