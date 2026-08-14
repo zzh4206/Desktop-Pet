@@ -1,0 +1,15 @@
+# 统一文本文件行尾为 LF，消除 Windows(CRLF) 与 macOS(LF) 双平台协作的行尾噪声
+# 仓库内统一存 LF；checkout 到工作区也输出 LF（不按平台转换）
+* text=auto
+
+# 明确 LF 的文本类型（含未来 Python/QML 源码）
+*.md text eol=lf
+*.py text eol=lf
+*.qml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+.gitignore text eol=lf
