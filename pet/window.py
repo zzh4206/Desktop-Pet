@@ -35,6 +35,7 @@ class WindowBase(QWidget):
     settingsRequested = Signal()
     quitRequested = Signal()
     followToggleRequested = Signal()  # v0.3 右键菜单"跟随鼠标"开关
+    petMoved = Signal(float, float, int)  # v0.3 (cx, bottom_y, height) 气泡跟随
     # v0.3 拖拽：参数为全局 bottom_center 坐标（抓取偏移已在窗内算好）
     dragStarted = Signal(float, float)
     dragMoved = Signal(float, float)
@@ -123,6 +124,7 @@ class WindowBase(QWidget):
         tx = int(x - self.width() / 2)
         ty = int(y - self.height())
         self.move(tx, ty)
+        self.petMoved.emit(x, y, self.height())
 
     # ---- v0.2/v0.3 交互入口：手势消解（§2.3）+ 拖拽 ----
     def _bottom_center_global(self) -> tuple:

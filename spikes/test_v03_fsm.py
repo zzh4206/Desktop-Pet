@@ -150,6 +150,21 @@ def main() -> int:
         "T11 上贴屏窗口(top=0)不算站立面",
     )
 
+    # T12 轻抬松手 = 放下（垂直落），不上飞（垂直速度死区 200px/s）
+    import time as _time
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((500, 800))
+    _time.sleep(0.15)
+    fsm.drag_move((500, 790))   # 0.15s 上移 10px → vy≈-67，死区内
+    fsm.end_drag()
+    floor = WA["y"] + WA["height"]
+    check("T12 轻抬松手进下落态", fsm.mode == "fall")
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), sensors(), DT)
+        if fsm.mode == "idle":
+            break
+    check("T12 轻抬松手垂直落到地板(不上飞)", fsm.pos[1] == floor)
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

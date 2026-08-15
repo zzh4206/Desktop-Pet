@@ -59,6 +59,7 @@ _THROWN = "thrown"
 _GRAVITY = 2000.0          # px/s²
 _THROW_V_MAX = 2500.0      # 抛出初速度上限（防一手甩飞穿屏）
 _DRAG_V_WINDOW_S = 0.12    # 取最近 ~120ms 位移估算 release 初速度
+_THROW_VY_DEAD = 200.0     # 垂直速度死区：轻抬/轻压松手视为"放下"而非上抛/下砸
 _ANIM_MIN_S = 15.0         # 随机小动作间隔
 _ANIM_MAX_S = 35.0
 _ANIM_NAMES = ("stretch", "roll", "blink")
@@ -196,6 +197,9 @@ class BehaviorFSM:
             self._vx *= k
             self._vy *= k
         self._drag_hist.clear()
+        # 垂直死区：|vy|<200（轻抬/轻压的手部微颤）不判抛 → 垂直放下
+        if abs(self._vy) < _THROW_VY_DEAD:
+            self._vy = 0.0
         # 垂直速度≈0 且水平速度很小 → 直接落地（拎起来原地放下）
         if abs(self._vy) < 50 and abs(self._vx) < 100:
             self._mode = _FALL

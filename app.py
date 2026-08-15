@@ -95,6 +95,8 @@ class PetApp:
         self.window.followToggleRequested.connect(
             lambda: self._fsm_event("follow_toggle")
         )
+        # v0.3 气泡跟随宠物（§2.4 头顶 20px / 靠顶翻下）
+        self.window.petMoved.connect(self._on_pet_moved)
 
         self.bubble = BubbleWidget()
         self.tray = TrayManager(on_quit=self.shutdown, parent=self.app)
@@ -114,8 +116,11 @@ class PetApp:
         # 用当前 state 调制一次（启动即对齐数值，不等首次衰减）
         self.fsm.on_state_change(self.store.get())
 
-        # 气泡骨架自检（证明 BubbleWidget.show(text) 能显示文字）
-        QTimer.singleShot(1500, lambda: self.bubble.show("我醒啦～"))
+        # 气泡骨架自检（证明 BubbleWidget.show(text) 能显示文字，挂宠物头顶）
+        QTimer.singleShot(
+            1500,
+            lambda: self.bubble.show("我醒啦～", anchor=self._pet_anchor()),
+        )
 
         # 传感器慢刷新（2s），FSM 快 tick（50ms），衰减 1s（wall-clock delta）
         self._sensor_timer = QTimer(self.app)
@@ -138,6 +143,14 @@ class PetApp:
         self._sig_timer.start(200)
         signal.signal(signal.SIGINT, lambda *_: self.shutdown())
 
+    def _pet_anchor(self) -> tuple:
+        """气泡锚点：宠物当前 bottom_center + 窗口高。"""
+        x, y = self.fsm.pos
+        return (x, y, self.window.height())
+
+    def _on_pet_moved(self, x: float, y: float, h: int) -> None:
+        self.bubble.follow((x, y, h))
+
     def _interact(self, kind: str) -> None:
         """v0.2 养成交互：window signal 触发 → store.update + 气泡。
 
@@ -151,7 +164,7 @@ class PetApp:
         self.store.update(**{field: delta})
         msg = _INTERACT_MSG.get(kind)
         if msg:
-            self.bubble.show(msg)
+            self.bubble.show(msg, anchor=self._pet_anchor())
 
     # ---- 衰减 / 持久化 ----
     def _apply_decay(self) -> None:
