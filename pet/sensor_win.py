@@ -1,19 +1,21 @@
-"""win 平台传感器（v0.1：鼠标/工作区；v0.3 补 EnumWindows 缓存；v0.6 补空闲）。
+"""win 平台传感器 —— 设计思路.md §2.2 Sensors 的数据源（平台适配与分工.md §六）。
 
-填充共享 BehaviorFSM 消费的 Sensors 数据源（设计思路 §2.2）：
-- mouse_pos  —— GetCursorPos（ctypes，无需 pywin32/特权）
-- work_area  —— SPI_GETWORKAREA（QScreen.availableGeometry 为 Qt 侧备选；
-                多屏由 platform.py 对各屏取合集，此处先给主屏）
-- idle_time  —— GetLastInputInfo（无需特权）
+填充共享 BehaviorFSM 消费的 Sensors：
+- mouse_pos  —— QCursor.pos（全局 Qt 坐标，与 work_area 同系，免转换）
+- work_area  —— QScreen.availableGeometry 多屏取合集（Qt top-left 原点，
+                已排除任务栏；与 sensor_mac 的 Qt 兜底同实现，保证同系坐标）
+- idle_time  —— GetLastInputInfo（ctypes，无需特权；供 v0.6+ 吃鼠标 idle gate）
 - windows    —— v0.3 起 EnumWindows + 事件/低频缓存，绝不每帧枚举（性能红线）
 
-仅使用 ctypes，避免共享核心直接 import win32*（协作规则：平台依赖只在 shim 内）。
+平台 API 隔离：ctypes 只进本 ``_win`` 文件，不泄漏到共享层（协作规则）。
 """
 
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+
+from .behavior import Sensors
 
 # ---- Windows API 绑定（仅本文件可见，不泄漏到共享层） ----
 
@@ -75,7 +77,7 @@ def get_idle_seconds() -> float:
 
 
 def get_primary_work_area() -> dict:
-    """主屏可用工作区（已排除任务栏），Sensors.work_area 数据源。
+    """主屏可用工作区（已排除任务栏），SPI_GETWORKAREA（Qt 备选见 work_area）。
 
     多屏：v0.3 配合高 DPI Spike 扩展为 EnumDisplayMonitors 取合集。
     """
@@ -88,3 +90,47 @@ def get_primary_work_area() -> dict:
         rc = _RECT(left=0, top=0, right=1920, bottom=1080)
     return {"left": rc.left, "top": rc.top,
             "right": rc.right, "bottom": rc.bottom}
+
+
+def mouse_pos() -> tuple:
+    """全局 Qt 坐标鼠标位置（与 sensor_mac 同实现，同系免转换）。"""
+    from PySide6.QtGui import QCursor
+
+    p = QCursor.pos()
+    return (p.x(), p.y())
+
+
+def work_area() -> dict:
+    """多屏可用工作区合集（Qt top-left 原点，已排除任务栏）。
+
+    与 sensor_mac._work_area_qt 同实现，保证双端 Sensors.work_area 同格式。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    screens = QGuiApplication.screens()
+    if not screens:
+        return {"x": 0, "y": 0, "width": 1920, "height": 1080}
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+    for s in screens:
+        g = s.availableGeometry()
+        min_x = min(min_x, g.x())
+        min_y = min(min_y, g.y())
+        max_x = max(max_x, g.x() + g.width())
+        max_y = max(max_y, g.y() + g.height())
+    return {
+        "x": int(min_x),
+        "y": int(min_y),
+        "width": int(max_x - min_x),
+        "height": int(max_y - min_y),
+    }
+
+
+def build_sensors() -> Sensors:
+    """与 sensor_mac.build_sensors 对齐（app.py 经 platform.py 注入调用）。"""
+    return Sensors(
+        mouse_pos=mouse_pos(),
+        work_area=work_area(),
+        windows=[],
+        idle_time=get_idle_seconds(),
+    )

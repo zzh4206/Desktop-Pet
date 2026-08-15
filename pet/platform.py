@@ -9,7 +9,8 @@ v0.1 把单实例锁（fcntl 文件锁 + osascript 唤醒）/ dock 隐藏（NSAp
 ``PlatformAdapter`` 接口仍在本文件定义，**不进 设计思路.md §2.2**——等 v0.3
 用稳了再走留痕流程正式冻结。
 
-win 分支暂 raise（win 端以后填对齐方法）。app 数据目录名是 ASCII
+win 分支 ``WinPlatformAdapter``（v0.1.3 填齐：msvcrt 单实例锁 / sensor_win /
+window_win / %LOCALAPPDATA% 路径）。app 数据目录名是 ASCII
 ``Desktop-Pet``（非中文，防路径编码问题）。
 """
 
@@ -158,9 +159,106 @@ if sys.platform == "darwin":
             p["data_dir"], p["log_dir"], p["config_path"], p["lock_path"]
         )
 
+elif sys.platform == "win32":
+
+    import msvcrt
+
+    from . import sensor_win, window_win
+
+    class WinPlatformAdapter(PlatformAdapter):
+        """win 注入点（v0.1）：路径 %LOCALAPPDATA% / msvcrt 文件锁 +
+        SetForegroundWindow 唤醒 / sensor_win / window_win。"""
+
+        def __init__(self, data_dir, log_dir, config_path, lock_path):
+            super().__init__(data_dir, log_dir, config_path, lock_path)
+            self._lock_fd = None
+
+        def acquire_single_instance_lock(self) -> bool:
+            fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError:
+                pid = self._read_pid(fd)
+                os.close(fd)
+                self._activate_existing(pid)
+                return False
+            os.ftruncate(fd, 0)
+            os.write(fd, str(os.getpid()).encode())
+            os.lseek(fd, 0, os.SEEK_SET)  # 解锁/再锁从文件头开始
+            self._lock_fd = fd  # 进程存活期间保持锁
+            return True
+
+        @staticmethod
+        def _read_pid(fd: int) -> int | None:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                data = os.read(fd, 64).strip()
+                return int(data) if data else None
+            except (OSError, ValueError):
+                return None
+
+        @staticmethod
+        def _activate_existing(pid: int | None) -> None:
+            """best-effort 前置已有实例：按 pid 枚举可见顶层窗口后
+            SetForegroundWindow（注意其参数是 HWND，非进程句柄）。"""
+            if not pid:
+                return
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                _u = ctypes.WinDLL("user32")
+
+                @ctypes.WINFUNCTYPE(
+                    wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+                )
+                def _on_hwnd(hwnd, _lparam):
+                    owner = wintypes.DWORD()
+                    _u.GetWindowThreadProcessId(
+                        hwnd, ctypes.byref(owner)
+                    )
+                    if owner.value == pid and _u.IsWindowVisible(hwnd):
+                        _u.SetForegroundWindow(hwnd)
+                        return False  # 找到即停
+                    return True
+
+                _u.EnumWindows(_on_hwnd, 0)
+            except Exception:
+                pass  # 唤醒失败不阻塞第二实例退出
+
+        def get_sensors(self):
+            return sensor_win.build_sensors()
+
+        def create_pet_window(self, sprite):
+            return window_win.PetWindow(sprite)
+
+    def _win_paths() -> dict:
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(
+            "~/AppData/Local"
+        )
+        data_dir = os.path.join(base, "Desktop-Pet")
+        log_dir = os.path.join(data_dir, "logs")
+        config_path = os.path.join(data_dir, "config.json")
+        lock_path = os.path.join(data_dir, "Desktop-Pet.lock")
+
+        for d in (data_dir, log_dir):
+            os.makedirs(d, exist_ok=True)
+        return {
+            "data_dir": data_dir,
+            "log_dir": log_dir,
+            "config_path": config_path,
+            "lock_path": lock_path,
+        }
+
+    def get_platform_adapter() -> PlatformAdapter:
+        p = _win_paths()
+        return WinPlatformAdapter(
+            p["data_dir"], p["log_dir"], p["config_path"], p["lock_path"]
+        )
+
 else:
 
     def get_platform_adapter() -> PlatformAdapter:
         raise NotImplementedError(
-            f"platform {sys.platform!r} not handled (mac only in v0.1)"
+            f"platform {sys.platform!r} not handled (mac/win only)"
         )
