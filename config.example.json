@@ -1,0 +1,13 @@
+{
+  "provider": "emoji",
+  "ds_api_key": "",
+  "age_speed_multiplier": 1.0,
+  "log_level": "INFO",
+  "behavior": {
+    "walk_speed": 120,
+    "wander_idle_min_s": 5,
+    "wander_idle_max_s": 15,
+    "first_idle_s": 3,
+    "edge_margin_px": 40
+  }
+}
