@@ -120,7 +120,21 @@ class WindowBase(QWidget):
             self.set_sprite(self._provider.get_static(state))
 
     def move_bottom_center(self, x: float, y: float) -> None:
-        """(x, y) = bottom_center 点 → 算 top-left 后 move。"""
+        """(x, y) = bottom_center 点 → 算 top-left 后 move。
+
+        Qt 层防御钳制：无论 FSM 给出什么坐标，窗口整体保持在屏幕合集内
+        （FSM 已钳制作区，这里兜底多屏/异常值，防偶发消失）。"""
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if screens:
+            geos = [s.geometry() for s in screens]
+            min_x = min(g.x() for g in geos)
+            min_y = min(g.y() for g in geos)
+            max_x = max(g.x() + g.width() for g in geos)
+            max_y = max(g.y() + g.height() for g in geos)
+            x = min(max(x, min_x + self.width() / 2), max_x - self.width() / 2)
+            y = min(max(y, min_y + self.height()), max_y)
         tx = int(x - self.width() / 2)
         ty = int(y - self.height())
         self.move(tx, ty)

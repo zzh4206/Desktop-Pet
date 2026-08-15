@@ -190,16 +190,29 @@ class PetApp:
         self.sensors = self.adapter.get_sensors()
 
     def _check_fullscreen(self) -> None:
-        """v0.3 全屏/演示检测（1s 轮询）：前台全屏 → 隐藏 + 暂停/收敛 FSM。"""
+        """v0.3 全屏/演示检测（1s 轮询，双次确认去抖）：
+        前台全屏 → 隐藏 + 暂停/收敛 FSM；退出单次确认即恢复。"""
         try:
             fs = self.adapter.is_fullscreen_active()
         except NotImplementedError:
             fs = False  # 平台未实现（mac 待补）不抑制
-        if fs != getattr(self, "_fullscreen", False):
-            self._fullscreen = fs
-            self.fsm.handle_event("fullscreen_on" if fs else "fullscreen_off")
-            self.window.hide() if fs else self.window.show()
-            self.logger.info("全屏检测：%s", "隐藏宠物" if fs else "恢复显示")
+        if fs:
+            self._fs_hits = getattr(self, "_fs_hits", 0) + 1
+        else:
+            self._fs_hits = 0
+        was = getattr(self, "_fullscreen", False)
+        # 隐藏需连续 2 次命中（防前台切换瞬间的假全屏闪烁）；
+        # 恢复单次否决即触发（宁可快恢复可见）
+        if not was and fs and self._fs_hits >= 2:
+            self._fullscreen = True
+            self.fsm.handle_event("fullscreen_on")
+            self.window.hide()
+            self.logger.info("全屏检测：隐藏宠物")
+        elif was and not fs:
+            self._fullscreen = False
+            self.fsm.handle_event("fullscreen_off")
+            self.window.show()
+            self.logger.info("全屏检测：恢复显示")
 
     # ---- v0.3 拖拽 ----
     def _on_drag_started(self, x: float, y: float) -> None:
@@ -217,6 +230,10 @@ class PetApp:
         self.fsm.handle_event(event)
 
     def _tick(self) -> None:
+        # 可见性看门狗：非全屏被隐藏（异常/竞态）→ 立即恢复并留痕
+        if not getattr(self, "_fullscreen", False) and not self.window.isVisible():
+            self.window.show()
+            self.logger.warning("宠物窗口异常隐藏，看门狗已恢复")
         action = self.fsm.step(self.store.get(), self.sensors, 0.05)
         if action.type in (ActionType.MOVE_TO, ActionType.FALL):
             # FALL 同样驱动窗口位移（窗口顶面走出/松手直落的掉落过程）

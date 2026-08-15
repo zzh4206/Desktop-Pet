@@ -334,15 +334,28 @@ def work_area() -> dict:
     }
 
 
+def window_alive(ref: dict) -> bool:
+    """窗口实时存活（未关闭/未最小化），O(1)。
+
+    FSM 攀爬/站立支撑每 tick 调用——2s 枚举缓存对"最小化正在爬的窗"延迟
+    太大，IsWindow+IsIconic 立即可判。ref 无 hwnd（mac/测试）→ True。"""
+    hwnd = (ref or {}).get("hwnd")
+    if not hwnd:
+        return True
+    return bool(_user32.IsWindow(hwnd)) and not bool(_user32.IsIconic(hwnd))
+
+
 def build_sensors() -> Sensors:
     """与 sensor_mac.build_sensors 对齐（app.py 经 platform.py 注入调用）。
 
-    solid_at：win 端图层双检查（FSM 攀爬二次确认）；mac 端暂缺 → None
-    （FSM 退纯几何判定）。"""
+    solid_at：win 端图层双检查（FSM 攀爬/落点二次确认）；
+    alive_at：win 端窗口实时存活检查（攀爬掉落去延迟）。
+    mac 端两者暂缺 → None（FSM 退纯几何判定）。"""
     return Sensors(
         mouse_pos=mouse_pos(),
         work_area=work_area(),
         windows=visible_windows(),
         idle_time=get_idle_seconds(),
         solid_at=solid_at,
+        alive_at=window_alive,
     )

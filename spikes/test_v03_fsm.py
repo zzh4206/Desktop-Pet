@@ -391,6 +391,43 @@ def main() -> int:
     check("T22b 窗底下方飞越窗边不攀爬",
           fsm.mode == "idle" and fsm.pos[1] == floor and fsm.pos[0] > 800)
 
+    # T23 高悬浮窗（窗底距地 230px ≥ 身高 96）→ 地板行走钻过，不爬
+    high_win = {"x": 800, "y": 650, "width": 400, "height": 200}
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (700.0, floor)
+    fsm._mode = "walk"
+    fsm._target = (1500.0, floor)
+    for _ in range(int(10 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(high_win,)), DT)
+        if fsm.mode != "walk":
+            break
+    check("T23 净空足够钻过悬浮窗(不攀爬)",
+          fsm.mode in ("walk", "idle") and fsm.pos[1] == floor
+          and fsm.pos[0] > 1200)
+
+    # T23b 攀爬中窗口最小化（alive_at 实时否决，几何列表还留着）→ 立即坠落
+    fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((796, 900))
+    fsm.end_drag()
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    assert fsm.mode == "climb"
+    gone_live = Sensors(mouse_pos=(960, 540), work_area=dict(WA),
+                        windows=[win13], idle_time=0.0,
+                        alive_at=lambda ref: False)  # 实时：已最小化
+    a = fsm.step(PetState.default(), gone_live, DT)
+    check("T23b 攀爬中最小化立即坠落(无缓存延迟)",
+          a.type == ActionType.FALL and fsm.mode == "fall")
+
+    # T23c 站立支撑窗最小化（alive_at 否决表面）→ 立即坠落
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (1000.0, 700.0)
+    fsm._mode = "idle"
+    a = fsm.step(PetState.default(), gone_live, DT)
+    check("T23c 站立窗最小化立即坠落", a.type == ActionType.FALL)
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()
