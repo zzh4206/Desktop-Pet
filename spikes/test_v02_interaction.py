@@ -90,6 +90,23 @@ def main() -> int:
         == ["喂食", "洗澡", "戳一戳", "跟随鼠标", "设置", "退出"],
     )
 
+    # T-c3 气泡跟随宠物定位（§2.4：头顶20px/靠顶翻下/无锚点回退顶中）
+    from pet.bubble import BubbleWidget
+
+    bub = BubbleWidget()
+    bub.show("锚定", anchor=(500, 1080, 96))
+    check("T-c3 头顶锚定(中心随宠物x, y在头上)",
+          abs(bub.x() + bub.width() / 2 - 500) <= 1 and 900 <= bub.y() <= 985)
+    bub.follow((300, 300, 96))
+    check("T-c3 移动实时跟随", abs(bub.x() + bub.width() / 2 - 300) <= 1
+          and bub.y() < 300)
+    bub_top = BubbleWidget()
+    bub_top.show("贴顶", anchor=(500, 60, 96))
+    check("T-c3 靠屏顶翻到宠物下方", bub_top.y() >= 60)
+    bub_no = BubbleWidget()
+    bub_no.show("无锚点")
+    check("T-c3 无锚点回退屏顶居中", bub_no.y() <= 20)
+
     # T-d 数值增益（模拟 app._interact 的核心逻辑）
     deltas = {"pet": "mood", "feed": "fullness",
               "clean": "cleanliness", "poke": "mood"}

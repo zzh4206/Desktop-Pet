@@ -101,6 +101,11 @@ class BubbleWidget(QWidget):
             self.move(bubble_x, above_y)
         else:
             self.move(bubble_x, int(pet_y + 20))
+
+    def _position_at_top_center(self) -> None:
+        """无锚点回退：主屏工作区顶部居中（v0.1 骨架行为）。"""
+        from PySide6.QtGui import QGuiApplication
+
         screen = QGuiApplication.primaryScreen()
         if screen is None:
             return
