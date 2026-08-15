@@ -304,6 +304,7 @@ def main() -> int:
 
     # T20 深度阈值：浅掠顶(<30px)不判撞侧 → 落顶站定；拖到窗上部松手直接站上
     fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）
     fsm.begin_drag((700, 710))           # 脚深 10px < 30
     fsm.drag_move((700, 710))
     fsm.drag_move((796, 710))
@@ -317,6 +318,7 @@ def main() -> int:
           (fsm.pos[0] == 800.0 and False))
     # 拖到窗顶附近(深度 5px)松手 → 直接站上顶，不去贴边
     fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）
     fsm.begin_drag((1000, 705))
     fsm.drag_move((1000, 705))
     fsm.end_drag()
@@ -326,6 +328,7 @@ def main() -> int:
 
     # T21 拎进窗体松手（深>阈值）→ 弹出窗顶上方自然落顶（不再贴边瞬移）
     fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）
     fsm.begin_drag((1000, 800))       # 窗 win13 体内 100px 深
     fsm.drag_move((1000, 800))
     fsm.end_drag()
@@ -339,6 +342,7 @@ def main() -> int:
 
     # T21b 拎进**被盖住**的窗体松手 → 穿过直落地板（图层否决）
     fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), layered, DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）
     fsm.begin_drag((1000, 800))
     fsm.drag_move((1000, 800))
     fsm.end_drag()
@@ -359,6 +363,33 @@ def main() -> int:
             break
     check("T21c 底板穿越被盖窗不停不爬(到达目标)",
           fsm.mode in ("walk", "idle") and fsm.pos[0] > 1200)
+
+    # T22 拖到窗口正下方（窗外，y > 窗底）松手 → 正常落地板（不上顶）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）
+    fsm.begin_drag((1000, 1050))      # 窗体 y∈[700,1000]，此处已在其下
+    fsm.drag_move((1000, 1050))
+    fsm.end_drag()
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode == "idle":
+            break
+    check("T22 窗下松手正常落地板(不瞬移上顶)",
+          fsm.mode == "idle" and fsm.pos[1] == floor)
+
+    # T22b 从窗底下方横向飞越窗边 → 不撞侧攀爬，直落地板
+    fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）
+    fsm.begin_drag((700, 1050))
+    fsm.drag_move((700, 1050))
+    fsm.drag_move((796, 1050))
+    fsm.end_drag()
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode == "idle":
+            break
+    check("T22b 窗底下方飞越窗边不攀爬",
+          fsm.mode == "idle" and fsm.pos[1] == floor and fsm.pos[0] > 800)
 
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider

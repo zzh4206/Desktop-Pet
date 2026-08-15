@@ -239,19 +239,19 @@ class BehaviorFSM:
         else:
             self._mode = _THROWN
             self._bounce_count = 0
-            # 起抛即在窗体内（拎进窗体松手）→ 弹到窗顶上方 1px 保留速度：
-            # 自然落顶站定或飞越；被盖住的窗（图层否决）不弹，直接穿落地板。
-            hit = self._window_spanning(self._pos[0], self._pos[1])
-            if hit is not None:
-                _edge, wy, w = hit
-                wl, wr = w["x"], w["x"] + w["width"]
-                if self._solid_point(
-                    min(max(self._pos[0], wl + 8), wr - 8), wy + 5, w
-                ):
-                    self._pos = (
-                        min(max(self._pos[0], wl + 8), wr - 8),
-                        wy - 1.0,
-                    )
+        # 起抛即在窗体内（拎进窗体松手，两分支都查）→ 弹到窗顶上方 1px：
+        # 自然落顶站定或飞越；被盖住的窗（图层否决）不弹，直接穿落地板。
+        hit = self._window_spanning(self._pos[0], self._pos[1])
+        if hit is not None:
+            _edge, wy, w = hit
+            wl, wr = w["x"], w["x"] + w["width"]
+            if self._solid_point(
+                min(max(self._pos[0], wl + 8), wr - 8), wy + 5, w
+            ):
+                self._pos = (
+                    min(max(self._pos[0], wl + 8), wr - 8),
+                    wy - 1.0,
+                )
 
     # ---- 事件 ----
 
@@ -287,19 +287,25 @@ class BehaviorFSM:
         """有效平台窗（几何过滤；图层校验在 _surface_y/_solid_point 内做）。"""
         yield from self._valid_windows_raw()
 
-    def _window_spanning(self, x: float, y: float):
+    def _window_spanning(self, x: float, y: float, require_band: bool = True):
         """x 落在某有效窗横向范围内且脚下没入其顶超深度阈值
         → (就近边x, 窗顶y, 窗dict)。
 
+        require_band=True（默认）：还须在窗体竖直带内（低于窗底不算——
+        拖到窗口正下方松手不该弹顶）；False：只看顶深（走墙撞边从下方
+        沿边攀爬的场景，边可达）。
         深度不足（浅掠/拖到窗口上部松手）不判"在窗体内"，由落顶逻辑站上顶。"""
         best = None
         for w in self._valid_windows():
             wl, wr = w["x"], w["x"] + w["width"]
-            if wl <= x <= wr and y > w["y"] + self._climb_min_depth:
-                edge = wl if (x - wl) <= (wr - x) else wr
-                cand = (float(edge), float(w["y"]), w)
-                if best is None or cand[1] < best[1]:
-                    best = cand
+            if not (wl <= x <= wr) or y <= w["y"] + self._climb_min_depth:
+                continue
+            if require_band and y >= w["y"] + w["height"]:
+                continue  # 在窗体下方（窗外）：既不在体内也不该贴边弹顶
+            edge = wl if (x - wl) <= (wr - x) else wr
+            cand = (float(edge), float(w["y"]), w)
+            if best is None or cand[1] < best[1]:
+                best = cand
         return best
 
     def _solid_point(self, x: float, y: float, w: dict | None = None) -> bool:
@@ -418,7 +424,7 @@ class BehaviorFSM:
             return Action(ActionType.FALL, {"pos": self._pos})
         # 窗壁：下一步表面高于当前站立面 → 走到边框就往上爬（贴撞入侧边线）
         if ns_surface < cur_surface - 1:
-            hit = self._window_spanning(nx, self._pos[1])
+            hit = self._window_spanning(nx, self._pos[1], require_band=False)
             if hit is not None:
                 self._enter_climb((hit[0], hit[1]))
                 return Action(ActionType.MOVE_TO, {"pos": self._pos})
@@ -444,6 +450,8 @@ class BehaviorFSM:
             wy = w["y"]
             if y <= wy + self._climb_min_depth:
                 continue  # 高于窗顶+阈值：飞越/浅掠顶，不判撞侧
+            if y >= wy + w["height"]:
+                continue  # 低于窗底：从窗体下方穿过，不撞侧
             wl, wr = w["x"], w["x"] + w["width"]
             # 线段 (x0→x1) 与边线相交（端点异侧）
             if (x0 - wl) * (x1 - wl) < 0 or (x0 - wr) * (x1 - wr) < 0:
@@ -454,6 +462,27 @@ class BehaviorFSM:
         if best is not None and self._solid_edge(best[0], best[1], y):
             return best
         return None
+
+    def _fall_surface(self, x: float, y_prev: float) -> float:
+        """下落落点面：只算**不低于起落点(浅带内除外)**的面。
+
+        - 从上方跨越的窗顶可落（正常落顶）；
+        - 浅带（顶上方到顶下 climb_min_depth 内）视为"贴着顶"，可吸附上顶；
+        - 深于浅带（窗体中下部/窗底下方）→ 该窗顶不可落 → 落向地板，
+          消除"窗下松手瞬移上顶"。"""
+        floor = self._bottom()
+        cands = [
+            w for w in self._valid_windows_raw()
+            if w["x"] <= x <= w["x"] + w["width"]
+            and w["y"] >= y_prev - self._climb_min_depth
+        ]
+        cands.sort(key=lambda w: w["y"])
+        for w in cands:
+            if w["y"] >= floor:
+                break
+            if self._solid_point(x, w["y"] + 5, w):
+                return max(w["y"], self._work_area["y"])
+        return floor
 
     def _step_air(self, dt: float) -> Action:
         """FALL/THROWN 共用：重力积分 + 窗侧扫掠攀爬 + 落地弹跳 + 边界。"""
@@ -476,7 +505,7 @@ class BehaviorFSM:
             if hit is not None:
                 self._enter_climb(hit)
                 return Action(ActionType.MOVE_TO, {"pos": self._pos})
-        sy = self._surface_y(x)  # 已含图层校验（被盖住的窗不算面）
+        sy = self._fall_surface(x, self._pos[1])  # 从上方跨越才算落顶
         if y >= sy:
             impact = self._vy
             # 落地反弹：撞击够快 + 弹数未尽 → 弹起（否则停稳）
