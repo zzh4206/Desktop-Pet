@@ -165,6 +165,44 @@ def main() -> int:
             break
     check("T12 轻抬松手垂直落到地板(不上飞)", fsm.pos[1] == floor)
 
+    # T13 抛掷撞窗口侧面 → 沿边逐渐爬到顶（不瞬移）
+    win13 = {"x": 800, "y": 700, "width": 400, "height": 300}
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((700 + 96, 900))     # vx≈800 → 右飞撞窗左沿
+    fsm.end_drag()
+    steps = 0
+    climbed_y = []
+    while steps < int(6 / DT) and fsm.mode != "idle":
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        climbed_y.append(fsm.pos[1])
+        steps += 1
+    check("T13 撞窗侧进入攀爬态后登顶", fsm.mode == "idle"
+          and fsm.pos == (800.0, 700.0))
+    check("T13 攀爬是渐进的(经历多个中间 y, 非瞬移)",
+          len([y for y in climbed_y if 700 < y < 900]) >= 3)
+    # 从右侧撞 → 贴右沿爬
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((1300, 900))
+    fsm.drag_move((1300, 900))
+    fsm.drag_move((1300 - 96, 900))
+    fsm.end_drag()
+    while fsm.mode != "idle" and steps < int(12 / DT):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        steps += 1
+    check("T13 右侧撞入贴右沿登顶", fsm.pos == (1200.0, 700.0))
+    # 攀爬途中窗口消失 → 坠落回地板
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((700 + 96, 900))
+    fsm.end_drag()
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    assert fsm.mode == "climb"
+    _, pos = run(fsm, 5)               # 无窗环境 → 攀爬失效坠落
+    check("T13 攀爬中窗口消失→坠落地板", pos[1] == WA["y"] + WA["height"])
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

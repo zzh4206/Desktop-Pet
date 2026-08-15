@@ -54,6 +54,7 @@ _WALK = "walk"
 _DRAG = "drag"
 _FALL = "fall"
 _THROWN = "thrown"
+_CLIMB = "climb"   # 抛掷撞窗口侧面 → 沿边攀爬到顶（v0.3.5）
 
 # 物理常量（进 config 可后续提取；v0.3 先合理默认）
 _GRAVITY = 2000.0          # px/s²
@@ -90,6 +91,8 @@ class BehaviorFSM:
         self._suppressed = False   # 全屏：暂停 WANDER（不出新目标）
         self._anim_left = random.uniform(_ANIM_MIN_S, _ANIM_MAX_S)
         self._drag_hist: deque = deque()  # (t, x, y) release 初速度估算
+        self._climb_edge_x = 0.0          # 攀爬中的窗边 x（bottom_center 贴边）
+        self._climb_top_y = 0.0           # 攀爬目标的窗口顶 y
 
         # v0.2 数值调制因子（on_state_change 更新；默认 1.0 即不调制）
         self._hunger_factor = 1.0   # 饱食低 → 缩短 idle（觅食感），>1 更频繁走动
@@ -240,6 +243,9 @@ class BehaviorFSM:
         if self._mode == _DRAG:
             return Action(ActionType.MOVE_TO, {"pos": self._pos})
 
+        if self._mode == _CLIMB:
+            return self._step_climb(dt)
+
         if self._mode in (_FALL, _THROWN):
             return self._step_air(dt)
 
@@ -301,15 +307,45 @@ class BehaviorFSM:
             self._pos = (nx, ns_surface)
         return Action(ActionType.MOVE_TO, {"pos": self._pos})
 
+    def _hit_window_side(self, x0: float, x1: float, y: float):
+        """横向飞行撞进窗口侧面：返回 (贴边x, 窗顶y)，否则 None。
+
+        判定：本 tick 新进入某有效窗口的横向范围（上一 tick 还在其外），
+        且身体低于该窗顶（y > w.y，会撞在窗体侧面而非飞越顶面）。
+        有效窗口与 _surface_y 同过滤（最大化/贴顶/贴底不算）。"""
+        floor = self._bottom()
+        top = self._work_area["y"]
+        for w in self._windows:
+            wy = w["y"]
+            if wy >= floor or wy <= top + 8:
+                continue
+            wl, wr = w["x"], w["x"] + w["width"]
+            if wl <= x1 <= wr and not (wl <= x0 <= wr) and y > wy:
+                # 从哪侧撞入就贴哪条边
+                edge = wl if x0 < wl else wr
+                return (float(edge), wy)
+        return None
+
     def _step_air(self, dt: float) -> Action:
-        """FALL/THROWN 共用：重力积分 + 落地判定 + 边界钳制。"""
+        """FALL/THROWN 共用：重力积分 + 窗侧碰撞攀爬 + 落地判定 + 边界钳制。"""
         self._vy += _GRAVITY * dt
-        x = self._clamp_x(self._pos[0] + self._vx * dt)
+        x0 = self._pos[0]
+        x = self._clamp_x(x0 + self._vx * dt)
         y = self._pos[1] + self._vy * dt
         # 不飞出：顶部钳制（撞工作区顶即贴住，vy 清零）
         if y < self._work_area["y"]:
             y = float(self._work_area["y"])
             self._vy = max(self._vy, 0.0)
+        # 抛掷横向撞窗侧 → 贴边攀爬（不再瞬移上顶）
+        if self._mode == _THROWN and self._vx != 0.0:
+            hit = self._hit_window_side(x0, x, y)
+            if hit is not None:
+                self._climb_edge_x, self._climb_top_y = hit
+                self._vx = 0.0
+                self._vy = 0.0
+                self._mode = _CLIMB
+                self._pos = (self._climb_edge_x, max(y, self._climb_top_y))
+                return Action(ActionType.MOVE_TO, {"pos": self._pos})
         sy = self._surface_y(x)
         if y >= sy:
             # 落地：触面停止（spec：落到底边/表面停止，不弹跳）
@@ -324,3 +360,28 @@ class BehaviorFSM:
             ActionType.FALL if self._mode == _FALL else ActionType.MOVE_TO,
             {"pos": self._pos, "vx": self._vx, "vy": self._vy},
         )
+
+    def _step_climb(self, dt: float) -> Action:
+        """沿窗边以步行速度逐渐爬到顶；窗口消失（移走/关闭）则坠落。"""
+        still = any(
+            abs(w["y"] - self._climb_top_y) < 2
+            and (
+                abs(w["x"] - self._climb_edge_x) < 2
+                or abs(w["x"] + w["width"] - self._climb_edge_x) < 2
+            )
+            for w in self._windows
+        )
+        if not still:
+            self._mode = _FALL
+            self._vx = 0.0
+            self._vy = 0.0
+            return Action(ActionType.FALL, {"pos": self._pos})
+        y = self._pos[1] - self._speed * dt
+        if y <= self._climb_top_y:
+            # 登顶站定
+            self._pos = (self._climb_edge_x, self._climb_top_y)
+            self._mode = _IDLE
+            self._idle_left = self._new_idle()
+        else:
+            self._pos = (self._climb_edge_x, y)
+        return Action(ActionType.MOVE_TO, {"pos": self._pos})
