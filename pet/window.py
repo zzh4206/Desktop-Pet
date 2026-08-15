@@ -128,4 +128,4 @@ class WindowBase(QWidget):
         menu.addSeparator()
         menu.addAction("设置", self.settingsRequested.emit)
         menu.addAction("退出", self.quitRequested.emit)
-        menu.exec(event.globalPos().toPoint())
+        menu.exec(event.globalPos())
