@@ -64,6 +64,32 @@ def main() -> int:
     check("T-c 双击触发喂食", events.count("feed") == 1)
     check("T-c 双击不触发单击", events.count("pat") == n_pat)
 
+    # T-c2 右键菜单弹出回归（v0.2.2 勘误：Qt6 globalPos() 无 toPoint，
+    # exec 抛 AttributeError 被 Qt 吞 → 菜单不弹。此断言锁 menu.exec 路径）
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QMenu
+
+    def _close_popup():
+        popup = QApplication.activePopupWidget()
+        if isinstance(popup, QMenu):
+            menu_actions.append([a.text() for a in popup.actions()])
+            popup.close()
+
+    menu_actions: list = []
+    QTimer.singleShot(300, _close_popup)
+    ev = QContextMenuEvent(
+        QContextMenuEvent.Reason.Mouse, QPoint(10, 10), QPoint(100, 100)
+    )
+    win.contextMenuEvent(ev)  # 走 menu.exec 模态循环，由 timer 关闭
+    check("T-c2 右键菜单能弹出(v0.2.2 回归)", len(menu_actions) == 1)
+    check(
+        "T-c2 菜单五项(喂食/洗澡/戳一戳/设置/退出)",
+        len(menu_actions) == 1
+        and [t for t in menu_actions[0] if t]
+        == ["喂食", "洗澡", "戳一戳", "设置", "退出"],
+    )
+
     # T-d 数值增益（模拟 app._interact 的核心逻辑）
     deltas = {"pet": "mood", "feed": "fullness",
               "clean": "cleanliness", "poke": "mood"}
