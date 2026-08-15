@@ -88,6 +88,13 @@ class PetApp:
         self.window.cleanRequested.connect(lambda: self._interact("clean"))
         self.window.pokeRequested.connect(lambda: self._interact("poke"))
         self.window.quitRequested.connect(self.shutdown)
+        # v0.3 拖拽（拖动直接挪窗保跟手，FSM 记录位置/速度）+ 跟随开关
+        self.window.dragStarted.connect(self._on_drag_started)
+        self.window.dragMoved.connect(self._on_drag_moved)
+        self.window.dragReleased.connect(self._on_drag_released)
+        self.window.followToggleRequested.connect(
+            lambda: self._fsm_event("follow_toggle")
+        )
 
         self.bubble = BubbleWidget()
         self.tray = TrayManager(on_quit=self.shutdown, parent=self.app)
@@ -163,12 +170,47 @@ class PetApp:
 
     def _refresh_sensors(self) -> None:
         self.sensors = self.adapter.get_sensors()
+        # v0.3 全屏/演示检测：前台全屏 → 隐藏 + 暂停 WANDER；退出恢复
+        try:
+            fs = self.adapter.is_fullscreen_active()
+        except NotImplementedError:
+            fs = False  # 平台未实现（mac 待补）不抑制
+        if fs != getattr(self, "_fullscreen", False):
+            self._fullscreen = fs
+            self.fsm.handle_event("fullscreen_on" if fs else "fullscreen_off")
+            self.window.hide() if fs else self.window.show()
+            self.logger.info("全屏检测：%s", "隐藏宠物" if fs else "恢复显示")
+
+    # ---- v0.3 拖拽 ----
+    def _on_drag_started(self, x: float, y: float) -> None:
+        self.fsm.begin_drag((x, y))
+        self.window.move_bottom_center(x, y)
+
+    def _on_drag_moved(self, x: float, y: float) -> None:
+        self.fsm.drag_move((x, y))
+        self.window.move_bottom_center(x, y)  # 直接挪窗保跟手
+
+    def _on_drag_released(self, x: float, y: float) -> None:
+        self.fsm.end_drag()
+
+    def _fsm_event(self, event: str) -> None:
+        self.fsm.handle_event(event)
 
     def _tick(self) -> None:
         action = self.fsm.step(self.store.get(), self.sensors, 0.05)
-        if action.type == ActionType.MOVE_TO:
+        if action.type in (ActionType.MOVE_TO, ActionType.FALL):
+            # FALL 同样驱动窗口位移（窗口顶面走出/松手直落的掉落过程）
             x, y = action.params["pos"]
             self.window.move_bottom_center(x, y)
+        elif action.type == ActionType.ANIMATE and action.params.get("name"):
+            self._play_animate(action.params["name"])
+
+    # ---- v0.3 动画 ----
+    def _play_animate(self, name: str) -> None:
+        """随机小动作：get_frames 3 帧循环一轮（emoji 占位，~450ms）后回静帧。"""
+        state = self.store.get()
+        frames = self.provider.get_frames(state, ActionType.ANIMATE)
+        self.window.play_frames(frames)
 
     def shutdown(self) -> None:
         """七步序（§2.5）；v0.2 起 ④保存 PetState 有实体。"""

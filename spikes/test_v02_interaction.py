@@ -87,7 +87,7 @@ def main() -> int:
         "T-c2 菜单五项(喂食/洗澡/戳一戳/设置/退出)",
         len(menu_actions) == 1
         and [t for t in menu_actions[0] if t]
-        == ["喂食", "洗澡", "戳一戳", "设置", "退出"],
+        == ["喂食", "洗澡", "戳一戳", "跟随鼠标", "设置", "退出"],
     )
 
     # T-d 数值增益（模拟 app._interact 的核心逻辑）

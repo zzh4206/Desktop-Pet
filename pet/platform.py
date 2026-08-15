@@ -54,6 +54,14 @@ class PlatformAdapter:
     def create_pet_window(self, sprite):
         raise NotImplementedError
 
+    def is_fullscreen_active(self) -> bool:
+        """前台是否全屏窗口（v0.3 全屏/演示检测）。
+
+        基类返回 False（不抑制）；mac/win 各自覆盖。mac 端 v0.3 待补
+        NSWorkspace + CGWindowList 实现（登记于 工作表 v0.3 mac端）。
+        """
+        return False
+
 
 def _mac_paths() -> dict:
     home = os.path.expanduser("~")
@@ -231,6 +239,9 @@ elif sys.platform == "win32":
 
         def create_pet_window(self, sprite):
             return window_win.PetWindow(sprite)
+
+        def is_fullscreen_active(self) -> bool:
+            return sensor_win.foreground_fullscreen()[0]
 
     def _win_paths() -> dict:
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(

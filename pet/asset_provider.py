@@ -48,6 +48,17 @@ _EMOJI_BY_MOOD: dict[Mood, str] = {
     Mood.HUNGRY: "🙀",
 }
 
+# v0.3 动作帧序列（emoji 占位；v0.10 AI provider 降级复用本表）
+# 行走 2 帧：本体 + 迈步变体；动画 3 帧：本体→动作峰值→本体
+_WALK_FRAME2: dict[Mood, str] = {
+    Mood.HAPPY: "😸",
+    Mood.NEUTRAL: "🐈",
+    Mood.SAD: "😾",
+    Mood.SLEEPY: "😪",
+    Mood.HUNGRY: "😹",
+}
+_ACT_FRAME = "😽"  # 伸懒腰/打滚峰值占位帧
+
 
 def _mood_from_state(state: PetState) -> Mood:
     """v0.2：饱食<20 优先 HUNGRY；mood >=50 HAPPY、>=20 NEUTRAL、余 SAD。"""
@@ -76,5 +87,21 @@ class EmojiProvider:
     def get_frames(
         self, state: PetState, action: "ActionType", skin: str = "default"
     ) -> list[SpriteRef]:
-        # v0.1 无真实帧序列，降级为静态单帧
-        return [self.get_static(state, skin)]
+        """v0.3 动作帧序列（emoji 占位）：MOVE_TO 行走 2 帧交替，
+        ANIMATE 3 帧（本体→峰值→本体），其余动作降级静态单帧。"""
+        from .behavior import ActionType  # 局部 import 防循环依赖
+
+        base = self.get_static(state, skin)
+        mood = _mood_from_state(state)
+
+        def _ref(path: str) -> SpriteRef:
+            return SpriteRef(
+                path=path, width=base.width, height=base.height,
+                anchor=base.anchor,
+            )
+
+        if action == ActionType.MOVE_TO:
+            return [base, _ref(_WALK_FRAME2[mood])]
+        if action == ActionType.ANIMATE:
+            return [base, _ref(_ACT_FRAME), base]
+        return [base]

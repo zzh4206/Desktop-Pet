@@ -34,6 +34,11 @@ class WindowBase(QWidget):
     pokeRequested = Signal()   # 右键菜单"戳一戳"
     settingsRequested = Signal()
     quitRequested = Signal()
+    followToggleRequested = Signal()  # v0.3 右键菜单"跟随鼠标"开关
+    # v0.3 拖拽：参数为全局 bottom_center 坐标（抓取偏移已在窗内算好）
+    dragStarted = Signal(float, float)
+    dragMoved = Signal(float, float)
+    dragReleased = Signal(float, float)
 
     def __init__(self, sprite: SpriteRef, parent=None):
         super().__init__(parent)
@@ -42,6 +47,9 @@ class WindowBase(QWidget):
         self._provider = None                 # 注入 AssetProvider（on_state_change 切 emoji）
         self._press_start: tuple | None = None
         self._drag_candidate = False
+        self._dragging = False
+        self._grab_dx = 0.0                   # 按下点 → 宠物 bottom_center 偏移
+        self._grab_dy = 0.0
 
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
@@ -65,6 +73,14 @@ class WindowBase(QWidget):
         self._single_shot.setInterval(400)  # <500ms 双击窗口
         self._single_shot.timeout.connect(self.patRequested.emit)
 
+        # v0.3 帧动画：150ms/帧，播完回当前静帧
+        self._static_sprite: SpriteRef = sprite
+        self._frames: list = []
+        self._frame_idx = 0
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setInterval(150)
+        self._frame_timer.timeout.connect(self._advance_frame)
+
     # ---- 渲染 ----
     def set_sprite(self, sprite: SpriteRef) -> None:
         self._sprite = sprite
@@ -77,6 +93,26 @@ class WindowBase(QWidget):
         """注入 AssetProvider；on_state_change 据此换 sprite。"""
         self._provider = provider
 
+    def play_frames(self, frames: list) -> None:
+        """v0.3 播一段帧序列（AssetProvider.get_frames），播完回静帧。"""
+        if not frames:
+            return
+        self._static_sprite = self._sprite  # 播完恢复
+        self._frames = list(frames)
+        self._frame_idx = 0
+        self.set_sprite(self._frames[0])
+        if len(self._frames) > 1:
+            self._frame_timer.start()
+
+    def _advance_frame(self) -> None:
+        self._frame_idx += 1
+        if self._frame_idx >= len(self._frames):
+            self._frame_timer.stop()
+            self._frames = []
+            self.set_sprite(getattr(self, "_static_sprite", self._sprite))
+            return
+        self.set_sprite(self._frames[self._frame_idx])
+
     def on_state_change(self, state) -> None:
         """v0.2 订阅 PetStateStore.on_change → 按 state 切 emoji。"""
         if self._provider is not None:
@@ -88,7 +124,13 @@ class WindowBase(QWidget):
         ty = int(y - self.height())
         self.move(tx, ty)
 
-    # ---- v0.2 交互入口：手势消解（§2.3）----
+    # ---- v0.2/v0.3 交互入口：手势消解（§2.3）+ 拖拽 ----
+    def _bottom_center_global(self) -> tuple:
+        return (
+            self.x() + self.width() / 2.0,
+            self.y() + self.height(),
+        )
+
     def mousePressEvent(self, event):
         self._press_start = (
             event.position().x(),
@@ -96,6 +138,11 @@ class WindowBase(QWidget):
             event.timestamp(),
         )
         self._drag_candidate = False
+        # v0.3 拖拽准备：记录抓取偏移（按住哪里就从哪里拎）
+        g = event.globalPosition()
+        bx, by = self._bottom_center_global()
+        self._grab_dx = bx - g.x()
+        self._grab_dy = by - g.y()
 
     def mouseReleaseEvent(self, event):
         if self._press_start is None:
@@ -104,10 +151,16 @@ class WindowBase(QWidget):
         self._press_start = None
         delta = abs(event.position().x() - x) + abs(event.position().y() - y)
         dt_ms = float(event.timestamp() - t0)
-        # 位移≥5px 或时长≥300ms → 拖拽候选（v0.3 填拖拽，不触发单击）
-        if delta >= _CLICK_MAX_PX or dt_ms >= _CLICK_MAX_MS:
-            self._drag_candidate = True
+        # 位移≥5px 或时长≥300ms → 拖拽（v0.3 实装），不触发单击
+        if self._dragging:
+            self._dragging = False
+            g = event.globalPosition()
+            self.dragReleased.emit(
+                g.x() + self._grab_dx, g.y() + self._grab_dy
+            )
             return
+        if delta >= _CLICK_MAX_PX or dt_ms >= _CLICK_MAX_MS:
+            return  # 短距长按：不判单击也不算有效拖拽
         # 延迟消歧：双击事件到达前不出单击
         self._single_shot.start()
 
@@ -116,15 +169,28 @@ class WindowBase(QWidget):
         self.feedRequested.emit()
 
     def mouseMoveEvent(self, event):
-        # v0.3 填拖拽：_drag_candidate 为真时进入拖拽
-        pass
+        # v0.3 拖拽：按住移动（位移超阈即进入）→ 宠物 bottom_center 钉住光标
+        if self._press_start is None or event.buttons() == Qt.NoButton:
+            return
+        px, py, _t = self._press_start
+        moved = (
+            abs(event.position().x() - px) + abs(event.position().y() - py)
+        )
+        if not self._dragging and moved >= _CLICK_MAX_PX:
+            self._dragging = True
+            g = event.globalPosition()
+            self.dragStarted.emit(g.x() + self._grab_dx, g.y() + self._grab_dy)
+        if self._dragging:
+            g = event.globalPosition()
+            self.dragMoved.emit(g.x() + self._grab_dx, g.y() + self._grab_dy)
 
     def contextMenuEvent(self, event):
-        # 右键菜单（§2.3，v0.2 起）：喂食/洗澡/戳一戳 + 设置/退出
+        # 右键菜单（§2.3）：喂食/洗澡/戳一戳/跟随鼠标 + 设置/退出
         menu = QMenu(self)
         menu.addAction("喂食", self.feedRequested.emit)
         menu.addAction("洗澡", self.cleanRequested.emit)
         menu.addAction("戳一戳", self.pokeRequested.emit)
+        menu.addAction("跟随鼠标", self.followToggleRequested.emit)
         menu.addSeparator()
         menu.addAction("设置", self.settingsRequested.emit)
         menu.addAction("退出", self.quitRequested.emit)
