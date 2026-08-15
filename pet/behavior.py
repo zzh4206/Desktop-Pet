@@ -63,6 +63,22 @@ class BehaviorFSM:
         self._idle_left = float(cfg.get("first_idle_s", 3))
         self._first = True
 
+        # v0.2 数值调制因子（on_state_change 更新；默认 1.0 即不调制）
+        self._hunger_factor = 1.0   # 饱食低 → 缩短 idle（觅食感），>1 更频繁走动
+        self._mood_factor = 1.0     # 心情低 → 拉长 idle（发呆），>1 更呆
+
+    def on_state_change(self, state: PetState) -> None:
+        """v0.2 数值调制：饱食<20 → 觅食（idle 缩短）；心情<30 → 发呆（idle 拉长）。
+        cleanliness 那条留 v0.3。无 WANDER/拖拽位移（v0.3）。"""
+        if state.fullness < 20:
+            self._hunger_factor = 2.0
+        else:
+            self._hunger_factor = 1.0
+        if state.mood < 30:
+            self._mood_factor = 2.0
+        else:
+            self._mood_factor = 1.0
+
     def _bottom(self) -> float:
         return self._work_area["y"] + self._work_area["height"]
 
@@ -77,7 +93,10 @@ class BehaviorFSM:
         if self._first:
             self._first = False
             return 3.0
-        return random.uniform(self._idle_min, self._idle_max)
+        # v0.2 数值调制：饱食低 → 缩短（÷hunger_factor），心情低 → 拉长（×mood_factor）
+        base = random.uniform(self._idle_min, self._idle_max)
+        scaled = base * self._mood_factor / self._hunger_factor
+        return max(0.5, scaled)
 
     def handle_event(self, event: str) -> None:
         """v0.2/v0.3 填（如 ProactiveScheduler 触发 EAT_MOUSE）。"""

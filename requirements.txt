@@ -3,3 +3,4 @@ keyring
 psutil
 requests
 pyobjc
+jsonschema

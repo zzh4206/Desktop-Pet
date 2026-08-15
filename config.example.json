@@ -15,5 +15,22 @@
     "wander_idle_max_s": 15,
     "first_idle_s": 3,
     "edge_margin_px": 40
+  },
+  "decay_per_hour": {
+    "mood": 2,
+    "fullness": 3,
+    "cleanliness": 1.5
+  },
+  "interaction_gain": {
+    "pet": 5,
+    "feed": 20,
+    "clean": 15,
+    "poke": -8
+  },
+  "score": {
+    "mood_weight": 0.4,
+    "fullness_weight": 0.4,
+    "cleanliness_weight": 0.2,
+    "healthy_threshold": 70
   }
 }

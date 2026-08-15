@@ -1,11 +1,13 @@
 """透明置顶浮窗薄基类 —— 平台适配与分工.md §二/§五。
 
-v0.1 按“共享 + 薄基类 ``WindowBase``（透明/置顶/工作区/拖拽位移复用），mac 继承”
-写。``WindowBase`` 纯 Qt 无平台库；mac 平台 polish（NSWindow floating level 等）
+``WindowBase`` 纯 Qt 无平台库；mac 平台 polish（NSWindow floating level 等）
 在 ``window_mac.py``（``_mac`` 文件，平台库只进 ``_mac``/``platform.py``）。
 
-v0.1 不接 ``Renderer2D.draw``——直接用 ``QLabel`` 把 emoji 当文字画在透明窗上；
-sprite-blit / get_frames 出帧是 v0.3 wire。
+v0.2 实装交互手势消解（单击/双击/右键，纯 Qt 跨平台逻辑填在此共享文件）+
+signal 交互入口（``patRequested``/``feedRequested``/``cleanRequested``/
+``pokeRequested``/``settingsRequested``/``quitRequested``）+ ``set_sprite_provider``/
+``on_state_change``（订阅 ``PetStateStore.on_change`` 切 emoji）。window 不 import
+业务模块，保持解耦。
 """
 
 from __future__ import annotations
@@ -16,13 +18,18 @@ from PySide6.QtWidgets import QLabel, QMenu, QWidget
 
 from .asset_provider import SpriteRef
 
+# 手势消解阈值（设计思路.md §2.3）
+_CLICK_MAX_PX = 5          # 位移 < 5px 才算点击
+_CLICK_MAX_MS = 300        # 时长 < 300ms 才算点击
+_DOUBLE_CLICK_MS = 500     # 双击间隔 < 500ms
+
 
 class WindowBase(QWidget):
     """透明置顶浮窗薄基类（纯 Qt，无平台库）。mac/win 继承后做平台 polish。"""
 
     # v0.2 交互入口（§2.3 手势消解）：单击摸头 / 双击喂食 / 右键菜单
     patRequested = Signal()    # 单击：位移<5px 且时长<300ms（双击延迟消歧）
-    feedRequested = Signal()   # 双击：间隔<500ms（Qt 双击事件，含系统双击阈值）
+    feedRequested = Signal()   # 双击：Qt 双击事件
     cleanRequested = Signal()  # 右键菜单"洗澡"
     pokeRequested = Signal()   # 右键菜单"戳一戳"
     settingsRequested = Signal()
@@ -32,6 +39,7 @@ class WindowBase(QWidget):
         super().__init__(parent)
         self._sprite = sprite
         self._anchor = sprite.anchor
+        self._provider = None                 # 注入 AssetProvider（on_state_change 切 emoji）
         self._press_start: tuple | None = None
         self._drag_candidate = False
 
@@ -57,6 +65,7 @@ class WindowBase(QWidget):
         self._single_shot.setInterval(400)  # <500ms 双击窗口
         self._single_shot.timeout.connect(self.patRequested.emit)
 
+    # ---- 渲染 ----
     def set_sprite(self, sprite: SpriteRef) -> None:
         self._sprite = sprite
         self._label.setText(sprite.path)
@@ -64,13 +73,22 @@ class WindowBase(QWidget):
             self.resize(sprite.width, sprite.height)
             self._label.resize(sprite.width, sprite.height)
 
+    def set_sprite_provider(self, provider) -> None:
+        """注入 AssetProvider；on_state_change 据此换 sprite。"""
+        self._provider = provider
+
+    def on_state_change(self, state) -> None:
+        """v0.2 订阅 PetStateStore.on_change → 按 state 切 emoji。"""
+        if self._provider is not None:
+            self.set_sprite(self._provider.get_static(state))
+
     def move_bottom_center(self, x: float, y: float) -> None:
         """(x, y) = bottom_center 点 → 算 top-left 后 move。"""
         tx = int(x - self.width() / 2)
         ty = int(y - self.height())
         self.move(tx, ty)
 
-    # v0.2 交互入口：手势消解（§2.3）。位移/时长阈值判定单击/拖拽候选。
+    # ---- v0.2 交互入口：手势消解（§2.3）----
     def mousePressEvent(self, event):
         self._press_start = (
             event.position().x(),
@@ -84,12 +102,10 @@ class WindowBase(QWidget):
             return
         x, y, t0 = self._press_start
         self._press_start = None
-        delta = (
-            abs(event.position().x() - x) + abs(event.position().y() - y)
-        )
+        delta = abs(event.position().x() - x) + abs(event.position().y() - y)
         dt_ms = float(event.timestamp() - t0)
         # 位移≥5px 或时长≥300ms → 拖拽候选（v0.3 填拖拽，不触发单击）
-        if delta >= 5 or dt_ms >= 300:
+        if delta >= _CLICK_MAX_PX or dt_ms >= _CLICK_MAX_MS:
             self._drag_candidate = True
             return
         # 延迟消歧：双击事件到达前不出单击
