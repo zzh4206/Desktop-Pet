@@ -1,0 +1,68 @@
+"""v0.3 win 传感器自动验证 —— EnumWindows 缓存 / 高 DPI 坐标 / 全屏检测。
+
+运行：python spikes/test_v03_sensor_win.py
+"""
+
+from __future__ import annotations
+
+import sys
+
+from PySide6.QtWidgets import QApplication
+
+sys.path.insert(0, ".")
+
+import pet.sensor_win as sw  # noqa: E402
+
+PASS, FAIL = [], []
+
+
+def check(name, cond):
+    (PASS if cond else FAIL).append(name)
+    print(("  ✅ " if cond else "  ❌ ") + name)
+
+
+def main() -> int:
+    app = QApplication(sys.argv)  # Qt 几何/换算需要 QGuiApplication
+    _ = app
+
+    # T-a 可见窗口枚举：格式与 work_area 同系（逻辑坐标 dict）
+    wins = sw.visible_windows(refresh=True)
+    check("T-a 枚举到可见窗口(≥1)", len(wins) >= 1)
+    check(
+        "T-a 窗口框格式 {x,y,width,height}",
+        all(set(w) == {"x", "y", "width", "height"} for w in wins),
+    )
+    check(
+        "T-a 窗口框尺寸合理(>40px)",
+        all(w["width"] > 40 and w["height"] > 40 for w in wins),
+    )
+
+    # T-b 缓存：TTL 内二次调用不重新枚举（同一 list 对象）
+    again = sw.visible_windows()
+    check("T-b TTL 内命中缓存(同对象)", again is wins)
+
+    # T-c 强制刷新拿到新枚举
+    fresh = sw.visible_windows(refresh=True)
+    check("T-c 强制刷新重新枚举", fresh is not wins and len(fresh) >= 1)
+
+    # T-d 全屏检测：返回 (bool, 进程名) 二元组（当前桌面环境通常 False）
+    fs, name = sw.foreground_fullscreen()
+    check("T-d 全屏检测返回二元组", isinstance(fs, bool) and isinstance(name, str))
+
+    # T-e build_sensors 装配 windows
+    s = sw.build_sensors()
+    check("T-e Sensors.windows 已装配", len(s.windows) >= 1)
+
+    # T-f 工作区与窗口框同系（均在工作区合集附近，无荒谬坐标）
+    wa = sw.work_area()
+    sane = all(
+        wa["x"] - 300 <= w["x"] <= wa["x"] + wa["width"] + 300 for w in wins
+    )
+    check("T-f 窗口框与工作区同坐标系(逻辑px)", sane)
+
+    print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
