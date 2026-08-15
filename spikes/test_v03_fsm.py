@@ -324,6 +324,42 @@ def main() -> int:
     check("T20 窗顶浅处松手直接站顶(不贴侧边)",
           fsm.mode == "idle" and fsm.pos == (1000.0, 700.0))
 
+    # T21 拎进窗体松手（深>阈值）→ 弹出窗顶上方自然落顶（不再贴边瞬移）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((1000, 800))       # 窗 win13 体内 100px 深
+    fsm.drag_move((1000, 800))
+    fsm.end_drag()
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode == "idle":
+            break
+    check("T21 深处松手落窗顶(不贴侧边)",
+          fsm.mode == "idle" and fsm.pos[1] == 700
+          and 800 <= fsm.pos[0] <= 1200)
+
+    # T21b 拎进**被盖住**的窗体松手 → 穿过直落地板（图层否决）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((1000, 800))
+    fsm.drag_move((1000, 800))
+    fsm.end_drag()
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), layered, DT)
+        if fsm.mode == "idle":
+            break
+    check("T21b 被盖窗体内松手穿落地板", fsm.pos[1] == floor)
+
+    # T21c 底板行走穿越被盖窗的横向范围 → 不停不爬（被盖窗不是墙不是面）
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (700.0, floor)
+    fsm._mode = "walk"
+    fsm._target = (1500.0, floor)
+    for _ in range(int(10 / DT)):
+        fsm.step(PetState.default(), layered, DT)
+        if fsm.mode != "walk":
+            break
+    check("T21c 底板穿越被盖窗不停不爬(到达目标)",
+          fsm.mode in ("walk", "idle") and fsm.pos[0] > 1200)
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

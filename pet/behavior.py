@@ -140,27 +140,39 @@ class BehaviorFSM:
     def _right(self) -> float:
         return self._work_area["x"] + self._work_area["width"]
 
-    def _surface_y(self, x: float) -> float:
-        """x 处的站立面：窗口顶面取最高（最小 y），否则工作区底边。
-
-        站立面过滤（防"落到屏幕外消失"）：
-        - 顶部高于工作区顶的窗口不算面（最大化窗口 Win32 矩形带 -8px
-          隐形 resize 边框，y 为负 → 落上去即屏幕外）；
-        - 顶部贴工作区顶（≤顶+8px，最大化/上贴屏窗口）也不算面——
-          站在整屏窗口的上边缘等价挂屏幕顶，不是有效平台；
-        - 顶面不高于地板（贴底/半贴屏下半）无支撑意义。
-        多窗重叠取最上面的面；结果再钳制不低于工作区顶（双保险）。
-        """
+    def _valid_windows_raw(self):
+        """几何有效窗（不含图层校验；_surface_y 里再做身份校验）。"""
         floor = self._bottom()
         top = self._work_area["y"]
-        best = floor
         for w in self._windows:
-            wy = w.get("y", floor)
+            wy = w["y"]
             if wy >= floor or wy <= top + 8:
                 continue
-            if w["x"] <= x <= w["x"] + w["width"]:
-                best = min(best, wy)
-        return max(best, top)
+            yield w
+
+    def _surface_y(self, x: float) -> float:
+        """x 处的站立面：图层校验通过的最高窗顶，否则工作区底边。
+
+        窗口过滤（防"落到屏幕外消失"）：
+        - 顶部高于工作区顶的窗口不算面（最大化窗口 Win32 矩形带 -8px
+          隐形 resize 边框，y 为负 → 落上去即屏幕外）；
+        - 顶部贴工作区顶（≤顶+8px，最大化/上贴屏窗口）也不算面；
+        - 顶面不高于地板（贴底/半贴屏下半）无支撑意义；
+        - **图层身份校验**（v0.3.8）：候选窗被别的窗盖住（如全屏窗在前）
+          → 不算面——不能站/不是墙/不能落/不作为游走目标，彻底不存在。
+        """
+        floor = self._bottom()
+        cands = [
+            w for w in self._valid_windows_raw()
+            if w["x"] <= x <= w["x"] + w["width"]
+        ]
+        cands.sort(key=lambda w: w["y"])  # 自上而下找第一个图层可见的
+        for w in cands:
+            if w["y"] >= floor:
+                break
+            if self._solid_point(x, w["y"] + 5, w):
+                return max(w["y"], self._work_area["y"])
+        return floor
 
     def _clamp_x(self, x: float) -> float:
         """不穿屏：x 限制在工作区横向范围内。"""
@@ -227,10 +239,19 @@ class BehaviorFSM:
         else:
             self._mode = _THROWN
             self._bounce_count = 0
-            # 起抛即在某窗横向范围内且低于其顶（拎在窗体内侧松手）→ 就近贴边攀爬
+            # 起抛即在窗体内（拎进窗体松手）→ 弹到窗顶上方 1px 保留速度：
+            # 自然落顶站定或飞越；被盖住的窗（图层否决）不弹，直接穿落地板。
             hit = self._window_spanning(self._pos[0], self._pos[1])
             if hit is not None:
-                self._enter_climb(hit)
+                _edge, wy, w = hit
+                wl, wr = w["x"], w["x"] + w["width"]
+                if self._solid_point(
+                    min(max(self._pos[0], wl + 8), wr - 8), wy + 5, w
+                ):
+                    self._pos = (
+                        min(max(self._pos[0], wl + 8), wr - 8),
+                        wy - 1.0,
+                    )
 
     # ---- 事件 ----
 
@@ -263,17 +284,12 @@ class BehaviorFSM:
     # ---- 主循环 ----
 
     def _valid_windows(self):
-        """有效平台窗（与 _surface_y 同过滤）。"""
-        floor = self._bottom()
-        top = self._work_area["y"]
-        for w in self._windows:
-            wy = w["y"]
-            if wy >= floor or wy <= top + 8:
-                continue
-            yield w
+        """有效平台窗（几何过滤；图层校验在 _surface_y/_solid_point 内做）。"""
+        yield from self._valid_windows_raw()
 
     def _window_spanning(self, x: float, y: float):
-        """x 落在某有效窗横向范围内且脚下没入其顶超深度阈值 → (就近边x, 窗顶y)。
+        """x 落在某有效窗横向范围内且脚下没入其顶超深度阈值
+        → (就近边x, 窗顶y, 窗dict)。
 
         深度不足（浅掠/拖到窗口上部松手）不判"在窗体内"，由落顶逻辑站上顶。"""
         best = None
@@ -281,7 +297,7 @@ class BehaviorFSM:
             wl, wr = w["x"], w["x"] + w["width"]
             if wl <= x <= wr and y > w["y"] + self._climb_min_depth:
                 edge = wl if (x - wl) <= (wr - x) else wr
-                cand = (float(edge), float(w["y"]))
+                cand = (float(edge), float(w["y"]), w)
                 if best is None or cand[1] < best[1]:
                     best = cand
         return best
@@ -302,20 +318,6 @@ class BehaviorFSM:
                 return True
         except Exception:
             return True
-
-    def _landing_surface(self, x: float) -> float:
-        """落点表面：几何面被图层否决（幽灵窗/被盖住的窗）→ 回退地板。"""
-        sy = self._surface_y(x)
-        if sy < self._bottom():
-            w = next(
-                (win for win in self._valid_windows()
-                 if abs(win["y"] - sy) < 2
-                 and win["x"] <= x <= win["x"] + win["width"]),
-                None,
-            )
-            if not self._solid_point(x, sy + 5, w):
-                sy = self._bottom()
-        return sy
 
     def _solid_edge(self, edge_x: float, wy: float, y: float) -> bool:
         """攀爬前图层双检查：边线向窗内 5px 体点的顶层窗是否就是候选窗。
@@ -418,7 +420,7 @@ class BehaviorFSM:
         if ns_surface < cur_surface - 1:
             hit = self._window_spanning(nx, self._pos[1])
             if hit is not None:
-                self._enter_climb(hit)
+                self._enter_climb((hit[0], hit[1]))
                 return Action(ActionType.MOVE_TO, {"pos": self._pos})
             self._mode = _IDLE  # 找不到边（如传感器瞬断）→ 原地停
             self._idle_left = self._new_idle()
@@ -474,7 +476,7 @@ class BehaviorFSM:
             if hit is not None:
                 self._enter_climb(hit)
                 return Action(ActionType.MOVE_TO, {"pos": self._pos})
-        sy = self._landing_surface(x)
+        sy = self._surface_y(x)  # 已含图层校验（被盖住的窗不算面）
         if y >= sy:
             impact = self._vy
             # 落地反弹：撞击够快 + 弹数未尽 → 弹起（否则停稳）
