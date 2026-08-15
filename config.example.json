@@ -3,6 +3,12 @@
   "ds_api_key": "",
   "age_speed_multiplier": 1.0,
   "log_level": "INFO",
+  "interaction_gain": {
+    "pet": 5,
+    "feed": 20,
+    "clean": 15,
+    "poke": -8
+  },
   "behavior": {
     "walk_speed": 120,
     "wander_idle_min_s": 5,

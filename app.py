@@ -9,6 +9,7 @@ v0.1：``--verbose`` + 单实例锁 + ``shutdown()`` 七步骨架（仅 ⑥移�
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import signal
 import sys
@@ -52,6 +53,18 @@ class PetApp:
         self.window.move_bottom_center(cx, bottom)
         self.window.show()
 
+        # v0.2 交互入口（§2.3 手势消解，win端实现于共享 WindowBase）
+        self._gains = dict(self.cfg.get("interaction_gain", {}))
+        self.window.patRequested.connect(lambda: self._interact("pet", "摸摸头～"))
+        self.window.feedRequested.connect(lambda: self._interact("feed", "吃饱啦！"))
+        self.window.cleanRequested.connect(
+            lambda: self._interact("clean", "洗得香香的～")
+        )
+        self.window.pokeRequested.connect(
+            lambda: self._interact("poke", "别戳啦…")
+        )
+        self.window.quitRequested.connect(self.shutdown)
+
         self.bubble = BubbleWidget()
         self.tray = TrayManager(on_quit=self.shutdown, parent=self.app)
 
@@ -75,6 +88,31 @@ class PetApp:
 
     def _refresh_sensors(self) -> None:
         self.sensors = self.adapter.get_sensors()
+
+    def _interact(self, kind: str, msg: str) -> None:
+        """v0.2 养成交互：按 interaction_gain 改数值 + 气泡反馈 + emoji 切换。
+
+        PetStateStore（衰减/持久化/observer）是 v0.2 共享任务（mac 端主笔），
+        接入后此处改为 ``store.update(**deltas)``，交互层不改。
+        """
+        gains = {"pet": "mood", "feed": "fullness",
+                 "clean": "cleanliness", "poke": "mood"}
+        field = gains[kind]
+        delta = float(self._gains.get(kind, 0))
+        old = self.state
+        self.state = dataclasses.replace(
+            old,
+            **{field: min(100.0, max(0.0, getattr(old, field) + delta))},
+        )
+        self.logger.info("交互 %s: %s%+g", kind, field, delta)
+        self.bubble.show(msg)
+        self._refresh_sprite()
+
+    def _refresh_sprite(self) -> None:
+        """mood 级别变化时切换 emoji（避免每 tick 重设文本）。"""
+        sprite = self.provider.get_static(self.state)
+        if sprite.path != self.window._sprite.path:
+            self.window.set_sprite(sprite)
 
     def _tick(self) -> None:
         action = self.fsm.step(self.state, self.sensors, 0.05)

@@ -50,7 +50,9 @@ _EMOJI_BY_MOOD: dict[Mood, str] = {
 
 
 def _mood_from_state(state: PetState) -> Mood:
-    """v0.1 只用到 mood：>=50 HAPPY、>=20 NEUTRAL、余 SAD。"""
+    """v0.2：饱食<20 优先 HUNGRY；mood >=50 HAPPY、>=20 NEUTRAL、余 SAD。"""
+    if state.fullness < 20:
+        return Mood.HUNGRY
     if state.mood >= 50:
         return Mood.HAPPY
     if state.mood >= 20:
