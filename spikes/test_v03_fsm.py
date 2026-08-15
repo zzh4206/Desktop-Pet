@@ -124,6 +124,32 @@ def main() -> int:
     moved = [a for a in actions if a.type == ActionType.MOVE_TO]
     check("T9 全屏时不出新位移(抑制 WANDER)", len(moved) == 0)
 
+    # T11 最大化/上贴屏窗口不构成表面（拖到其上松手不落到屏幕外）
+    def _drop_and_check_landing(windows, name):
+        fsm = BehaviorFSM(dict(WA))
+        fsm.begin_drag((960, 300))
+        fsm.drag_move((960, 300))
+        fsm.drag_move((960, 400))
+        fsm.end_drag()
+        floor = WA["y"] + WA["height"]
+        # 快进到落地（IDLE）即停，避开落地后的随机游走
+        for _ in range(int(3 / DT)):
+            fsm.step(PetState.default(), sensors(windows=windows), DT)
+            if fsm.mode == "idle":
+                break
+        check(name, fsm.pos[1] == floor and 0 <= fsm.pos[0] <= 1920)
+
+    # 最大化窗口 Win32 矩形：x=-8 y=-8 覆盖全屏（隐形 resize 边框）
+    _drop_and_check_landing(
+        ({"x": -8, "y": -8, "width": 1936, "height": 1096},),
+        "T11 最大化窗口(负边框)上方松手落回地板不出屏",
+    )
+    # 上贴屏窗口（top==0）：同规则不算面
+    _drop_and_check_landing(
+        ({"x": 0, "y": 0, "width": 1920, "height": 540},),
+        "T11 上贴屏窗口(top=0)不算站立面",
+    )
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

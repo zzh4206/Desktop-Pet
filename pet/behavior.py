@@ -124,17 +124,24 @@ class BehaviorFSM:
     def _surface_y(self, x: float) -> float:
         """x 处的站立面：窗口顶面取最高（最小 y），否则工作区底边。
 
-        窗口顶面仅当其顶 y 在地板之上（真正悬空）且 x 落在窗口横向范围内
-        才算支撑面。多窗重叠取最上面的面。
+        站立面过滤（防"落到屏幕外消失"）：
+        - 顶部高于工作区顶的窗口不算面（最大化窗口 Win32 矩形带 -8px
+          隐形 resize 边框，y 为负 → 落上去即屏幕外）；
+        - 顶部贴工作区顶（≤顶+8px，最大化/上贴屏窗口）也不算面——
+          站在整屏窗口的上边缘等价挂屏幕顶，不是有效平台；
+        - 顶面不高于地板（贴底/半贴屏下半）无支撑意义。
+        多窗重叠取最上面的面；结果再钳制不低于工作区顶（双保险）。
         """
         floor = self._bottom()
+        top = self._work_area["y"]
         best = floor
         for w in self._windows:
-            if w.get("y", floor) >= floor:
-                continue  # 顶面不高于地板（贴底窗口）→ 无支撑意义
+            wy = w.get("y", floor)
+            if wy >= floor or wy <= top + 8:
+                continue
             if w["x"] <= x <= w["x"] + w["width"]:
-                best = min(best, w["y"])
-        return best
+                best = min(best, wy)
+        return max(best, top)
 
     def _clamp_x(self, x: float) -> float:
         """不穿屏：x 限制在工作区横向范围内。"""
