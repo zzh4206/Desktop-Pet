@@ -47,9 +47,11 @@ class Sensors:
     work_area: dict = field(default_factory=dict)  # {x,y,width,height} Qt top-left
     windows: list = field(default_factory=list)
     idle_time: float = 0.0
-    # v0.3.6 图层双检查（可选）：callable(x, y) -> bool，(x,y) 处是否有实体
-    # 窗口（win 端 WindowFromPoint 实装；mac 端不填 → 纯几何判定）。加字段
-    # 属 Sensors 增量扩展，已登记 工作表/平台差异表，mac 端可后补。
+    # v0.3.6/7 图层双检查（可选）：callable(x, y, ref=None) -> bool。
+    # (x,y) 处的最顶层实体窗口是否就是 ref（几何候选窗 dict；ref=None 时
+    # 只验"有实体窗"）。win 端 WindowFromPoint+GA_ROOT 实装并比对候选 hwnd
+    # ——被全屏窗盖住的窗口会被否决；mac 端不填 → 纯几何判定。
+    # 加字段属 Sensors 增量扩展，已登记 工作表/平台差异表。
     solid_at: object = None
 
 
@@ -70,6 +72,7 @@ _BOUNCE_RESTITUTION = 0.35 # 恢复系数（弹起高度 ~12%）
 _BOUNCE_VX_DAMP = 0.6      # 反弹时水平衰减
 _BOUNCE_MAX = 2            # 最多弹 2 次
 _WALL_RESTITUTION = 0.4    # 侧墙（工作区左右界）反弹系数
+_CLIMB_MIN_DEPTH = 30.0    # 撞侧攀爬的深度阈值：脚下没入窗顶不足此值视为掠顶(落顶站定)
 _ANIM_MIN_S = 15.0         # 随机小动作间隔
 _ANIM_MAX_S = 35.0
 _ANIM_NAMES = ("stretch", "roll", "blink")
@@ -80,6 +83,7 @@ class BehaviorFSM:
         cfg = cfg or {}
         self._work_area = work_area
         self._speed = float(cfg.get("walk_speed", 120))        # px/s
+        self._climb_min_depth = float(cfg.get("climb_min_depth_px", _CLIMB_MIN_DEPTH))
         self._idle_min = float(cfg.get("wander_idle_min_s", 5))
         self._idle_max = float(cfg.get("wander_idle_max_s", 15))
         self._margin = float(cfg.get("edge_margin_px", 40))
@@ -269,35 +273,52 @@ class BehaviorFSM:
             yield w
 
     def _window_spanning(self, x: float, y: float):
-        """x 落在某有效窗横向范围内且 y 低于其顶 → (就近边x, 窗顶y)。"""
+        """x 落在某有效窗横向范围内且脚下没入其顶超深度阈值 → (就近边x, 窗顶y)。
+
+        深度不足（浅掠/拖到窗口上部松手）不判"在窗体内"，由落顶逻辑站上顶。"""
         best = None
         for w in self._valid_windows():
             wl, wr = w["x"], w["x"] + w["width"]
-            if wl <= x <= wr and y > w["y"]:
+            if wl <= x <= wr and y > w["y"] + self._climb_min_depth:
                 edge = wl if (x - wl) <= (wr - x) else wr
                 cand = (float(edge), float(w["y"]))
                 if best is None or cand[1] < best[1]:
                     best = cand
         return best
 
-    def _solid_point(self, x: float, y: float) -> bool:
-        """图层检查某点是否有实体窗口（未提供/失败 → True 纯几何）。"""
+    def _solid_point(self, x: float, y: float, w: dict | None = None) -> bool:
+        """图层检查：x,y 处最顶层实体窗是否就是候选窗 w（None=只验有窗）。
+
+        候选窗被别的窗（如全屏窗）盖住 → WindowFromPoint 返回别人 → 否决。
+        solid_at 未提供/调用失败 → True（退纯几何）。兼容旧 2 参签名。"""
         if self._solid_at is None:
             return True
         try:
-            return bool(self._solid_at(x, y))
+            return bool(self._solid_at(x, y, w))
+        except TypeError:
+            try:
+                return bool(self._solid_at(x, y))  # v0.3.6 旧签名
+            except Exception:
+                return True
         except Exception:
             return True
 
     def _landing_surface(self, x: float) -> float:
-        """落点表面：几何面被图层否决（幽灵窗）→ 回退地板。"""
+        """落点表面：几何面被图层否决（幽灵窗/被盖住的窗）→ 回退地板。"""
         sy = self._surface_y(x)
-        if sy < self._bottom() and not self._solid_point(x, sy + 5):
-            sy = self._bottom()
+        if sy < self._bottom():
+            w = next(
+                (win for win in self._valid_windows()
+                 if abs(win["y"] - sy) < 2
+                 and win["x"] <= x <= win["x"] + win["width"]),
+                None,
+            )
+            if not self._solid_point(x, sy + 5, w):
+                sy = self._bottom()
         return sy
 
     def _solid_edge(self, edge_x: float, wy: float, y: float) -> bool:
-        """图层双检查：边线向窗内 5px 的体点是否有实体窗口。
+        """攀爬前图层双检查：边线向窗内 5px 体点的顶层窗是否就是候选窗。
 
         Sensors.solid_at 未提供（mac）时仅几何判定。"""
         if self._solid_at is None:
@@ -306,10 +327,7 @@ class BehaviorFSM:
             wl, wr = w["x"], w["x"] + w["width"]
             if abs(w["y"] - wy) < 2 and (abs(wl - edge_x) < 2 or abs(wr - edge_x) < 2):
                 inside = wl + 5 if abs(wl - edge_x) < 2 else wr - 5
-                try:
-                    return bool(self._solid_at(inside, y))
-                except Exception:
-                    return True  # 检查失败退纯几何（保守可用）
+                return self._solid_point(inside, y, w)
         return True
 
     def _enter_climb(self, hit: tuple) -> None:
@@ -416,13 +434,14 @@ class BehaviorFSM:
 
     def _hit_window_side(self, x0: float, x1: float, y: float):
         """扫掠检测：本 tick 位移线段 (x0→x1) 穿过某有效窗的左右边线，
-        且身体低于该窗顶 → 返回 (贴边x, 窗顶y)。越过整扇窗（进+出同 tick）
-        也能命中。命中后由 _solid_edge 图层双检查确认。"""
+        且脚下没入窗顶超深度阈值（真撞侧面，非掠顶）→ (贴边x, 窗顶y)。
+        越过整扇窗（进+出同 tick）也能命中；命中后 _solid_edge 图层双检查
+        （候选窗被盖住则否决）。"""
         best = None
         for w in self._valid_windows():
             wy = w["y"]
-            if y <= wy:
-                continue  # 在窗顶之上飞越，不撞侧面
+            if y <= wy + self._climb_min_depth:
+                continue  # 高于窗顶+阈值：飞越/浅掠顶，不判撞侧
             wl, wr = w["x"], w["x"] + w["width"]
             # 线段 (x0→x1) 与边线相交（端点异侧）
             if (x0 - wl) * (x1 - wl) < 0 or (x0 - wr) * (x1 - wr) < 0:

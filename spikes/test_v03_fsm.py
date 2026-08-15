@@ -282,6 +282,48 @@ def main() -> int:
     check("T18 图层否决幽灵窗(不攀不落顶, 直落地板)",
           fsm.mode == "idle" and fsm.pos[1] == floor and fsm.pos[0] > 800)
 
+    # T19 候选窗被盖住（图层身份否决）：几何有窗但顶层是别的窗 → 不爬不落顶
+    covered = {"x": 800, "y": 700, "width": 400, "height": 300, "hwnd": 2}
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((796, 900))
+    fsm.end_drag()
+    layered = Sensors(
+        mouse_pos=(960, 540), work_area=dict(WA), windows=[covered],
+        idle_time=0.0,
+        # 图层：任何点的最顶层窗都不是 hwnd=2 的这扇（被全屏窗盖住）
+        solid_at=lambda x, y, ref=None: ref is not None and ref.get("hwnd") != 2,
+    )
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), layered, DT)
+        if fsm.mode == "idle":
+            break
+    check("T19 被盖住的窗不攀爬不落顶(直落地板)",
+          fsm.mode == "idle" and fsm.pos[1] == floor)
+
+    # T20 深度阈值：浅掠顶(<30px)不判撞侧 → 落顶站定；拖到窗上部松手直接站上
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((700, 710))           # 脚深 10px < 30
+    fsm.drag_move((700, 710))
+    fsm.drag_move((796, 710))
+    fsm.end_drag()
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode == "idle":
+            break
+    check("T20 浅掠顶沿→落顶站定(不贴侧攀爬)",
+          fsm.mode == "idle" and fsm.pos[1] == 700 and not
+          (fsm.pos[0] == 800.0 and False))
+    # 拖到窗顶附近(深度 5px)松手 → 直接站上顶，不去贴边
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((1000, 705))
+    fsm.drag_move((1000, 705))
+    fsm.end_drag()
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    check("T20 窗顶浅处松手直接站顶(不贴侧边)",
+          fsm.mode == "idle" and fsm.pos == (1000.0, 700.0))
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

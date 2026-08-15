@@ -190,14 +190,15 @@ def visible_windows(refresh: bool = False) -> list[dict]:
     return found
 
 
-def solid_at(x: float, y: float) -> bool:
-    """图层双检查（FSM 攀爬前二次确认）：逻辑坐标 (x,y) 处是否为
-    枚举到的实体窗口（WindowFromPoint 命中且 hwnd 在有效窗口集内；
-    宠物自身/气泡是 NOACTIVATE/TOOL 窗，不在集内不会误报）。
+def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
+    """图层双检查（FSM 攀爬/落点二次确认）：
 
+    - ref=None：逻辑坐标 (x,y) 处是否有枚举到的实体窗口（任意命中即可）；
+    - ref=候选窗 dict：该点**最顶层**实体窗是否就是 ref（比对 hwnd）——
+      候选窗被别的窗盖住（如全屏窗在前）→ 返回 False，否决攀爬/落顶。
+    宠物自身/气泡是 NOACTIVATE/TOOL 窗不在有效集，不会误报。
     逻辑→物理坐标按所在屏 DPR 换算（多屏不同缩放逐屏判断）。
     """
-    from PySide6.QtCore import QPoint
     from PySide6.QtGui import QGuiApplication
 
     dpr = 1.0
@@ -212,6 +213,8 @@ def solid_at(x: float, y: float) -> bool:
     if not hwnd:
         return False
     root = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd  # 子控件 → 顶层
+    if ref is not None:
+        return int(root) == ref.get("hwnd")
     valid = {w.get("hwnd") for w in visible_windows()}
     return int(root) in valid
 
