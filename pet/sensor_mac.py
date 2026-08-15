@@ -6,10 +6,16 @@
 (bottom-left origin) 翻转成 Qt (top-left origin)。无 pyobjc 时用
 ``QScreen.availableGeometry`` 兜底。
 
-``idle_time`` / ``windows`` v0.1 不需要（v0.6/v0.3），占位。
+v0.3：``windows``（窗口框枚举）+ 全屏检测。用 ``Quartz.CGWindowListCopyWindowInfo``
+（不需 Accessibility 权限，直接给窗口 bounds；与 AXUIElement 比，v0.3 不攀爬、
+只需框 + 全屏判定，CGWindowList 更合适且免权限——AXUIElement 留将来攀爬逐 app
+窗口树）。**缓存 ≤2s**（``build_sensors`` 由 app 2s timer 调，绝不每帧），
+``idle_time`` v0.6。
 """
 
 from __future__ import annotations
+
+import time
 
 from .behavior import Sensors
 
@@ -19,6 +25,26 @@ try:
     _HAS_PYOBJC = True
 except Exception:
     _HAS_PYOBJC = False
+
+try:
+    from Quartz import (
+        CGWindowListCopyWindowInfo,
+        kCGNullWindowID,
+        kCGWindowListOptionOnScreenOnly,
+    )
+
+    _HAS_QUARTZ = True
+except Exception:
+    _HAS_QUARTZ = False
+
+
+# 窗口枚举缓存（≤2s；app 的 _sensor_timer 2s 调 build_sensors，命中缓存即返回）
+_WINDOWS_CACHE: list[dict] = []
+_WINDOWS_CACHE_TS: float = 0.0
+_WINDOWS_TTL = 2.0
+
+# 全屏判定时忽略的 owner（桌面/菜单栏/Dock/Window Server）
+_DESKTOP_OWNERS = {"Window Server", "Dock", "程序坞", "Finder", "ControlCenter"}
 
 
 def mouse_pos() -> tuple:
@@ -85,10 +111,127 @@ def _work_area_qt() -> dict:
     }
 
 
+def _screen_full_frames() -> list[tuple[int, int, int, int]]:
+    """各屏**全 frame**（含菜单栏区域，Y=0；用于全屏判定——全屏窗覆盖全 frame
+    而非 visibleFrame）。NS→Qt 翻转。无 pyobjc 时用 QScreen.geometry 兜底。"""
+    frames = []
+    if _HAS_PYOBJC:
+        try:
+            screens = list(NSScreen.screens())
+            primary_h = (
+                float(screens[0].frame().size.height) if screens else 0.0
+            )
+            for s in screens:
+                f = s.frame()  # 全屏 frame（含菜单栏）
+                w, h = float(f.size.width), float(f.size.height)
+                x, oy = float(f.origin.x), float(f.origin.y)
+                frames.append((int(round(x)), int(round(primary_h - oy - h)),
+                               int(round(w)), int(round(h))))
+            return frames
+        except Exception:
+            pass
+    from PySide6.QtGui import QGuiApplication
+
+    for s in QGuiApplication.screens():
+        g = s.geometry()
+        frames.append((g.x(), g.y(), g.width(), g.height()))
+    return frames
+
+
+def _is_fullscreen_bounds(b, screen_frames) -> bool:
+    """窗口 bounds 是否覆盖某屏全 frame（全屏判定，非 visibleFrame）。"""
+    x, y = int(b["X"]), int(b["Y"])
+    w, h = int(b["Width"]), int(b["Height"])
+    for (sx, sy, sw, sh) in screen_frames:
+        if x <= sx + 2 and y <= sy + 2 and w >= sw - 2 and h >= sh - 2:
+            return True
+    return False
+
+
+def _enumerate_windows_uncached() -> list[dict]:
+    """CGWindowList 枚举可见窗口框（Qt 坐标），过滤桌面/Dock/菜单栏。
+    返回 list of {x,y,width,height,owner}。无 Quartz → []。"""
+    if not _HAS_QUARTZ:
+        return []
+    out: list[dict] = []
+    try:
+        wins = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+        )
+    except Exception:
+        return []
+    for w in wins:
+        try:
+            layer = int(w.get("kCGWindowLayer", 0))
+        except (TypeError, ValueError):
+            layer = 0
+        if layer != 0:
+            # 菜单栏/Dock/桌面层（正层）与负层都不算普通窗口
+            continue
+        owner = w.get("kCGWindowOwnerName", "")
+        if owner in _DESKTOP_OWNERS:
+            continue
+        b = w.get("kCGWindowBounds")
+        if not b:
+            continue
+        try:
+            x, y = int(b["X"]), int(b["Y"])
+            ww, hh = int(b["Width"]), int(b["Height"])
+        except (KeyError, TypeError):
+            continue
+        if ww < 40 or hh < 40:
+            continue
+        out.append({"x": x, "y": y, "width": ww, "height": hh,
+                    "owner": str(owner)})
+    return out
+
+
+def enumerate_windows() -> list[dict]:
+    """窗口框枚举（缓存 ≤2s；app 2s 调 build_sensors，绝不每帧）。"""
+    global _WINDOWS_CACHE, _WINDOWS_CACHE_TS
+    now = time.monotonic()
+    if _WINDOWS_CACHE and (now - _WINDOWS_CACHE_TS) < _WINDOWS_TTL:
+        return _WINDOWS_CACHE
+    _WINDOWS_CACHE = _enumerate_windows_uncached()
+    _WINDOWS_CACHE_TS = now
+    return _WINDOWS_CACHE
+
+
+def fullscreen_status() -> tuple[bool, str]:
+    """全屏检测：是否有普通 app 的窗口覆盖某屏全 frame。
+    返回 (is_fullscreen, owner)。演示模式（Keynote/PowerPoint 全屏）同命中。
+    无 Quartz → (False, "")。"""
+    if not _HAS_QUARTZ:
+        return (False, "")
+    try:
+        wins = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+        )
+    except Exception:
+        return (False, "")
+    screen_frames = _screen_full_frames()
+    for w in wins:
+        try:
+            layer = int(w.get("kCGWindowLayer", 0))
+        except (TypeError, ValueError):
+            layer = 0
+        if layer != 0:
+            continue
+        owner = w.get("kCGWindowOwnerName", "")
+        if owner in _DESKTOP_OWNERS:
+            continue
+        b = w.get("kCGWindowBounds")
+        if not b:
+            continue
+        if _is_fullscreen_bounds(b, screen_frames):
+            return (True, str(owner))
+    return (False, "")
+
+
 def build_sensors() -> Sensors:
     return Sensors(
         mouse_pos=mouse_pos(),
         work_area=work_area(),
-        windows=[],
+        windows=enumerate_windows(),
         idle_time=0.0,
     )

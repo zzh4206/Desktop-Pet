@@ -51,6 +51,11 @@ class PlatformAdapter:
     def get_sensors(self):
         raise NotImplementedError
 
+    def is_fullscreen(self) -> bool:
+        """前台是否全屏/演示模式（v0.3）：True→app 隐藏浮窗 + 暂停 WANDER。
+        mac 实现委托 sensor_mac（Quartz）；win 端以后填，默认 False。"""
+        return False
+
     def create_pet_window(self, sprite):
         raise NotImplementedError
 
@@ -157,6 +162,13 @@ if sys.platform == "darwin":
 
         def get_sensors(self):
             return sensor_mac.build_sensors()
+
+        def is_fullscreen(self) -> bool:
+            return sensor_mac.fullscreen_status()[0]
+
+        def is_fullscreen_active(self) -> bool:
+            # win app 调此名；复用 mac is_fullscreen（Quartz CGWindowList 全屏检测）
+            return self.is_fullscreen()
 
         def create_pet_window(self, sprite):
             return window_mac.PetWindow(sprite)

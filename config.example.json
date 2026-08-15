@@ -11,10 +11,13 @@
   },
   "behavior": {
     "walk_speed": 120,
+    "follow_speed": 200,
     "wander_idle_min_s": 5,
     "wander_idle_max_s": 15,
     "first_idle_s": 3,
-    "edge_margin_px": 40
+    "edge_margin_px": 40,
+    "gravity_px_per_s2": 2000,
+    "throw_max_speed": 3000
   },
   "decay_per_hour": {
     "mood": 2,

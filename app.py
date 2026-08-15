@@ -265,7 +265,7 @@ class PetApp:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="桌宠 v0.2.0")
+    parser = argparse.ArgumentParser(description="桌宠 v0.3.12")
     parser.add_argument(
         "--verbose", action="store_true", help="详细日志到 stderr"
     )
@@ -274,7 +274,7 @@ def main() -> int:
     adapter = get_platform_adapter()
     paths = adapter.get_paths()
     logger = setup_logging(args.verbose, paths["log_dir"])
-    logger.info("启动桌宠 v0.2.0（verbose=%s）", args.verbose)
+    logger.info("启动桌宠 v0.3.12（verbose=%s）", args.verbose)
 
     if not adapter.acquire_single_instance_lock():
         logger.info("已有实例运行，本进程退出。")
