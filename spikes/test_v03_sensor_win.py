@@ -29,8 +29,9 @@ def main() -> int:
     wins = sw.visible_windows(refresh=True)
     check("T-a 枚举到可见窗口(≥1)", len(wins) >= 1)
     check(
-        "T-a 窗口框格式 {x,y,width,height}",
-        all(set(w) == {"x", "y", "width", "height"} for w in wins),
+        "T-a 窗口框格式 {x,y,width,height[,hwnd]}(v0.3.6 图层检查附 hwnd)",
+        all({"x", "y", "width", "height"} <= set(w) for w in wins)
+        and all(set(w) <= {"x", "y", "width", "height", "hwnd"} for w in wins),
     )
     check(
         "T-a 窗口框尺寸合理(>40px)",

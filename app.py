@@ -122,10 +122,15 @@ class PetApp:
             lambda: self.bubble.show("我醒啦～", anchor=self._pet_anchor()),
         )
 
-        # 传感器慢刷新（2s），FSM 快 tick（50ms），衰减 1s（wall-clock delta）
+        # 传感器慢刷新（2s），FSM 快 tick（50ms），衰减 1s（wall-clock delta），
+        # 全屏检测 1s（独立于传感器缓存，缩短可拖/可见窗口期）
         self._sensor_timer = QTimer(self.app)
         self._sensor_timer.timeout.connect(self._refresh_sensors)
         self._sensor_timer.start(2000)
+
+        self._fullscreen_timer = QTimer(self.app)
+        self._fullscreen_timer.timeout.connect(self._check_fullscreen)
+        self._fullscreen_timer.start(1000)
 
         self._tick_timer = QTimer(self.app)
         self._tick_timer.timeout.connect(self._tick)
@@ -183,7 +188,9 @@ class PetApp:
 
     def _refresh_sensors(self) -> None:
         self.sensors = self.adapter.get_sensors()
-        # v0.3 全屏/演示检测：前台全屏 → 隐藏 + 暂停 WANDER；退出恢复
+
+    def _check_fullscreen(self) -> None:
+        """v0.3 全屏/演示检测（1s 轮询）：前台全屏 → 隐藏 + 暂停/收敛 FSM。"""
         try:
             fs = self.adapter.is_fullscreen_active()
         except NotImplementedError:

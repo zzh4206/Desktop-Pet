@@ -87,6 +87,13 @@ _user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
 _user32.GetMonitorInfoW.argtypes = [
     wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)
 ]
+_user32.WindowFromPoint.argtypes = [_POINT]
+_user32.WindowFromPoint.restype = wintypes.HWND
+
+# 子控件句柄 → 顶层窗口（WindowFromPoint 可能命中窗口内的控件）
+_GA_ROOT = 2
+_user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+_user32.GetAncestor.restype = wintypes.HWND
 _kernel32.OpenProcess.restype = ctypes.c_void_p
 _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 _kernel32.QueryFullProcessImageNameW.argtypes = [
@@ -153,6 +160,7 @@ def visible_windows(refresh: bool = False) -> list[dict]:
 
     缓存 TTL 2s；app.py 的 2s 传感器 timer 恰好命中缓存节奏，FSM 快 tick
     不触发 Win32 枚举。排除：不可见/cloaked/工具窗/最小化/自身零面积。
+    每项含 hwnd（图层双检查用；mac 端无此键，FSM 不依赖）。
     """
     global _windows_cache, _windows_cache_at
     now = _tick_count_ms() / 1000.0
@@ -172,6 +180,7 @@ def visible_windows(refresh: bool = False) -> list[dict]:
             return True
         rect = _hwnd_to_rect(hwnd)
         if rect and rect["width"] > 40 and rect["height"] > 40:
+            rect["hwnd"] = int(hwnd) if hasattr(hwnd, "value") else int(hwnd)
             found.append(rect)
         return True
 
@@ -179,6 +188,32 @@ def visible_windows(refresh: bool = False) -> list[dict]:
     _windows_cache = found
     _windows_cache_at = now
     return found
+
+
+def solid_at(x: float, y: float) -> bool:
+    """图层双检查（FSM 攀爬前二次确认）：逻辑坐标 (x,y) 处是否为
+    枚举到的实体窗口（WindowFromPoint 命中且 hwnd 在有效窗口集内；
+    宠物自身/气泡是 NOACTIVATE/TOOL 窗，不在集内不会误报）。
+
+    逻辑→物理坐标按所在屏 DPR 换算（多屏不同缩放逐屏判断）。
+    """
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QGuiApplication
+
+    dpr = 1.0
+    for screen in QGuiApplication.screens():
+        sg = screen.geometry()
+        if (sg.x() <= x < sg.x() + sg.width()
+                and sg.y() <= y < sg.y() + sg.height()):
+            dpr = screen.devicePixelRatio()
+            break
+    pt = _POINT(int(x * dpr), int(y * dpr))
+    hwnd = _user32.WindowFromPoint(pt)
+    if not hwnd:
+        return False
+    root = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd  # 子控件 → 顶层
+    valid = {w.get("hwnd") for w in visible_windows()}
+    return int(root) in valid
 
 
 def _process_name(pid: int) -> str:
@@ -297,10 +332,14 @@ def work_area() -> dict:
 
 
 def build_sensors() -> Sensors:
-    """与 sensor_mac.build_sensors 对齐（app.py 经 platform.py 注入调用）。"""
+    """与 sensor_mac.build_sensors 对齐（app.py 经 platform.py 注入调用）。
+
+    solid_at：win 端图层双检查（FSM 攀爬二次确认）；mac 端暂缺 → None
+    （FSM 退纯几何判定）。"""
     return Sensors(
         mouse_pos=mouse_pos(),
         work_area=work_area(),
         windows=visible_windows(),
         idle_time=get_idle_seconds(),
+        solid_at=solid_at,
     )

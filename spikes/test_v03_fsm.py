@@ -105,17 +105,23 @@ def main() -> int:
     fsm._pos = (850.0, 700.0)   # 测试注入初始位（窗顶）
     fsm._mode = "walk"
     fsm._target = (400.0, 700.0)
-    actions, pos = run(fsm, 6, windows=(win,))
+    for _ in range(int(6 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win,)), DT)
+        if fsm.mode == "idle":  # 落地停稳即断言（避开后续随机游走）
+            break
     floor = WA["y"] + WA["height"]
-    check("T7 跨表面掉落到地板", pos[1] == floor and pos[0] < 800)
+    check("T7 跨表面掉落到地板", fsm.pos[1] == floor and fsm.pos[0] < 800)
 
-    # T8 窗壁：地板向窗走不攀爬（v0.3 留后），停在墙前
+    # T8 窗壁（v0.3.6 改为走到边框攀爬上顶）：地板向窗走 → 撞左沿爬上窗顶
     fsm = BehaviorFSM(dict(WA))
     fsm._pos = (700.0, floor)
     fsm._mode = "walk"
     fsm._target = (1000.0, floor)
-    _, pos = run(fsm, 6, windows=(win,))
-    check("T8 地板→窗壁不攀爬(停在 x<800)", pos[0] < 800 and pos[1] == floor)
+    for _ in range(int(8 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win,)), DT)
+        if fsm.mode == "idle":
+            break
+    check("T8 走到窗壁沿边爬上窗顶", fsm.pos == (800.0, 700.0))
 
     # T9 全屏抑制：fullscreen_on 后 idle 到期不出新 WANDER
     fsm = BehaviorFSM(dict(WA))
@@ -202,6 +208,79 @@ def main() -> int:
     assert fsm.mode == "climb"
     _, pos = run(fsm, 5)               # 无窗环境 → 攀爬失效坠落
     check("T13 攀爬中窗口消失→坠落地板", pos[1] == WA["y"] + WA["height"])
+
+    # T14 站在窗顶时窗口关闭（传感器不再报告该窗）→ 坠落回地板
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (1000.0, 700.0)      # 站在 win13 顶
+    fsm._mode = "idle"
+    # 窗还在：不应误落
+    ok_stand = fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    check("T14 窗在时不误落", ok_stand.type != ActionType.FALL)
+    # 窗没了：支撑校验立即转下落
+    gone = fsm.step(PetState.default(), sensors(), DT)
+    check("T14 支撑消失立即转下落", gone.type == ActionType.FALL)
+    _, pos = run(fsm, 4)
+    check("T14 窗口关闭后落回地板", pos[1] == WA["y"] + WA["height"])
+
+    # T15 极速抛掷一 tick 越过整扇窗（扫掠检测不漏检）→ 贴左沿攀爬
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((700 + 96, 900))
+    fsm.end_drag()
+    fsm._vx = 10000.0               # 测试注入：单 tick 位移 500px 跨整窗
+    fsm._vy = 0.0
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    check("T15 越窗扫掠命中攀爬(贴左沿)", fsm.mode == "climb"
+          and fsm.pos[0] == 800.0)
+
+    # T16 落地弹跳：硬砸反弹 ≤2 次后停稳；轻落不弹
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((960, 300))
+    fsm.drag_move((960, 300))
+    fsm.drag_move((960, 360))
+    fsm.end_drag()
+    bounces = 0
+    saw_bounce = False
+    for _ in range(int(6 / DT)):
+        a = fsm.step(PetState.default(), sensors(), DT)
+        if a.type == ActionType.MOVE_TO and "bounced" in a.params:
+            saw_bounce = True
+            bounces = a.params["bounced"]
+        if fsm.mode == "idle":
+            break
+    floor = WA["y"] + WA["height"]
+    check("T16 硬砸触发弹跳(1-2次)", saw_bounce and 1 <= bounces <= 2)
+    check("T16 弹后停稳在地板", fsm.mode == "idle" and fsm.pos[1] == floor)
+
+    # T17 全屏瞬间在空中 → 传送回底边中央静止（维持"不往顶上走"）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((400, 500))
+    fsm.drag_move((400, 500))
+    fsm.drag_move((500, 500))
+    fsm.end_drag()
+    assert fsm.mode == "thrown"
+    fsm.handle_event("fullscreen_on")
+    check("T17 全屏时空中收敛到底边中央",
+          fsm.mode == "idle" and fsm.pos == (960.0, float(floor)))
+
+    # T18 图层双检查：右侧半屏图层为空 → 幽灵窗不攀爬也不落其顶，直落地板
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((796, 900))
+    fsm.end_drag()
+    ghost = Sensors(
+        mouse_pos=(960, 540), work_area=dict(WA),
+        windows=[win13], idle_time=0.0,
+        solid_at=lambda x, y: x < 800,  # 图层：只有左半屏有实体窗
+    )
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), ghost, DT)
+        if fsm.mode == "idle":
+            break
+    check("T18 图层否决幽灵窗(不攀不落顶, 直落地板)",
+          fsm.mode == "idle" and fsm.pos[1] == floor and fsm.pos[0] > 800)
 
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider

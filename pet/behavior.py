@@ -47,6 +47,10 @@ class Sensors:
     work_area: dict = field(default_factory=dict)  # {x,y,width,height} Qt top-left
     windows: list = field(default_factory=list)
     idle_time: float = 0.0
+    # v0.3.6 图层双检查（可选）：callable(x, y) -> bool，(x,y) 处是否有实体
+    # 窗口（win 端 WindowFromPoint 实装；mac 端不填 → 纯几何判定）。加字段
+    # 属 Sensors 增量扩展，已登记 工作表/平台差异表，mac 端可后补。
+    solid_at: object = None
 
 
 _IDLE = "idle"
@@ -61,6 +65,11 @@ _GRAVITY = 2000.0          # px/s²
 _THROW_V_MAX = 2500.0      # 抛出初速度上限（防一手甩飞穿屏）
 _DRAG_V_WINDOW_S = 0.12    # 取最近 ~120ms 位移估算 release 初速度
 _THROW_VY_DEAD = 200.0     # 垂直速度死区：轻抬/轻压松手视为"放下"而非上抛/下砸
+_BOUNCE_MIN_VY = 1200.0    # 落地反弹阈值：撞击慢于此不弹（轻放/轻落即停）
+_BOUNCE_RESTITUTION = 0.35 # 恢复系数（弹起高度 ~12%）
+_BOUNCE_VX_DAMP = 0.6      # 反弹时水平衰减
+_BOUNCE_MAX = 2            # 最多弹 2 次
+_WALL_RESTITUTION = 0.4    # 侧墙（工作区左右界）反弹系数
 _ANIM_MIN_S = 15.0         # 随机小动作间隔
 _ANIM_MAX_S = 35.0
 _ANIM_NAMES = ("stretch", "roll", "blink")
@@ -93,6 +102,8 @@ class BehaviorFSM:
         self._drag_hist: deque = deque()  # (t, x, y) release 初速度估算
         self._climb_edge_x = 0.0          # 攀爬中的窗边 x（bottom_center 贴边）
         self._climb_top_y = 0.0           # 攀爬目标的窗口顶 y
+        self._bounce_count = 0            # 落地反弹计数（重置于新抛掷/静止）
+        self._solid_at = None             # 图层双检查（Sensors.solid_at 注入）
 
         # v0.2 数值调制因子（on_state_change 更新；默认 1.0 即不调制）
         self._hunger_factor = 1.0   # 饱食低 → 缩短 idle（觅食感），>1 更频繁走动
@@ -175,6 +186,7 @@ class BehaviorFSM:
         """按住宠物：进入 DRAG，位置=光标（bottom_center 钉在光标）。"""
         self._mode = _DRAG
         self._vx = self._vy = 0.0
+        self._bounce_count = 0
         self._drag_hist.clear()
         self._drag_hist.append((time.monotonic(), cursor[0], cursor[1]))
 
@@ -210,19 +222,31 @@ class BehaviorFSM:
             self._vy = 0.0
         else:
             self._mode = _THROWN
+            self._bounce_count = 0
+            # 起抛即在某窗横向范围内且低于其顶（拎在窗体内侧松手）→ 就近贴边攀爬
+            hit = self._window_spanning(self._pos[0], self._pos[1])
+            if hit is not None:
+                self._enter_climb(hit)
 
     # ---- 事件 ----
 
     def handle_event(self, event: str) -> None:
-        """v0.3：fullscreen_on/off（暂停/恢复 WANDER）、follow_toggle。"""
+        """v0.3：fullscreen_on/off（暂停/恢复 WANDER，空中/攀爬传送回底边中央）、
+        follow_toggle。"""
         if event == "fullscreen_on":
             self._suppressed = True
+            # 全屏中不可见：空中/攀爬态收敛到地面（维持"不往顶上走"）；
+            # DRAG 例外（用户还拎着，松手自会落）
+            if self._mode in (_THROWN, _FALL, _CLIMB, _WALK):
+                cx = self._left() + (self._right() - self._left()) / 2
+                self._pos = (cx, self._bottom())
+                self._mode = _IDLE
+                self._vx = self._vy = 0.0
+                self._idle_left = self._new_idle()
         elif event == "fullscreen_off":
             self._suppressed = False
         elif event == "follow_toggle":
             self._follow = not self._follow
-        elif event == "fullscreen_check_off":
-            self._suppressed = False
 
     @property
     def mode(self) -> str:
@@ -234,11 +258,90 @@ class BehaviorFSM:
 
     # ---- 主循环 ----
 
+    def _valid_windows(self):
+        """有效平台窗（与 _surface_y 同过滤）。"""
+        floor = self._bottom()
+        top = self._work_area["y"]
+        for w in self._windows:
+            wy = w["y"]
+            if wy >= floor or wy <= top + 8:
+                continue
+            yield w
+
+    def _window_spanning(self, x: float, y: float):
+        """x 落在某有效窗横向范围内且 y 低于其顶 → (就近边x, 窗顶y)。"""
+        best = None
+        for w in self._valid_windows():
+            wl, wr = w["x"], w["x"] + w["width"]
+            if wl <= x <= wr and y > w["y"]:
+                edge = wl if (x - wl) <= (wr - x) else wr
+                cand = (float(edge), float(w["y"]))
+                if best is None or cand[1] < best[1]:
+                    best = cand
+        return best
+
+    def _solid_point(self, x: float, y: float) -> bool:
+        """图层检查某点是否有实体窗口（未提供/失败 → True 纯几何）。"""
+        if self._solid_at is None:
+            return True
+        try:
+            return bool(self._solid_at(x, y))
+        except Exception:
+            return True
+
+    def _landing_surface(self, x: float) -> float:
+        """落点表面：几何面被图层否决（幽灵窗）→ 回退地板。"""
+        sy = self._surface_y(x)
+        if sy < self._bottom() and not self._solid_point(x, sy + 5):
+            sy = self._bottom()
+        return sy
+
+    def _solid_edge(self, edge_x: float, wy: float, y: float) -> bool:
+        """图层双检查：边线向窗内 5px 的体点是否有实体窗口。
+
+        Sensors.solid_at 未提供（mac）时仅几何判定。"""
+        if self._solid_at is None:
+            return True
+        for w in self._valid_windows():
+            wl, wr = w["x"], w["x"] + w["width"]
+            if abs(w["y"] - wy) < 2 and (abs(wl - edge_x) < 2 or abs(wr - edge_x) < 2):
+                inside = wl + 5 if abs(wl - edge_x) < 2 else wr - 5
+                try:
+                    return bool(self._solid_at(inside, y))
+                except Exception:
+                    return True  # 检查失败退纯几何（保守可用）
+        return True
+
+    def _enter_climb(self, hit: tuple) -> None:
+        self._climb_edge_x, self._climb_top_y = hit
+        self._vx = self._vy = 0.0
+        self._mode = _CLIMB
+        self._pos = (
+            self._clamp_x(self._climb_edge_x),
+            max(self._pos[1], self._climb_top_y),
+        )
+
     def step(self, state: PetState, sensors: Sensors, dt: float) -> Action:
         # 跟随工作区变化（Dock 显隐 / 多屏）；窗口列表每 tick 换引用零成本
         if sensors.work_area:
             self._work_area = sensors.work_area
         self._windows = sensors.windows or []
+        self._solid_at = sensors.solid_at
+
+        # 防御钳制：任何状态下都在工作区内（防偶发消失）
+        x, y = self._pos
+        cx = self._clamp_x(x)
+        cy = min(max(y, self._work_area["y"]), self._bottom())
+        if (cx, cy) != (x, y):
+            self._pos = (cx, cy)
+
+        # 支撑校验（IDLE/WALK）：脚下窗口被关闭/最小化/拖走 → 坠落
+        if self._mode in (_IDLE, _WALK):
+            sy = self._surface_y(self._pos[0])
+            if sy > self._pos[1] + 2:
+                self._mode = _FALL
+                self._vx = self._vy = 0.0
+                return Action(ActionType.FALL, {"pos": self._pos})
 
         if self._mode == _DRAG:
             return Action(ActionType.MOVE_TO, {"pos": self._pos})
@@ -293,9 +396,13 @@ class BehaviorFSM:
             self._vy = 0.0
             self._pos = (nx, cur_y)
             return Action(ActionType.FALL, {"pos": self._pos})
-        # 窗壁：下一步表面高于当前站立面 → v0.3 不攀爬（留后），视为到达停下
+        # 窗壁：下一步表面高于当前站立面 → 走到边框就往上爬（贴撞入侧边线）
         if ns_surface < cur_surface - 1:
-            self._mode = _IDLE
+            hit = self._window_spanning(nx, self._pos[1])
+            if hit is not None:
+                self._enter_climb(hit)
+                return Action(ActionType.MOVE_TO, {"pos": self._pos})
+            self._mode = _IDLE  # 找不到边（如传感器瞬断）→ 原地停
             self._idle_left = self._new_idle()
             return Action(ActionType.MOVE_TO, {"pos": self._pos})
         if abs(tx - nx) <= stride or (tx > x) != (tx > nx):
@@ -308,51 +415,69 @@ class BehaviorFSM:
         return Action(ActionType.MOVE_TO, {"pos": self._pos})
 
     def _hit_window_side(self, x0: float, x1: float, y: float):
-        """横向飞行撞进窗口侧面：返回 (贴边x, 窗顶y)，否则 None。
-
-        判定：本 tick 新进入某有效窗口的横向范围（上一 tick 还在其外），
-        且身体低于该窗顶（y > w.y，会撞在窗体侧面而非飞越顶面）。
-        有效窗口与 _surface_y 同过滤（最大化/贴顶/贴底不算）。"""
-        floor = self._bottom()
-        top = self._work_area["y"]
-        for w in self._windows:
+        """扫掠检测：本 tick 位移线段 (x0→x1) 穿过某有效窗的左右边线，
+        且身体低于该窗顶 → 返回 (贴边x, 窗顶y)。越过整扇窗（进+出同 tick）
+        也能命中。命中后由 _solid_edge 图层双检查确认。"""
+        best = None
+        for w in self._valid_windows():
             wy = w["y"]
-            if wy >= floor or wy <= top + 8:
-                continue
+            if y <= wy:
+                continue  # 在窗顶之上飞越，不撞侧面
             wl, wr = w["x"], w["x"] + w["width"]
-            if wl <= x1 <= wr and not (wl <= x0 <= wr) and y > wy:
-                # 从哪侧撞入就贴哪条边
-                edge = wl if x0 < wl else wr
-                return (float(edge), wy)
+            # 线段 (x0→x1) 与边线相交（端点异侧）
+            if (x0 - wl) * (x1 - wl) < 0 or (x0 - wr) * (x1 - wr) < 0:
+                edge = wl if x0 < wl else wr  # 从哪侧撞入贴哪条边
+                cand = (float(edge), float(wy))
+                if best is None or cand[1] < best[1]:
+                    best = cand
+        if best is not None and self._solid_edge(best[0], best[1], y):
+            return best
         return None
 
     def _step_air(self, dt: float) -> Action:
-        """FALL/THROWN 共用：重力积分 + 窗侧碰撞攀爬 + 落地判定 + 边界钳制。"""
+        """FALL/THROWN 共用：重力积分 + 窗侧扫掠攀爬 + 落地弹跳 + 边界。"""
         self._vy += _GRAVITY * dt
         x0 = self._pos[0]
-        x = self._clamp_x(x0 + self._vx * dt)
+        raw_x = x0 + self._vx * dt
+        x = self._clamp_x(raw_x)
         y = self._pos[1] + self._vy * dt
         # 不飞出：顶部钳制（撞工作区顶即贴住，vy 清零）
         if y < self._work_area["y"]:
             y = float(self._work_area["y"])
             self._vy = max(self._vy, 0.0)
-        # 抛掷横向撞窗侧 → 贴边攀爬（不再瞬移上顶）
+        # 侧墙（工作区左右界）反弹（仅抛掷态；掉落无水平速度不涉及）
+        if self._mode == _THROWN and raw_x != x:
+            self._vx = -self._vx * _WALL_RESTITUTION
+            x0 = x  # 后续扫掠从墙点起，防穿透检测误报
+        # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）
         if self._mode == _THROWN and self._vx != 0.0:
             hit = self._hit_window_side(x0, x, y)
             if hit is not None:
-                self._climb_edge_x, self._climb_top_y = hit
-                self._vx = 0.0
-                self._vy = 0.0
-                self._mode = _CLIMB
-                self._pos = (self._climb_edge_x, max(y, self._climb_top_y))
+                self._enter_climb(hit)
                 return Action(ActionType.MOVE_TO, {"pos": self._pos})
-        sy = self._surface_y(x)
+        sy = self._landing_surface(x)
         if y >= sy:
-            # 落地：触面停止（spec：落到底边/表面停止，不弹跳）
+            impact = self._vy
+            # 落地反弹：撞击够快 + 弹数未尽 → 弹起（否则停稳）
+            if (
+                self._mode == _THROWN
+                and impact > _BOUNCE_MIN_VY
+                and self._bounce_count < _BOUNCE_MAX
+            ):
+                self._bounce_count += 1
+                self._vy = -impact * _BOUNCE_RESTITUTION
+                self._vx *= _BOUNCE_VX_DAMP
+                self._pos = (x, sy)
+                return Action(
+                    ActionType.MOVE_TO,
+                    {"pos": self._pos, "bounced": self._bounce_count},
+                )
+            # 触面停止（spec：落到底边/表面停止）
             self._pos = (x, sy)
             self._vx = 0.0
             self._vy = 0.0
             self._mode = _IDLE
+            self._bounce_count = 0
             self._idle_left = self._new_idle()
             return Action(ActionType.MOVE_TO, {"pos": self._pos})
         self._pos = (x, y)
