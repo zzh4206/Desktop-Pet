@@ -240,15 +240,36 @@ def _window_pid(hwnd) -> int:
     return pid.value
 
 
+def _window_class(hwnd) -> str:
+    """窗口类名（排除桌面窗口用）。"""
+    buf = ctypes.create_unicode_buffer(64)
+    n = _user32.GetClassNameW(hwnd, buf, 64)
+    return buf.value[:n] if n else ""
+
+
+# 桌面相关窗口类：Progman(桌面)/WorkerW(壁纸层)。桌面框选/点空白时前台
+# 是它们，虽"覆盖整屏"但不是全屏应用——不触发宠物隐藏（v0.3.11）。
+_DESKTOP_CLASSES = {"Progman", "WorkerW"}
+
+_user32.GetClassNameW.argtypes = [
+    wintypes.HWND, wintypes.LPWSTR, ctypes.c_int,
+]
+_user32.GetClassNameW.restype = ctypes.c_int
+
+
 def foreground_fullscreen() -> tuple[bool, str]:
     """前台窗口是否全屏（覆盖其所在显示器整块）。
 
+    桌面窗口（Progman/WorkerW）不算——桌面框选/点桌面空白时前台虽是
+    覆盖整屏的桌面层，但不是全屏应用（否则框选含宠物会导致宠物消失）。
     返回 (is_fullscreen, 进程名)。供 v0.3 全屏/演示检测：FSM 收到 True 时
     隐藏或移副屏 + 暂停 WANDER；演示软件（PowerPoint 等）前台全屏则完全
     隐藏 + 禁吃鼠标（白名单判断在共享层 config，本函数只给事实）。
     """
     hwnd = _user32.GetForegroundWindow()
     if not hwnd:
+        return (False, "")
+    if _window_class(hwnd) in _DESKTOP_CLASSES:
         return (False, "")
     rc = _RECT()
     if not _user32.GetWindowRect(hwnd, ctypes.byref(rc)):

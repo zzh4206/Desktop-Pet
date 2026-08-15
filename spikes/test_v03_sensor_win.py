@@ -50,6 +50,12 @@ def main() -> int:
     fs, name = sw.foreground_fullscreen()
     check("T-d 全屏检测返回二元组", isinstance(fs, bool) and isinstance(name, str))
 
+    # T-d2 窗口类名可获取（桌面排除的基础）；桌面类被正确识别
+    cls = sw._window_class(sw._user32.GetForegroundWindow())
+    check("T-d2 前台窗口类名可获取", isinstance(cls, str))
+    check("T-d2 桌面类排除表含 Progman/WorkerW",
+          sw._DESKTOP_CLASSES == {"Progman", "WorkerW"})
+
     # T-e build_sensors 装配 windows
     s = sw.build_sensors()
     check("T-e Sensors.windows 已装配", len(s.windows) >= 1)
