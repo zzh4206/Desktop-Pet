@@ -150,7 +150,8 @@ def _is_fullscreen_bounds(b, screen_frames) -> bool:
 
 def _enumerate_windows_uncached() -> list[dict]:
     """CGWindowList 枚举可见窗口框（Qt 坐标），过滤桌面/Dock/菜单栏。
-    返回 list of {x,y,width,height,owner}。无 Quartz → []。"""
+    返回 list of {x,y,width,height,owner,wid}。无 Quartz → []。
+    wid = kCGWindowNumber（窗口唯一 ID，作 hwnd 等价供 solid_at/alive_at 比对）。"""
     if not _HAS_QUARTZ:
         return []
     out: list[dict] = []
@@ -177,13 +178,75 @@ def _enumerate_windows_uncached() -> list[dict]:
         try:
             x, y = int(b["X"]), int(b["Y"])
             ww, hh = int(b["Width"]), int(b["Height"])
-        except (KeyError, TypeError):
+            wid = int(w.get("kCGWindowNumber", 0))
+        except (KeyError, TypeError, ValueError):
             continue
         if ww < 40 or hh < 40:
             continue
         out.append({"x": x, "y": y, "width": ww, "height": hh,
-                    "owner": str(owner)})
+                    "owner": str(owner), "wid": wid})
     return out
+
+
+def _top_window_wid_at(x: float, y: float) -> int | None:
+    """(x,y) 处最顶层实体窗的 wid（CGWindowList 按 z-order front-to-back，
+    第一个包含点且 layer 0 的窗即最顶层）。无 Quartz/无命中 → None。"""
+    if not _HAS_QUARTZ:
+        return None
+    try:
+        wins = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+        )
+    except Exception:
+        return None
+    for w in wins:
+        try:
+            layer = int(w.get("kCGWindowLayer", 0))
+        except (TypeError, ValueError):
+            layer = 0
+        if layer != 0:
+            continue
+        owner = w.get("kCGWindowOwnerName", "")
+        if owner in _DESKTOP_OWNERS:
+            continue
+        b = w.get("kCGWindowBounds")
+        if not b:
+            continue
+        try:
+            wx, wy = int(b["X"]), int(b["Y"])
+            ww, hh = int(b["Width"]), int(b["Height"])
+        except (KeyError, TypeError):
+            continue
+        if wx <= x < wx + ww and wy <= y < wy + hh:
+            return int(w.get("kCGWindowNumber", 0))
+    return None
+
+
+def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
+    """图层双检查（mac，CGWindowList 实装）：
+
+    - ref=None：(x,y) 处是否有实体窗（任意命中）；
+    - ref=候选窗 dict：该点最顶层实体窗是否就是 ref（比对 wid）——
+      候选窗被别的窗盖住 → 返回 False 否决攀爬/落顶。
+    无 Quartz → True（退纯几何）。用 2s 缓存 enumerate_windows 查（win 实时
+    WindowFromPoint O(1)，mac 退缓存延迟但比 None 强）。"""
+    if not _HAS_QUARTZ:
+        return True
+    top = _top_window_wid_at(x, y)
+    if top is None:
+        return False
+    if ref is not None:
+        return top == ref.get("wid")
+    return top in {w.get("wid") for w in enumerate_windows()}
+
+
+def alive_at(ref: dict) -> bool:
+    """窗口存活可见（在 OnScreenOnly 缓存里）。ref 无 wid → True。
+    用 2s 缓存查（win IsWindow+IsIconic O(1) 实时，mac 退缓存延迟）。"""
+    wid = (ref or {}).get("wid")
+    if not wid:
+        return True
+    return any(w.get("wid") == wid for w in enumerate_windows())
 
 
 def enumerate_windows() -> list[dict]:
@@ -234,4 +297,6 @@ def build_sensors() -> Sensors:
         work_area=work_area(),
         windows=enumerate_windows(),
         idle_time=0.0,
+        solid_at=solid_at,
+        alive_at=alive_at,
     )
