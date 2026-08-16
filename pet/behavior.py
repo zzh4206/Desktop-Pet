@@ -446,13 +446,18 @@ class BehaviorFSM:
             hit = self._window_spanning(nx, cur_y, require_band=False)
             if hit is not None:
                 w = hit[2]
-                gap = cur_y - (w["y"] + w["height"])
-                if gap >= self._pet_height:
-                    ns = cur_y  # 窗底净空足够：钻过去，保持当前层
+                # 重叠窗：w 横向范围含当前 pos.x → 不爬中间边线，平走保持层
+                # （只有走到不重叠的相邻窗边线才爬，防"重叠沿边线爬上去"）
+                if w["x"] <= x <= w["x"] + w["width"]:
+                    ns = cur_y
                 else:
-                    # 走到边框就往上爬（贴撞入侧边线）
-                    self._enter_climb((hit[0], hit[1]), w)
-                    return Action(ActionType.MOVE_TO, {"pos": self._pos})
+                    gap = cur_y - (w["y"] + w["height"])
+                    if gap >= self._pet_height:
+                        ns = cur_y  # 窗底净空足够：钻过去，保持当前层
+                    else:
+                        # 走到边框就往上爬（贴撞入侧边线）
+                        self._enter_climb((hit[0], hit[1]), w)
+                        return Action(ActionType.MOVE_TO, {"pos": self._pos})
             else:
                 ns = cur_y  # 找不到明确窗边（传感器瞬断等）：保守平走
 
