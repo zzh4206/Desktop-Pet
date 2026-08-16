@@ -75,7 +75,7 @@ from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
 
-APP_VERSION = "v0.3.26+win"
+APP_VERSION = "v0.4.5+win"
 
 _SAVE_DEBOUNCE_MS = 500       # 变更后 500ms 内多次只存一次
 _SAVE_PERIODIC_MS = 30_000    # 定时存档
@@ -239,7 +239,11 @@ class PetApp:
 
             for schema, handler in build_mac_tools():
                 registry.register(schema, handler)
-        # win 端 build_mac_tools 等待 win 适配时补 tools_win.register
+        elif sys.platform == "win32":
+            from pet.tools_win import build_win_tools
+
+            for schema, handler in build_win_tools():
+                registry.register(schema, handler)
 
         self._chat_client = DeepSeekClient(api_key, registry)
         self._build_chat_panel(registry)

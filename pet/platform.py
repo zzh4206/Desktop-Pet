@@ -371,6 +371,63 @@ elif sys.platform == "win32":
                     pass
             sensor_win.set_own_hwnds(ids)
 
+        # ---- v0.4：DS key 存 Windows 凭据管理器 / 危险确认 Qt 对话框 ----
+        def get_ds_key(self) -> str | None:
+            """凭据管理器（keyring）优先 → env DEEPSEEK_API_KEY 兜底 → None。
+
+            不入 config.json 明文。keyring 失败时静默回退 env + 日志，不崩
+            （与 mac Keychain 路径行为对齐）。"""
+            try:
+                import keyring
+
+                key = keyring.get_password("Desktop-Pet", "ds_api_key")
+                if key:
+                    return key
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("pet").warning(
+                    "凭据管理器读取 DS key 失败，回退 env: %s", exc
+                )
+            return os.environ.get("DEEPSEEK_API_KEY") or None
+
+        def set_ds_key(self, key: str) -> None:
+            """存凭据管理器。失败不崩（调用方 next get_ds_key 取 env 兜底）。"""
+            try:
+                import keyring
+
+                keyring.set_password("Desktop-Pet", "ds_api_key", key)
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("pet").warning(
+                    "凭据管理器存 DS key 失败: %s", exc
+                )
+
+        def confirm_dangerous(self, title: str, command: str,
+                              risk: str) -> bool:
+            """Qt 模态确认（显示命令+风险），按钮文案与 mac NSAlert 对齐
+            （继续/取消）。v0.4 open_app 不危险不触发；v0.8 全工具用。
+            失败默认放行 + 日志（与 mac 保守策略一致）。"""
+            try:
+                from PySide6.QtWidgets import QApplication, QMessageBox
+
+                box = QMessageBox()
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle(title)
+                box.setText(f"命令：{command}\n风险：{risk}")
+                cont = box.addButton("继续", QMessageBox.ButtonRole.YesRole)
+                box.addButton("取消", QMessageBox.ButtonRole.NoRole)
+                box.exec()
+                return box.clickedButton() is cont
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("pet").warning(
+                    "Qt 确认框失败，默认放行: %s", exc
+                )
+                return True
+
     def _win_paths() -> dict:
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(
             "~/AppData/Local"
