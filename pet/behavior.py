@@ -88,6 +88,7 @@ class BehaviorFSM:
         cfg = cfg or {}
         self._work_area = work_area
         self._speed = float(cfg.get("walk_speed", 120))        # px/s
+        self._follow_speed = float(cfg.get("follow_speed", 600))  # px/s（follow 跟手，远快于 walk）
         self._climb_min_depth = float(cfg.get("climb_min_depth_px", _CLIMB_MIN_DEPTH))
         self._pet_height = float(cfg.get("pet_height_px", _PET_HEIGHT))
         self._idle_min = float(cfg.get("wander_idle_min_s", 5))
@@ -436,7 +437,7 @@ class BehaviorFSM:
         """
         x, cur_y = self._pos
         tx, _ty = self._target
-        stride = self._speed * dt
+        stride = (self._follow_speed if self._follow else self._speed) * dt
         nx = x + (stride if tx > x else -stride)
         nx = self._clamp_x(nx)
         ns = self._surface_y(nx)

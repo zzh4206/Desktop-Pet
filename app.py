@@ -20,6 +20,7 @@ import signal
 import sys
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 from pet.asset_provider import EmojiProvider
@@ -234,6 +235,10 @@ class PetApp:
         if not getattr(self, "_fullscreen", False) and not self.window.isVisible():
             self.window.show()
             self.logger.warning("宠物窗口异常隐藏，看门狗已恢复")
+        # 实时鼠标：sensors.mouse_pos 走 2s 缓存会致跟随按旧位置走（A→B→C 折返路径感）；
+        # 每 50ms tick 实时取 QCursor 塞 sensors.mouse_pos，跟随即跟当前指针
+        mp = QCursor.pos()
+        self.sensors.mouse_pos = (mp.x(), mp.y())
         action = self.fsm.step(self.store.get(), self.sensors, 0.05)
         if action.type in (ActionType.MOVE_TO, ActionType.FALL):
             # FALL 同样驱动窗口位移（窗口顶面走出/松手直落的掉落过程）
