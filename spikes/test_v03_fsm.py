@@ -621,6 +621,23 @@ def main() -> int:
     fsm.step(PetState.default(), sensors(), DT)
     check("T31 硬撞右墙反弹离墙", fsm._vx <= -350.0)
 
+    # T32 近竖直上抛浅掠蹭边（深度<30px 且上升）→ 抓住边攀爬（不坠离）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((795, 760))
+    fsm.drag_move((795, 760))
+    fsm.end_drag()
+    fsm._vx, fsm._vy = 200.0, -1000.0  # 上升蹭左沿：tick1 x=805 y=719(深19<30,仍上升)
+    fsm._mode = "thrown"
+    climbed = False
+    for _ in range(int(2 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode == "climb":
+            climbed = True
+            break
+        if fsm.mode == "idle":
+            break
+    check("T32 上升浅掠蹭边抓住攀爬(不被窗底弹离)", climbed)
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

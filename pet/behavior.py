@@ -541,7 +541,8 @@ class BehaviorFSM:
             self._pos = (nx, ns)
         return Action(ActionType.MOVE_TO, {"pos": self._pos})
 
-    def _hit_window_side(self, x0: float, x1: float, y: float):
+    def _hit_window_side(self, x0: float, x1: float, y: float,
+                         vy: float = 0.0):
         """扫掠检测：本 tick 位移线段 (x0→x1) 穿过某有效窗的左右边线，
         且脚下没入窗顶超深度阈值（真撞侧面，非掠顶）→ (贴边x, 窗顶y)。
         越过整扇窗（进+出同 tick）也能命中；命中后 _solid_edge 图层双检查
@@ -549,8 +550,11 @@ class BehaviorFSM:
         best = None
         for w in self._valid_windows():
             wy = w["y"]
-            if y <= wy + self._climb_min_depth:
-                continue  # 高于窗顶+阈值：飞越/浅掠顶，不判撞侧
+            # 深度阈值：下落浅掠(<30px)视为蹭顶→落顶站定，不判撞侧；
+            # **上升(vy<0)浅掠也算抓住边**——近竖直上抛蹭到边时深度常不足
+            # 阈值，若不抓边会被窗底弹回推离(视觉"突然下坠脱离不攀爬")。
+            if y <= wy + self._climb_min_depth and not (vy < 0 and y > wy):
+                continue
             if y >= wy + w["height"]:
                 continue  # 低于窗底：从窗体下方穿过，不撞侧
             wl, wr = w["x"], w["x"] + w["width"]
@@ -624,7 +628,7 @@ class BehaviorFSM:
         # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）。**先于窗底弹回**：
         # 斜上抛撞边同 tick 已在带内且 vy<0，先弹回会推到带外致攀爬失效。
         if self._mode == _THROWN and self._vx != 0.0:
-            hit = self._hit_window_side(x0, x, y)
+            hit = self._hit_window_side(x0, x, y, self._vy)
             if hit is not None:
                 self._enter_climb((hit[0], hit[1]), hit[2])
                 return Action(ActionType.MOVE_TO, {"pos": self._pos})
