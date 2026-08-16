@@ -428,6 +428,49 @@ def main() -> int:
     a = fsm.step(PetState.default(), gone_live, DT)
     check("T23c 站立窗最小化立即坠落", a.type == ActionType.FALL)
 
+    # T24 骑乘跟随：宠物站窗顶，窗口上移 → 贴合新顶（rect_at 实时）
+    moved = {"x": 800, "y": 650, "width": 400, "height": 300, "hwnd": 7}
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (1000.0, 700.0)
+    fsm._mode = "idle"
+    riding = Sensors(mouse_pos=(960, 540), work_area=dict(WA),
+                     windows=[win13], idle_time=0.0,
+                     rect_at=lambda ref: moved)   # 实时：窗已上移到 650
+    for _ in range(3):  # 首 tick 记支撑窗，次 tick 起骑乘
+        fsm.step(PetState.default(), riding, DT)
+    check("T24 窗口上移即时骑乘跟随", fsm.pos == (1000.0, 650.0))
+
+    # T24b 窗口横向移开（不再覆盖脚下 x）→ 坠落
+    shifted = {"x": 300, "y": 650, "width": 400, "height": 300, "hwnd": 7}
+    riding2 = Sensors(mouse_pos=(960, 540), work_area=dict(WA),
+                      windows=[win13], idle_time=0.0,
+                      rect_at=lambda ref: shifted)
+    a = fsm.step(PetState.default(), riding2, DT)
+    check("T24b 支撑窗横向移开坠落", a.type == ActionType.FALL)
+
+    # T24c 几何兜底：无 rect_at，列表已更新窗口新位置 → 弹到新顶
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (1000.0, 700.0)
+    fsm._mode = "idle"
+    fsm._stand_win = win13                      # 原本站在 win13 上
+    a = fsm.step(PetState.default(),
+                 sensors(windows=({**win13, "y": 640},)), DT)
+    check("T24c 几何兜底弹到上移后的新顶", fsm.pos == (1000.0, 640.0))
+
+    # T25 真实身高 64(YOUNG)：窗底距地 80px 的缝隙 → 钻过不爬
+    fsm = BehaviorFSM(dict(WA))
+    fsm.set_pet_height(64)                       # win13 缝隙 80 ≥ 64
+    fsm._pos = (700.0, floor)
+    fsm._mode = "walk"
+    fsm._target = (1500.0, floor)
+    for _ in range(int(10 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode != "walk":
+            break
+    check("T25 真实身高下钻过 80px 缝隙(默认96会爬)",
+          fsm.mode in ("walk", "idle") and fsm.pos[1] == floor
+          and fsm.pos[0] > 1200)
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

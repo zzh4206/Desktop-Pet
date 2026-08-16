@@ -57,6 +57,10 @@ class Sensors:
     # 加字段属 Sensors 增量扩展，已登记 工作表/平台差异表。
     solid_at: object = None
     alive_at: object = None
+    # v0.3.12 支撑窗实时矩形（可选）：callable(ref) -> dict|None（逻辑坐标）。
+    # win 端 GetWindowRect 新鲜读——宠物站窗顶时每 tick 刷新，窗口上移/下移
+    # 即时骑乘跟随、移走即坠落（消除 2s 枚举缓存不敏感）。mac 不填 → 几何兜底。
+    rect_at: object = None
 
 
 _IDLE = "idle"
@@ -115,12 +119,19 @@ class BehaviorFSM:
         self._climb_top_y = 0.0           # 攀爬目标的窗口顶 y
         self._climb_win: dict | None = None  # 攀爬目标窗（实时存活检查用）
         self._alive_at = None             # 窗口存活实时检查（Sensors.alive_at）
+        self._rect_at = None              # 支撑窗实时矩形（Sensors.rect_at）
+        self._stand_win: dict | None = None  # 当前脚下的支撑窗（骑乘跟随用）
         self._bounce_count = 0            # 落地反弹计数（重置于新抛掷/静止）
         self._solid_at = None             # 图层双检查（Sensors.solid_at 注入）
 
         # v0.2 数值调制因子（on_state_change 更新；默认 1.0 即不调制）
         self._hunger_factor = 1.0   # 饱食低 → 缩短 idle（觅食感），>1 更频繁走动
         self._mood_factor = 1.0     # 心情低 → 拉长 idle（发呆），>1 更呆
+
+    def set_pet_height(self, h: float) -> None:
+        """真实身位高（app 按 sprite 显示尺寸喂入，随阶段进化更新）——
+        净空钻行判定用。"""
+        self._pet_height = max(16.0, float(h))
 
     # ---- v0.2 数值调制（mac 主笔，保留不动） ----
 
@@ -168,8 +179,17 @@ class BehaviorFSM:
         except Exception:
             return True
 
-    def _surface_y(self, x: float) -> float:
-        """x 处的站立面：图层校验通过的最高窗顶，否则工作区底边。
+    def _rect_of(self, w: dict) -> dict | None:
+        """支撑窗实时矩形（rect_at 未提供/失败 → None 走几何兜底）。"""
+        if self._rect_at is None or w is None:
+            return None
+        try:
+            return self._rect_at(w)
+        except Exception:
+            return None
+
+    def _top_surface(self, x: float, y_min: float = -1e9) -> tuple:
+        """图层+存活校验下，顶不低于 y_min 的最高表面 → (表面y, 提供窗|None)。
 
         窗口过滤（防"落到屏幕外消失"）：
         - 顶部高于工作区顶的窗口不算面（最大化窗口 Win32 矩形带 -8px
@@ -182,15 +202,18 @@ class BehaviorFSM:
         floor = self._bottom()
         cands = [
             w for w in self._valid_windows_raw()
-            if w["x"] <= x <= w["x"] + w["width"]
+            if w["x"] <= x <= w["x"] + w["width"] and w["y"] >= y_min
         ]
         cands.sort(key=lambda w: w["y"])  # 自上而下找第一个图层可见的
         for w in cands:
             if w["y"] >= floor:
                 break
             if self._alive(w) and self._solid_point(x, w["y"] + 5, w):
-                return max(w["y"], self._work_area["y"])
-        return floor
+                return (max(w["y"], self._work_area["y"]), w)
+        return (floor, None)
+
+    def _surface_y(self, x: float) -> float:
+        return self._top_surface(x)[0]
 
     def _clamp_x(self, x: float) -> float:
         """不穿屏：x 限制在工作区横向范围内。"""
@@ -221,6 +244,7 @@ class BehaviorFSM:
         self._mode = _DRAG
         self._vx = self._vy = 0.0
         self._bounce_count = 0
+        self._stand_win = None
         self._drag_hist.clear()
         self._drag_hist.append((time.monotonic(), cursor[0], cursor[1]))
 
@@ -373,6 +397,7 @@ class BehaviorFSM:
         self._windows = sensors.windows or []
         self._solid_at = sensors.solid_at
         self._alive_at = sensors.alive_at
+        self._rect_at = sensors.rect_at
 
         # 防御钳制：任何状态下都在工作区内（防偶发消失）
         x, y = self._pos
@@ -381,13 +406,41 @@ class BehaviorFSM:
         if (cx, cy) != (x, y):
             self._pos = (cx, cy)
 
-        # 支撑校验（IDLE/WALK）：脚下窗口被关闭/最小化/拖走 → 坠落
+        # 支撑校验（IDLE/WALK）：骑乘跟随 + 关闭/最小化/拖走坠落
         if self._mode in (_IDLE, _WALK):
-            sy = self._surface_y(self._pos[0])
-            if sy > self._pos[1] + 2:
-                self._mode = _FALL
-                self._vx = self._vy = 0.0
-                return Action(ActionType.FALL, {"pos": self._pos})
+            x, y = self._pos
+            w = self._stand_win
+            rect = self._rect_of(w) if w is not None else None
+            if w is not None and rect is not None:
+                # 实时矩形路径（win）：窗口移动即时响应
+                if not self._alive(w) or not (
+                    rect["x"] <= x <= rect["x"] + rect["width"]
+                ) or rect["y"] >= self._bottom() - 1:
+                    # 关闭/最小化/横向移开/贴底失效 → 坠落
+                    self._stand_win = None
+                    self._mode = _FALL
+                    self._vx = self._vy = 0.0
+                    return Action(ActionType.FALL, {"pos": self._pos})
+                if abs(rect["y"] - y) > 2:
+                    # 骑乘：窗口上/下移，脚贴合新窗顶（上移即"被吞没弹顶"）
+                    self._pos = (x, rect["y"])
+            else:
+                # 几何兜底（无 rect_at / 未知支撑窗）
+                sy, w2 = self._top_surface(x)
+                if sy > y + 2:
+                    # 脚下无面（窗关闭/最小化/移走）→ 坠落
+                    self._stand_win = None
+                    self._mode = _FALL
+                    self._vx = self._vy = 0.0
+                    return Action(ActionType.FALL, {"pos": self._pos})
+                if self._stand_win is not None and sy < y - 2 and w2 is not None:
+                    # 原本站在窗上、其上移吞没（2s 缓存兜底）→ 弹到新顶；
+                    # 悬浮窗下方行走的 sy < y 不属于此情形（stand_win 为 None）
+                    self._pos = (x, sy)
+                # 只有脚确实贴着面才记支撑窗（防误关联头顶窗）
+                self._stand_win = (
+                    w2 if abs(sy - self._pos[1]) <= 2 else None
+                )
 
         if self._mode == _DRAG:
             return Action(ActionType.MOVE_TO, {"pos": self._pos})
@@ -567,6 +620,7 @@ class BehaviorFSM:
             self._mode = _IDLE
             self._bounce_count = 0
             self._idle_left = self._new_idle()
+            self._stand_win = self._top_surface(x)[1]  # 记住支撑窗（骑乘用）
             return Action(ActionType.MOVE_TO, {"pos": self._pos})
         self._pos = (x, y)
         return Action(

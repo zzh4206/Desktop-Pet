@@ -116,6 +116,9 @@ class PetApp:
             self.provider.get_static(self.store.get())
         )
         self.window.set_sprite_provider(self.provider)
+        # v0.3.12 真实身位高喂 FSM（净空钻行判定；阶段进化变尺寸时更新）
+        self.fsm.set_pet_height(self.window.height())
+        self.store.on_change(lambda _s: self.fsm.set_pet_height(self.window.height()))
 
         cx = wa.get("x", 0) + wa.get("width", 0) / 2
         bottom = wa.get("y", 0) + wa.get("height", 0)

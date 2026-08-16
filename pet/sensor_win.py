@@ -366,12 +366,24 @@ def window_alive(ref: dict) -> bool:
     return bool(_user32.IsWindow(hwnd)) and not bool(_user32.IsIconic(hwnd))
 
 
+def window_rect(ref: dict) -> dict | None:
+    """支撑窗实时矩形（逻辑坐标），O(1) GetWindowRect 新鲜读。
+
+    FSM 站窗顶时每 tick 调用：窗口上/下移即时骑乘跟随、移走即坠落，
+    消除 2s 枚举缓存不敏感。ref 无 hwnd/窗口已亡 → None（走几何兜底）。"""
+    hwnd = (ref or {}).get("hwnd")
+    if not hwnd or not _user32.IsWindow(hwnd):
+        return None
+    return _hwnd_to_rect(hwnd)
+
+
 def build_sensors() -> Sensors:
     """与 sensor_mac.build_sensors 对齐（app.py 经 platform.py 注入调用）。
 
     solid_at：win 端图层双检查（FSM 攀爬/落点二次确认）；
-    alive_at：win 端窗口实时存活检查（攀爬掉落去延迟）。
-    mac 端两者暂缺 → None（FSM 退纯几何判定）。"""
+    alive_at：win 端窗口实时存活检查（攀爬掉落去延迟）；
+    rect_at：win 端支撑窗实时矩形（骑乘跟随移动窗口）。
+    mac 端暂缺 → None（FSM 退纯几何判定）。"""
     return Sensors(
         mouse_pos=mouse_pos(),
         work_area=work_area(),
@@ -379,4 +391,5 @@ def build_sensors() -> Sensors:
         idle_time=get_idle_seconds(),
         solid_at=solid_at,
         alive_at=window_alive,
+        rect_at=window_rect,
     )
