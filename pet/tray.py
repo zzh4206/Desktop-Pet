@@ -15,12 +15,15 @@ class TrayManager(QObject):
         super().__init__(parent)
         self._on_quit = on_quit
         self._on_chat = None
+        self._on_reset = None
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
 
         menu = QMenu()
         act_chat = menu.addAction("聊天")
         act_chat.triggered.connect(self._emit_chat)
+        act_reset = menu.addAction("重新开始")
+        act_reset.triggered.connect(self._emit_reset)
         menu.addSeparator()
         act_quit = menu.addAction("退出")
         act_quit.triggered.connect(self._on_quit)
@@ -31,9 +34,17 @@ class TrayManager(QObject):
         """v0.4：托盘'聊天'唤出聊天面板（v0.11 真全局热键占位）。"""
         self._on_chat = cb
 
+    def set_reset_callback(self, cb) -> None:
+        """v0.5：托盘'重新开始'→app 经 platform.confirm_dangerous 二次确认后清档复位。"""
+        self._on_reset = cb
+
     def _emit_chat(self) -> None:
         if self._on_chat is not None:
             self._on_chat()
+
+    def _emit_reset(self) -> None:
+        if self._on_reset is not None:
+            self._on_reset()
 
     @staticmethod
     def _make_icon() -> QIcon:

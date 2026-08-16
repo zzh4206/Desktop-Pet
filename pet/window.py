@@ -89,6 +89,11 @@ class WindowBase(QWidget):
         if (sprite.width, sprite.height) != (self.width(), self.height()):
             self.resize(sprite.width, sprite.height)
             self._label.resize(sprite.width, sprite.height)
+            # 尺寸变时更新 emoji 字体（__init__ setPointSizeF 只初始一次，
+            # set_sprite 不 setFont → 进化后 window 变大但 emoji 字体没变）
+            font = QFont()
+            font.setPointSizeF(sprite.width * 0.62)
+            self._label.setFont(font)
 
     def set_sprite_provider(self, provider) -> None:
         """注入 AssetProvider；on_state_change 据此换 sprite。"""

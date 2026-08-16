@@ -48,6 +48,38 @@ _EMOJI_BY_MOOD: dict[Mood, str] = {
     Mood.HUNGRY: "🙀",
 }
 
+# v0.5：按 (stage, branch, mood) 出 emoji——stage 决定"成长形态"
+# （幼奶猫/成猫/终黑猫三组，尺寸另由 _STAGE_SIZE 区分），branch 决定
+# "神态"：HEALTHY 走下面正常表，NEGLECTED 一律落寞（即便 mood=HAPPY 也压成
+# 颓相）。每 (stage, branch) 对在 NEUTRAL/HAPPY 等常态下产出可区分 emoji。
+_HEALTHY_BY_STAGE_MOOD: dict[tuple[Stage, Mood], str] = {
+    # YOUNG：奶猫系
+    (Stage.YOUNG, Mood.HAPPY): "😺",
+    (Stage.YOUNG, Mood.NEUTRAL): "🐱",
+    (Stage.YOUNG, Mood.SAD): "😿",
+    (Stage.YOUNG, Mood.SLEEPY): "😴",
+    (Stage.YOUNG, Mood.HUNGRY): "🙀",
+    # ADULT：成猫系（emoji 明显比幼大一档）
+    (Stage.ADULT, Mood.HAPPY): "😸",
+    (Stage.ADULT, Mood.NEUTRAL): "🐈",
+    (Stage.ADULT, Mood.SAD): "😾",
+    (Stage.ADULT, Mood.SLEEPY): "😪",
+    (Stage.ADULT, Mood.HUNGRY): "😹",
+    # FINAL：黑猫终态系
+    (Stage.FINAL, Mood.HAPPY): "😻",
+    (Stage.FINAL, Mood.NEUTRAL): "🐈‍⬛",
+    (Stage.FINAL, Mood.SAD): "😿",
+    (Stage.FINAL, Mood.SLEEPY): "😴",
+    (Stage.FINAL, Mood.HUNGRY): "🙀",
+}
+
+# NEGLECTED：落寞系，随 stage 略变（仍可与其他 stage 区分），不随 mood 雀跃
+_NEGLECTED_BY_STAGE: dict[Stage, str] = {
+    Stage.YOUNG: "😿",
+    Stage.ADULT: "😾",
+    Stage.FINAL: "🙀",
+}
+
 # v0.3 动作帧序列（emoji 占位；v0.10 AI provider 降级复用本表）
 # 行走 2 帧：本体 + 迈步变体；动画 3 帧：本体→动作峰值→本体
 _WALK_FRAME2: dict[Mood, str] = {
@@ -72,13 +104,19 @@ def _mood_from_state(state: PetState) -> Mood:
 
 
 class EmojiProvider:
-    """按 state.stage/mood/branch 返回 emoji。v0.1 只用到 mood。"""
+    """按 state.stage/mood/branch 返回 emoji。v0.5 起按 (stage, branch, mood)。"""
 
     def get_static(self, state: PetState, skin: str = "default") -> SpriteRef:
         mood = _mood_from_state(state)
         width, height = _STAGE_SIZE[state.stage]
+        if state.branch == Branch.NEGLECTED:
+            emoji = _NEGLECTED_BY_STAGE.get(state.stage, "😿")
+        else:
+            emoji = _HEALTHY_BY_STAGE_MOOD.get(
+                (state.stage, mood), _EMOJI_BY_MOOD.get(mood, "🐱")
+            )
         return SpriteRef(
-            path=_EMOJI_BY_MOOD[mood],
+            path=emoji,
             width=width,
             height=height,
             anchor="bottom_center",

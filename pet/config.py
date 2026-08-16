@@ -55,7 +55,15 @@ _SECTION_SCHEMAS: dict[str, dict] = {
         },
         "additionalProperties": False,
     },
-    "age_speed_multiplier": {"type": "number", "minimum": 0, "maximum": 10000},
+    "age_speed_multiplier": {"type": "number", "minimum": 0, "maximum": 1000000},
+    "evolve_threshold_days": {
+        "type": "object",
+        "properties": {
+            "young": {"type": "number", "minimum": 0, "maximum": 3650},
+            "adult": {"type": "number", "minimum": 0, "maximum": 3650},
+        },
+        "additionalProperties": False,
+    },
 }
 
 

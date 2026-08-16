@@ -1,6 +1,10 @@
 {
   "provider": "emoji",
-  "age_speed_multiplier": 1.0,
+  "age_speed_multiplier": 5040,
+  "evolve_threshold_days": {
+    "young": 7,
+    "adult": 21
+  },
   "log_level": "INFO",
   "interaction_gain": {
     "pet": 5,
@@ -19,9 +23,9 @@
     "throw_max_speed": 3000
   },
   "decay_per_hour": {
-    "mood": 2,
-    "fullness": 3,
-    "cleanliness": 1.5
+    "mood": 400,
+    "fullness": 400,
+    "cleanliness": 400
   },
   "score": {
     "mood_weight": 0.4,

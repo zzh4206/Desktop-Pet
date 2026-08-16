@@ -237,11 +237,17 @@ class PetStateStore:
                 log.exception("on_change 回调异常")
 
     # ---- v0.2 衰减驱动（非冻结接口，app 1s QTimer 调） ----
-    def apply_decay(self, decay_per_hour: dict) -> None:
-        """按 wall-clock delta（last_update→now）衰减 mood/fullness/cleanliness。
+    def apply_decay(
+        self,
+        decay_per_hour: dict,
+        age_speed_multiplier: float = 1.0,
+    ) -> None:
+        """按 wall-clock delta（last_update→now）衰减 mood/fullness/cleanliness，
+        并增长 age（v0.5）。
 
         基于时间戳而非累加 dt：重启间也照算（load 读回 last_update 后
-        第一次 apply_decay 即补上离线期间的衰减）。
+        第一次 apply_decay 即补上离线期间的衰减 + age 增长）。age 增长 =
+        ``dt_days * age_speed_multiplier``（fast-mode 设大值秒级跳阶段）。
         """
         now = time.time()
         dt_hours = (now - self._last_update) / 3600.0
@@ -254,9 +260,66 @@ class PetStateStore:
                     deltas[key] = -float(rate) * dt_hours
                 except (TypeError, ValueError):
                     log.warning("decay_per_hour.%s 非法 %r，跳过", key, rate)
+        # v0.5：年龄随 wall-clock 增长（age_speed_multiplier 进 config，含 fast-mode）
+        dt_days = dt_hours / 24.0
+        try:
+            deltas["age"] = dt_days * float(age_speed_multiplier)
+        except (TypeError, ValueError):
+            log.warning("age_speed_multiplier 非法 %r，按 1.0", age_speed_multiplier)
+            deltas["age"] = dt_days
         if deltas:
             # update 会把 _last_update 推到 now 并触发 observer
             self.update(**deltas)
+
+    # ---- v0.5 进化（非冻结接口，app apply_decay 后调） ----
+    _STAGE_ORDER: tuple = (Stage.YOUNG, Stage.ADULT, Stage.FINAL)
+
+    def check_evolve(self, thresholds: dict, score_cfg: dict) -> dict | None:
+        """age 到当前 stage 阈值 → 进化一阶 + 判定分支。
+
+        ``thresholds`` 形如 ``{"young": 7, "adult": 21}``（key 取 Stage.value，
+        总 age 阈值；FINAL 不在表中即不再进化）。``score_cfg`` 形如
+        ``{"mood_weight":0.4,"fullness_weight":0.4,"cleanliness_weight":0.2,
+        "healthy_threshold":70}``。分支取**当前养护分**（TODO 时间平均，
+        fast-mode 下当前≈平均），≥阈值→HEALTHY 否则 NEGLECTED。命中则内部
+        ``update(stage=, branch=)`` 触发 observer（持久化/emoji 切换）并返回
+        事件 dict；未命中返回 None。一次调用最多进化一阶（防刷屏）。
+        """
+        state = self._state
+        if state.stage == Stage.FINAL:
+            return None
+        try:
+            thr = float(thresholds.get(state.stage.value, 0))
+        except (TypeError, ValueError):
+            log.warning("evolve_threshold_days.%s 非法，按 0", state.stage.value)
+            thr = 0.0
+        if state.age < thr:
+            return None
+        idx = self._STAGE_ORDER.index(state.stage)
+        new_stage = self._STAGE_ORDER[idx + 1]
+        score = (
+            float(score_cfg.get("mood_weight", 0.4)) * state.mood
+            + float(score_cfg.get("fullness_weight", 0.4)) * state.fullness
+            + float(score_cfg.get("cleanliness_weight", 0.2)) * state.cleanliness
+        )
+        try:
+            healthy = float(score_cfg.get("healthy_threshold", 70))
+        except (TypeError, ValueError):
+            healthy = 70.0
+        new_branch = Branch.HEALTHY if score >= healthy else Branch.NEGLECTED
+        # TODO(v0.5+)：分支取本阶段养护分时间平均（需累计本阶段分+计数），
+        # 当前用进化那一刻的瞬时分；fast-mode 衰减慢，瞬时≈平均，Must 不卡。
+        self.update(stage=new_stage, branch=new_branch)
+        return {"from_stage": state.stage, "to_stage": new_stage, "branch": new_branch}
+
+    def reset(self) -> None:
+        """v0.5 重置：清内存状态回 default（YOUNG/HEALTHY/age=0/数值默认），
+        重置 last_update，触发 observer。存档文件由 app 侧删除（避免单实例
+        锁下 execv 自锁死，故走 in-process 复位而非重启进程）。
+        """
+        self._state = PetState.default()
+        self._last_update = time.time()
+        self._notify()
 
     @property
     def last_update(self) -> float:

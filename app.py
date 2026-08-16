@@ -62,11 +62,11 @@ from PySide6.QtWidgets import QApplication
 
 from pet.asset_provider import EmojiProvider
 from pet.behavior import ActionType, BehaviorFSM
-from pet.bubble import BubbleWidget
+from pet.bubble import BubbleType, BubbleWidget
 from pet.config import load_config
 from pet.logging_setup import setup_logging
 from pet.llm import DeepSeekClient
-from pet.pet_state import PetStateStore
+from pet.pet_state import PetStateStore, Stage
 from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
@@ -145,6 +145,7 @@ class PetApp:
         # 图层探针排除自身（宠物站窗顶时探针点被自己身体覆盖 → 误否决支撑）
         self.adapter.register_own_windows(self.window, self.bubble)
         self.tray = TrayManager(on_quit=self.shutdown, parent=self.app)
+        self.tray.set_reset_callback(self._on_reset_requested)
 
         # v0.4 聊天：key 引导 + DS 客户端 + 工具注册表 + QML 面板
         self._chat_engine = None
@@ -321,7 +322,54 @@ class PetApp:
 
     # ---- 衰减 / 持久化 ----
     def _apply_decay(self) -> None:
-        self.store.apply_decay(self.cfg.get("decay_per_hour", {}))
+        self.store.apply_decay(
+            self.cfg.get("decay_per_hour", {}),
+            age_speed_multiplier=self.cfg.get("age_speed_multiplier", 1.0),
+        )
+        event = self.store.check_evolve(
+            self.cfg.get("evolve_threshold_days", {}),
+            self.cfg.get("score", {}),
+        )
+        if event is not None:
+            self._on_evolve(event)
+
+    def _on_evolve(self, event: dict) -> None:
+        """v0.5 进化可视化：气泡"我长大了"+ 阶段名。
+
+        emoji/尺寸切换由 store.update(stage=, branch=) 触发的 on_change→
+        window.on_state_change 自动完成（同 tick 同步）；此处补 FSM 身位高
+        对齐新尺寸（on_change 回调顺序里 height lambda 先于 window 切换，
+        故这里显式刷一次防净空钻行误判）。气泡一次，不每 tick 刷屏
+        （check_evolve 跨阈值后下一 tick stage 已进阶即返 None）。
+        """
+        names = {Stage.YOUNG: "幼年", Stage.ADULT: "成年", Stage.FINAL: "终形态"}
+        to = event.get("to_stage")
+        msg = f"我长大了！现在进入{names.get(to, '新阶段')}了～"
+        self.fsm.set_pet_height(self.window.height())
+        self.bubble.show(msg, kind=BubbleType.INFO, anchor=self._pet_anchor())
+
+    def _on_reset_requested(self) -> None:
+        """v0.5 重置：托盘'重新开始'→NSAlert 二次确认→删档→in-process 复位。
+
+        不走 execv 重启进程（单实例锁 fd 跨 exec 仍持有，新实例会判"已有
+        实例"自退出）；改 in-process 复位：删 pet_state.json+.bak →
+        store.reset() 回 default → on_change 同步切回 YOUNG/HEALTHY/尺寸 64
+        + debounce 存回 default。取消确认则不动存档。
+        """
+        ok = self.adapter.confirm_dangerous(
+            "重新开始", "清空存档重启", "当前宠物数据将丢失，不可恢复"
+        )
+        if not ok:
+            return
+        for p in (self._state_path, self._state_path + ".bak"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        self.store.reset()
+        self.fsm.set_pet_height(self.window.height())
+        self.bubble.show("我重新出生啦～age 归零，从幼年重新开始！",
+                         kind=BubbleType.WARNING, anchor=self._pet_anchor())
 
     def _on_state_changed_persist(self, _state) -> None:
         # debounce：500ms 内多次变更只存一次
@@ -430,7 +478,7 @@ class PetApp:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="桌宠 v0.4.0")
+    parser = argparse.ArgumentParser(description="桌宠 v0.5.0")
     parser.add_argument(
         "--verbose", action="store_true", help="详细日志到 stderr"
     )
@@ -439,7 +487,7 @@ def main() -> int:
     adapter = get_platform_adapter()
     paths = adapter.get_paths()
     logger = setup_logging(args.verbose, paths["log_dir"])
-    logger.info("启动桌宠 v0.4.0（verbose=%s）", args.verbose)
+    logger.info("启动桌宠 v0.5.0（verbose=%s）", args.verbose)
 
     if not adapter.acquire_single_instance_lock():
         logger.info("已有实例运行，本进程退出。")
