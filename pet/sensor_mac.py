@@ -50,6 +50,20 @@ _SOLID_CACHE: list[dict] = []
 _SOLID_CACHE_TS: float = 0.0
 _SOLID_TTL = 0.2
 
+# 宠物自身窗口 wid（register_own_windows 登记）——solid_at 探针被自身遮挡时
+# 按几何候选覆盖放行，不误否决支撑（v0.3.13 win 同类 mac 适配）
+_own_wids: set = set()
+
+
+def set_own_wids(wids) -> None:
+    """登记宠物自身窗口 wid（本体/气泡）——图层探针被自身遮挡时放行。
+
+    宠物站窗顶时探针点（窗顶下 5px）落在宠物身体覆盖范围内，
+    CGWindowList 会命中宠物自己 → 身份比对失败 → 支撑被误否决
+    （登顶即掉/站不稳/支撑窗丢失悬空）。"""
+    global _own_wids
+    _own_wids = {int(w) for w in wids if w}
+
 # 全屏判定时忽略的 owner（桌面/菜单栏/Dock/Window Server）
 _DESKTOP_OWNERS = {"Window Server", "Dock", "程序坞", "Finder", "ControlCenter"}
 
@@ -262,6 +276,14 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     top = _top_window_wid_at(x, y)
     if top is None:
         return False
+    if top in _own_wids:
+        # 探针被宠物自身遮挡：按几何候选覆盖判断（自身不算图层遮挡）
+        if ref is not None:
+            return (
+                ref["x"] <= x <= ref["x"] + ref["width"]
+                and ref["y"] <= y <= ref["y"] + ref["height"]
+            )
+        return True
     if ref is not None:
         return top == ref.get("wid")
     return any(w["wid"] == top for w in _solid_windows())

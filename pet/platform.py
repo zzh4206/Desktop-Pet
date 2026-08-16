@@ -201,6 +201,25 @@ if sys.platform == "darwin":
         def create_pet_window(self, sprite):
             return window_mac.PetWindow(sprite)
 
+        # ---- v0.3.13 mac 适配：图层探针排除自身（win register_own_windows 同类）----
+        def register_own_windows(self, *widgets) -> None:
+            """登记宠物自身窗口（本体/气泡）——solid_at 探针被自身遮挡时放行。
+            widget.winId()→NSView→NSWindow→windowNumber()（CGWindowNumber）。"""
+            from ctypes import c_void_p
+
+            from objc import objc_object
+
+            wids = set()
+            for w in widgets:
+                try:
+                    view = objc_object(c_void_p=int(w.winId()))
+                    nswin = view.window() if view is not None else None
+                    if nswin is not None:
+                        wids.add(int(nswin.windowNumber()))
+                except Exception:
+                    pass
+            sensor_mac.set_own_wids(wids)
+
         # ---- v0.4：DS key 存 Keychain / 危险确认 NSAlert ----
         def get_ds_key(self) -> str | None:
             """Keychain（keyring）优先 → env ``DEEPSEEK_API_KEY`` 兜底 → None。
