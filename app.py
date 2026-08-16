@@ -387,12 +387,13 @@ class PetApp:
         mp = QCursor.pos()
         self.sensors.mouse_pos = (mp.x(), mp.y())
         action = self.fsm.step(self.store.get(), self.sensors, 0.05)
-        if action.type in (ActionType.MOVE_TO, ActionType.FALL):
-            # FALL 同样驱动窗口位移（窗口顶面走出/松手直落的掉落过程）
-            x, y = action.params["pos"]
-            self.window.move_bottom_center(x, y)
-        elif action.type == ActionType.ANIMATE and action.params.get("name"):
+        if action.type == ActionType.ANIMATE and action.params.get("name"):
             self._play_animate(action.params["name"])
+        # 无条件按 FSM.pos 同步窗口位置：MOVE_TO/FALL 之外还有**静默位移**
+        # （骑乘跟随移动窗口发生在 IDLE，step 返回 ANIMATE）——只听 action
+        # 会漏掉这类位移，视觉上宠物悬空在旧高度。Qt 同坐标 move 是 no-op，
+        # 每 tick 调用无代价。
+        self.window.move_bottom_center(*self.fsm.pos)
 
     # ---- v0.3 动画 ----
     def _play_animate(self, name: str) -> None:
