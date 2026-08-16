@@ -203,6 +203,32 @@ def set_own_hwnds(hwnds) -> None:
     _own_hwnds = {int(h) for h in hwnds if h}
 
 
+_user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+_user32.GetWindow.restype = wintypes.HWND
+
+_GW_HWNDNEXT = 2
+
+
+def _window_below_point(start_hwnd, pt):
+    """从 start_hwnd 起沿 Z 序向下，找第一个矩形覆盖物理点 pt 的可见窗。
+
+    宠物窗口挡住探针时用：跳过自身/其他 own 窗与不可见窗，物理坐标直测。"""
+    h = start_hwnd
+    for _ in range(64):
+        h = _user32.GetWindow(h, _GW_HWNDNEXT)
+        if not h:
+            return None
+        if int(h) in _own_hwnds:
+            continue
+        if not _user32.IsWindowVisible(h):
+            continue
+        rc = _RECT()
+        if _user32.GetWindowRect(h, ctypes.byref(rc)):
+            if rc.left <= pt.x < rc.right and rc.top <= pt.y < rc.bottom:
+                return h
+    return None
+
+
 def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     """图层双检查（FSM 攀爬/落点二次确认）：
 
@@ -228,13 +254,16 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     root = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd  # 子控件 → 顶层
     root_i = int(root)
     if root_i in _own_hwnds:
-        # 探针被宠物自身遮挡：按几何候选覆盖判断（自身不算图层遮挡）
+        # 探针被宠物自身遮挡：沿 Z 序向下找宠物底下真正承接该点的窗口，
+        # 再做身份比对——站窗顶时底下=支撑窗(通过)；攀爬被全屏盖住的窗时
+        # 底下=全屏窗≠候选(否决)。不能用"几何候选覆盖即放行"的捷径（会
+        # 重新放行被盖住的窗）。
+        below = _window_below_point(root, pt)
+        if below is None:
+            return False  # 宠物底下无实体窗（悬空/纯桌面）
         if ref is not None:
-            return (
-                ref["x"] <= x <= ref["x"] + ref["width"]
-                and ref["y"] <= y <= ref["y"] + ref["height"]
-            )
-        return True
+            return int(below) == ref.get("hwnd")
+        return int(below) in {w.get("hwnd") for w in visible_windows()}
     if ref is not None:
         return root_i == ref.get("hwnd")
     valid = {w.get("hwnd") for w in visible_windows()}
