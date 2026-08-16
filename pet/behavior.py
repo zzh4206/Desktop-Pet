@@ -615,6 +615,15 @@ class BehaviorFSM:
         if self._mode == _THROWN and raw_x != x:
             self._vx = -self._vx * _WALL_RESTITUTION
             x0 = x  # 后续扫掠从墙点起，防穿透检测误报
+        # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）。**先于窗底弹回**：
+        # 斜上抛撞边时同一 tick 已进入窗体带且 vy<0，若先弹回会把宠物推到
+        # 窗底之下、撞侧检测因带外失效 → 视觉"碰边缘突然下坠脱离不爬"。
+        # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）
+        if self._mode == _THROWN and self._vx != 0.0:
+            hit = self._hit_window_side(x0, x, y)
+            if hit is not None:
+                self._enter_climb((hit[0], hit[1]), hit[2])
+                return Action(ActionType.MOVE_TO, {"pos": self._pos})
         # 上升穿窗体 → 撞窗底弹回（不许从下方穿透到顶上）：窗体对上升
         # 方向是实心的——下落撞顶面是"落顶"，上升顶到的是底面，应弹回窗下。
         # 否则上抛会穿体落顶，站在贴屏顶的窗口上像"吸附天花板"。
@@ -632,12 +641,6 @@ class BehaviorFSM:
                         _log.debug("[物理] 撞窗底弹回 wy=%.0f 新y=%.0f",
                                    w["y"], y)
                         break
-        # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）
-        if self._mode == _THROWN and self._vx != 0.0:
-            hit = self._hit_window_side(x0, x, y)
-            if hit is not None:
-                self._enter_climb((hit[0], hit[1]), hit[2])
-                return Action(ActionType.MOVE_TO, {"pos": self._pos})
         sy = self._fall_surface(x, self._pos[1])  # 从上方跨越才算落顶
         if y >= sy:
             impact = self._vy
@@ -679,21 +682,50 @@ class BehaviorFSM:
         )
 
     def _step_climb(self, dt: float) -> Action:
-        """沿窗边以步行速度逐渐爬到顶；窗口消失/最小化则立即坠落。
+        """沿窗边以步行速度逐渐爬到顶；窗口消失/最小化/移开则坠落。
 
-        优先用 Sensors.alive_at 实时检查（win 端 IsWindow+IsIconic，O(1)），
-        消除 2s 枚举缓存延迟；无 alive_at（mac）时退几何列表判定。"""
-        if self._climb_win is not None and self._alive_at is not None:
-            still = self._alive(self._climb_win)
-        else:
-            still = any(
-                abs(w["y"] - self._climb_top_y) < 2
-                and (
-                    abs(w["x"] - self._climb_edge_x) < 2
-                    or abs(w["x"] + w["width"] - self._climb_edge_x) < 2
+        - alive_at 实时检查（win 端 IsWindow+IsIconic，O(1)）消 2s 缓存延迟；
+        - rect_at 实时刷攀爬窗矩形（v0.3.26）：小幅移动（边线位移 ≤30px）
+          骑乘跟随重贴边继续爬；大幅移开（>30px，窗口被拖走）判脱离坠落。
+        - 两者缺失（mac 旧路径）退几何列表判定。"""
+        still = True
+        if self._climb_win is not None:
+            rect = self._rect_of(self._climb_win)
+            if rect is not None:
+                # 实时矩形路径：死活 + 跟随/脱离判定（成功则无需几何校验）
+                if not self._alive(self._climb_win):
+                    still = False
+                else:
+                    fresh_edge = (
+                        rect["x"]
+                        if abs(self._climb_edge_x - self._climb_win["x"]) < 2
+                        else rect["x"] + rect["width"]
+                    )
+                    if (
+                        abs(fresh_edge - self._climb_edge_x) > 30
+                        or abs(rect["y"] - self._climb_top_y) > 60
+                    ):
+                        # 窗口大幅移开：攀爬脱离 → 坠落
+                        self._mode = _FALL
+                        self._vx = 0.0
+                        self._vy = 0.0
+                        _log.debug("[物理] 攀爬脱离(窗口移开) x=%.0f",
+                                   fresh_edge)
+                        return Action(ActionType.FALL, {"pos": self._pos})
+                    # 小幅移动：骑乘重贴边 + 目标顶更新
+                    self._climb_edge_x = fresh_edge
+                    self._climb_top_y = rect["y"]
+            elif self._alive_at is not None:
+                still = self._alive(self._climb_win)
+            else:
+                still = any(
+                    abs(w["y"] - self._climb_top_y) < 2
+                    and (
+                        abs(w["x"] - self._climb_edge_x) < 2
+                        or abs(w["x"] + w["width"] - self._climb_edge_x) < 2
+                    )
+                    for w in self._windows
                 )
-                for w in self._windows
-            )
         if not still:
             self._mode = _FALL
             self._vx = 0.0

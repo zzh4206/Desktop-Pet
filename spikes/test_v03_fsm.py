@@ -541,6 +541,57 @@ def main() -> int:
     check("T28 上抛不穿体落顶(无吸附)", not hit_top
           and fsm.mode == "idle" and fsm.pos[1] == floor)
 
+    # T29 斜上抛撞窗边 → 攀爬优先于窗底弹回（不"突然下坠脱离"）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    fsm.begin_drag((700, 800))
+    fsm.drag_move((700, 800))
+    fsm.end_drag()
+    fsm._vx, fsm._vy = 600.0, -300.0   # 斜上抛向左沿(y∈窗体带内且上升)
+    fsm._mode = "thrown"               # 注入速度后补模式(真实甩出即此态)
+    climbed = False
+    for _ in range(int(2 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode == "climb":
+            climbed = True
+            break
+        if fsm.mode == "idle":
+            break
+    check("T29 斜上抛撞边进入攀爬(不被窗底弹回)", climbed)
+
+    # T30 攀爬中窗口大幅移开 → 脱离坠落；小幅移动 → 跟随重贴边
+    moved_far = {"x": 1300, "y": 700, "width": 400, "height": 300}
+    fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((796, 900))
+    fsm.end_drag()
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    assert fsm.mode == "climb"
+    far = Sensors(mouse_pos=(960, 540), work_area=dict(WA),
+                  windows=[win13], idle_time=0.0,
+                  rect_at=lambda ref: moved_far)
+    a = fsm.step(PetState.default(), far, DT)
+    check("T30 攀爬中窗口大幅移开→脱离坠落",
+          a.type == ActionType.FALL and fsm.mode == "fall")
+
+    near = {"x": 820, "y": 690, "width": 400, "height": 300}  # 移了 20px
+    fsm = BehaviorFSM(dict(WA))
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    fsm.begin_drag((700, 900))
+    fsm.drag_move((700, 900))
+    fsm.drag_move((796, 900))
+    fsm.end_drag()
+    fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+    assert fsm.mode == "climb"
+    near_s = Sensors(mouse_pos=(960, 540), work_area=dict(WA),
+                     windows=[win13], idle_time=0.0,
+                     rect_at=lambda ref: near)
+    a = fsm.step(PetState.default(), near_s, DT)
+    check("T30 攀爬中小幅移动跟随重贴边(不坠落)",
+          fsm.mode == "climb" and fsm._climb_edge_x == 820.0)
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()
