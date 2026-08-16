@@ -72,7 +72,7 @@ _THROWN = "thrown"
 _CLIMB = "climb"   # 抛掷撞窗口侧面 → 沿边攀爬到顶（v0.3.5）
 
 # 物理常量（进 config 可后续提取；v0.3 先合理默认）
-_GRAVITY = 2000.0          # px/s²
+_GRAVITY = 3500.0          # px/s²（v0.3.22：2000 太飘，屏顶落底 1s+ 被感知为吸附）
 _THROW_V_MAX = 2500.0      # 抛出初速度上限（防一手甩飞穿屏）
 _DRAG_V_WINDOW_S = 0.12    # 取最近 ~120ms 位移估算 release 初速度
 _THROW_VY_DEAD = 200.0     # 垂直速度死区：轻抬/轻压松手视为"放下"而非上抛/下砸
@@ -600,7 +600,7 @@ class BehaviorFSM:
         if y < self._work_area["y"]:
             y = float(self._work_area["y"])
             if self._vy < 0:
-                self._vy = max(-self._vy * _BOUNCE_RESTITUTION, 400.0)
+                self._vy = max(-self._vy * _BOUNCE_RESTITUTION, 500.0)
                 _log.debug("[物理] 撞屏顶反弹 vy=%.0f", self._vy)
         # 侧墙（工作区左右界）反弹（仅抛掷态；掉落无水平速度不涉及）
         if self._mode == _THROWN and raw_x != x:
@@ -618,7 +618,7 @@ class BehaviorFSM:
                     if self._solid_point(x, y, w):
                         y = w["y"] + w["height"] + 1.0  # 推回窗底之下
                         self._vy = max(
-                            -self._vy * _BOUNCE_RESTITUTION, 400.0
+                            -self._vy * _BOUNCE_RESTITUTION, 500.0
                         )
                         _log.debug("[物理] 撞窗底弹回 wy=%.0f 新y=%.0f",
                                    w["y"], y)

@@ -503,7 +503,7 @@ def main() -> int:
     fsm.begin_drag((200, 900))
     fsm.drag_move((200, 900))
     fsm.end_drag()
-    fsm._vx, fsm._vy = 800.0, -1960.0      # 测试注入：顶点≈屏顶(升900px)
+    fsm._vx, fsm._vy = 800.0, -2600.0
     top_at = None
     ys = []
     for i in range(int(4 / DT)):
