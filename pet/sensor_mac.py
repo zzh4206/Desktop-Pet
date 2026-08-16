@@ -43,6 +43,13 @@ _WINDOWS_CACHE: list[dict] = []
 _WINDOWS_CACHE_TS: float = 0.0
 _WINDOWS_TTL = 2.0
 
+# solid_at/alive_at 专用短缓存（200ms）：比 enumerate_windows 2s 实时——
+# 幽灵窗（已关闭/移动）200ms 内移除，防"识别不存在的边框爬上去又掉"；
+# 不每次 CopyWindowInfo（_surface_y 每 cand 调 solid_at，走缓存查）
+_SOLID_CACHE: list[dict] = []
+_SOLID_CACHE_TS: float = 0.0
+_SOLID_TTL = 0.2
+
 # 全屏判定时忽略的 owner（桌面/菜单栏/Dock/Window Server）
 _DESKTOP_OWNERS = {"Window Server", "Dock", "程序坞", "Finder", "ControlCenter"}
 
@@ -188,48 +195,68 @@ def _enumerate_windows_uncached() -> list[dict]:
     return out
 
 
+def _solid_windows() -> list[dict]:
+    """CGWindowList 实体窗短缓存（200ms；含 wid/owner/bounds/layer，过滤桌面/
+    Dock/小窗），供 solid_at/alive_at 用。比 enumerate_windows 2s 实时（幽灵窗
+    200ms 内移除）；比每次 CopyWindowInfo 快（_surface_y 每 cand 调 solid_at 走
+    缓存查，不重复枚举）。无 Quartz → []。"""
+    global _SOLID_CACHE, _SOLID_CACHE_TS
+    now = time.monotonic()
+    if _SOLID_CACHE and (now - _SOLID_CACHE_TS) < _SOLID_TTL:
+        return _SOLID_CACHE
+    out: list[dict] = []
+    if _HAS_QUARTZ:
+        try:
+            wins = CGWindowListCopyWindowInfo(
+                kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+            )
+        except Exception:
+            wins = []
+        for w in wins:
+            try:
+                layer = int(w.get("kCGWindowLayer", 0))
+            except (TypeError, ValueError):
+                layer = 0
+            if layer != 0:
+                continue
+            owner = w.get("kCGWindowOwnerName", "")
+            if owner in _DESKTOP_OWNERS:
+                continue
+            b = w.get("kCGWindowBounds")
+            if not b:
+                continue
+            try:
+                wx, wy = int(b["X"]), int(b["Y"])
+                ww, hh = int(b["Width"]), int(b["Height"])
+                wid = int(w.get("kCGWindowNumber", 0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if ww < 40 or hh < 40:
+                continue
+            out.append({"x": wx, "y": wy, "width": ww, "height": hh,
+                        "owner": str(owner), "wid": wid})
+    _SOLID_CACHE = out
+    _SOLID_CACHE_TS = now
+    return out
+
+
 def _top_window_wid_at(x: float, y: float) -> int | None:
-    """(x,y) 处最顶层实体窗的 wid（CGWindowList 按 z-order front-to-back，
-    第一个包含点且 layer 0 的窗即最顶层）。无 Quartz/无命中 → None。"""
-    if not _HAS_QUARTZ:
-        return None
-    try:
-        wins = CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
-        )
-    except Exception:
-        return None
-    for w in wins:
-        try:
-            layer = int(w.get("kCGWindowLayer", 0))
-        except (TypeError, ValueError):
-            layer = 0
-        if layer != 0:
-            continue
-        owner = w.get("kCGWindowOwnerName", "")
-        if owner in _DESKTOP_OWNERS:
-            continue
-        b = w.get("kCGWindowBounds")
-        if not b:
-            continue
-        try:
-            wx, wy = int(b["X"]), int(b["Y"])
-            ww, hh = int(b["Width"]), int(b["Height"])
-        except (KeyError, TypeError):
-            continue
-        if wx <= x < wx + ww and wy <= y < wy + hh:
-            return int(w.get("kCGWindowNumber", 0))
+    """(x,y) 处最顶层实体窗 wid（_solid_windows 按 z-order front-to-back，
+    第一个包含点即最顶层）。无 Quartz/无命中 → None。"""
+    for w in _solid_windows():
+        if w["x"] <= x < w["x"] + w["width"] and w["y"] <= y < w["y"] + w["height"]:
+            return w["wid"]
     return None
 
 
 def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
-    """图层双检查（mac，CGWindowList 实装）：
+    """图层双检查（mac，CGWindowList 200ms 短缓存实装）：
 
     - ref=None：(x,y) 处是否有实体窗（任意命中）；
     - ref=候选窗 dict：该点最顶层实体窗是否就是 ref（比对 wid）——
       候选窗被别的窗盖住 → 返回 False 否决攀爬/落顶。
-    无 Quartz → True（退纯几何）。用 2s 缓存 enumerate_windows 查（win 实时
-    WindowFromPoint O(1)，mac 退缓存延迟但比 None 强）。"""
+    用 200ms 短缓存（win WindowFromPoint O(1) 实时，mac 退 200ms 延迟但比 2s
+    实时、比每次 CopyWindowInfo 快；幽灵窗 200ms 内移除防鬼线）。"""
     if not _HAS_QUARTZ:
         return True
     top = _top_window_wid_at(x, y)
@@ -237,16 +264,16 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
         return False
     if ref is not None:
         return top == ref.get("wid")
-    return top in {w.get("wid") for w in enumerate_windows()}
+    return any(w["wid"] == top for w in _solid_windows())
 
 
 def alive_at(ref: dict) -> bool:
-    """窗口存活可见（在 OnScreenOnly 缓存里）。ref 无 wid → True。
-    用 2s 缓存查（win IsWindow+IsIconic O(1) 实时，mac 退缓存延迟）。"""
+    """窗口存活可见（在 200ms 短缓存 OnScreenOnly 里）。ref 无 wid → True。
+    用 200ms 短缓存（win IsWindow+IsIconic O(1) 实时，mac 退 200ms 延迟）。"""
     wid = (ref or {}).get("wid")
     if not wid:
         return True
-    return any(w.get("wid") == wid for w in enumerate_windows())
+    return any(w["wid"] == wid for w in _solid_windows())
 
 
 def enumerate_windows() -> list[dict]:
