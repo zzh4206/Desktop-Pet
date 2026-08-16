@@ -187,7 +187,12 @@ ApplicationWindow {
                         background: null
                         focus: true
                         selectByMouse: true
-                        onAccepted: sendBtn.clicked()
+                        onAccepted: {
+                            if (input.text.trim().length > 0) {
+                                Chat.send(input.text)
+                                input.text = ""
+                            }
+                        }
                         Keys.onEscapePressed: root.hide()
                     }
                 }
@@ -209,12 +214,7 @@ ApplicationWindow {
                         id: sendMa
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (input.text.trim().length > 0) {
-                                Chat.send(input.text)
-                                input.text = ""
-                            }
-                        }
+                        onClicked: input.onAccepted()
                     }
                 }
             }
