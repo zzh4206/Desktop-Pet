@@ -75,7 +75,7 @@ from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
 
-APP_VERSION = "v0.3.20+win"
+APP_VERSION = "v0.3.21+win-diag"
 
 _SAVE_DEBOUNCE_MS = 500       # 变更后 500ms 内多次只存一次
 _SAVE_PERIODIC_MS = 30_000    # 定时存档

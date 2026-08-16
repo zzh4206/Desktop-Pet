@@ -15,6 +15,7 @@ FSM 只消费 ``Sensors``（work_area/windows 来自平台 sensor），不碰平
 
 from __future__ import annotations
 
+import logging
 import random
 import time
 from collections import deque
@@ -80,6 +81,8 @@ _BOUNCE_RESTITUTION = 0.35 # 恢复系数（弹起高度 ~12%）
 _BOUNCE_VX_DAMP = 0.6      # 反弹时水平衰减
 _BOUNCE_MAX = 2            # 最多弹 2 次
 _WALL_RESTITUTION = 0.4    # 侧墙（工作区左右界）反弹系数
+_log = logging.getLogger("pet")
+
 _CLIMB_MIN_DEPTH = 30.0    # 撞侧攀爬的深度阈值：脚下没入窗顶不足此值视为掠顶(落顶站定)
 _PET_HEIGHT = 96.0         # 宠物身位高（ADULT 显示尺寸）：窗底净空≥此值可钻过不爬
 _ANIM_MIN_S = 15.0         # 随机小动作间隔
@@ -381,6 +384,8 @@ class BehaviorFSM:
         return True
 
     def _enter_climb(self, hit: tuple, w: dict | None = None) -> None:
+        _log.debug("[物理] 进入攀爬 贴边x=%.0f 目标顶y=%.0f 从y=%.0f",
+                   hit[0], hit[1], self._pos[1])
         self._climb_edge_x, self._climb_top_y = hit
         self._climb_win = w
         self._vx = self._vy = 0.0
@@ -596,6 +601,7 @@ class BehaviorFSM:
             y = float(self._work_area["y"])
             if self._vy < 0:
                 self._vy = max(-self._vy * _BOUNCE_RESTITUTION, 400.0)
+                _log.debug("[物理] 撞屏顶反弹 vy=%.0f", self._vy)
         # 侧墙（工作区左右界）反弹（仅抛掷态；掉落无水平速度不涉及）
         if self._mode == _THROWN and raw_x != x:
             self._vx = -self._vx * _WALL_RESTITUTION
@@ -614,6 +620,8 @@ class BehaviorFSM:
                         self._vy = max(
                             -self._vy * _BOUNCE_RESTITUTION, 400.0
                         )
+                        _log.debug("[物理] 撞窗底弹回 wy=%.0f 新y=%.0f",
+                                   w["y"], y)
                         break
         # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）
         if self._mode == _THROWN and self._vx != 0.0:
@@ -638,6 +646,8 @@ class BehaviorFSM:
                     ActionType.MOVE_TO,
                     {"pos": self._pos, "bounced": self._bounce_count},
                 )
+            _log.debug("[物理] 落顶停稳 x=%.0f y=%.0f 撞速=%.0f",
+                        x, sy, impact)
             # 触面停止（spec：落到底边/表面停止）
             self._pos = (x, sy)
             self._vx = 0.0
@@ -696,6 +706,7 @@ class BehaviorFSM:
             self._mode = _IDLE
             self._idle_left = self._new_idle()
             self._stand_win = w  # 支撑窗已知，直接进入骑乘路径
+            _log.debug("[物理] 攀爬登顶 x=%.0f y=%.0f", *self._pos)
         else:
             self._pos = (self._climb_edge_x, y)
         return Action(ActionType.MOVE_TO, {"pos": self._pos})
