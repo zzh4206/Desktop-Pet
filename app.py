@@ -28,8 +28,10 @@ from pet.behavior import ActionType, BehaviorFSM
 from pet.bubble import BubbleWidget
 from pet.config import load_config
 from pet.logging_setup import setup_logging
+from pet.llm import DeepSeekClient
 from pet.pet_state import PetStateStore
 from pet.platform import get_platform_adapter
+from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
 
 _SAVE_DEBOUNCE_MS = 500       # 变更后 500ms 内多次只存一次
@@ -102,6 +104,13 @@ class PetApp:
         self.bubble = BubbleWidget()
         self.tray = TrayManager(on_quit=self.shutdown, parent=self.app)
 
+        # v0.4 聊天：key 引导 + DS 客户端 + 工具注册表 + QML 面板
+        self._chat_engine = None
+        self._chat_bridge = None
+        self._chat_window = None
+        self._chat_client = None
+        self._setup_chat()
+
         # save：debounce（变更后 500ms）+ 定时 30s + shutdown
         self._save_timer = QTimer(self.app)
         self._save_timer.setSingleShot(True)
@@ -153,6 +162,101 @@ class PetApp:
         """气泡锚点：宠物当前 bottom_center + 窗口高。"""
         x, y = self.fsm.pos
         return (x, y, self.window.height())
+
+    # ---- v0.4 聊天 ----
+    def _setup_chat(self) -> None:
+        """DS key 引导 + 客户端 + 工具注册表 + QML 面板。
+
+        无 key → 气泡提示首次引导（QInputDialog）；仍无 key/env → 聊天禁用，
+        宠物仍跑（T8 离线/无 key 不阻塞）。ToolRegistry 只注册 open_app（v0.4），
+        confirm_fn 经 platform 注入（NSAlert，open_app 不危险不触发）。
+        """
+        api_key = self._ensure_ds_key()
+        if not api_key:
+            self.logger.warning("DS key 未设置，聊天禁用（宠物仍跑）")
+            QTimer.singleShot(
+                1500,
+                lambda: self.bubble.show(
+                    "还没设置 DS key，聊天暂时不可用～",
+                    anchor=self._pet_anchor(),
+                ),
+            )
+            return
+
+        # 工具注册表：mac open_app（v0.4）；confirm 经 platform 注入（NSAlert）
+        registry = ToolRegistry(confirm_fn=self.adapter.confirm_dangerous)
+        if sys.platform == "darwin":
+            from pet.tools_mac import build_mac_tools
+
+            for schema, handler in build_mac_tools():
+                registry.register(schema, handler)
+        # win 端 build_mac_tools 等待 win 适配时补 tools_win.register
+
+        self._chat_client = DeepSeekClient(api_key, registry)
+        self._build_chat_panel(registry)
+
+    def _ensure_ds_key(self) -> str | None:
+        """首次启动 key 引导：platform.get_ds_key() 都无 → QInputDialog
+        输入 → platform.set_ds_key() 存 Keychain。仍无 → 返 None（聊天禁用）。"""
+        key = self.adapter.get_ds_key()
+        if key:
+            return key
+        from PySide6.QtWidgets import QInputDialog
+
+        text, ok = QInputDialog.getText(
+            None,
+            "设置 DeepSeek API Key",
+            "请输入 DeepSeek API Key（存入 macOS 钥匙串，不写明文文件）：",
+        )
+        text = (text or "").strip()
+        if ok and text:
+            self.adapter.set_ds_key(text)
+            return self.adapter.get_ds_key() or text
+        return None
+
+    def _build_chat_panel(self, registry) -> None:
+        """载入 QML 聊天面板（不可见，托盘/聚焦唤出）。"""
+        import os
+
+        from pet.ui.chat_bridge import ChatBridge, load_chat_panel
+
+        qml_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "pet", "ui", "main.qml"
+        )
+        self._chat_bridge = ChatBridge(
+            self._chat_client, registry, self._make_tool_context
+        )
+        self._chat_bridge.offlineRequested.connect(self._on_chat_offline)
+        self._chat_engine = load_chat_panel(self._chat_bridge, qml_path)
+        if self._chat_engine and self._chat_engine.rootObjects():
+            self._chat_window = self._chat_engine.rootObjects()[0]
+        self.tray.set_chat_callback(self._show_chat)
+
+    def _make_tool_context(self) -> ToolContext:
+        """按需取当前 state 作为工具上下文（v0.4 工具不真用 state）。"""
+        return ToolContext(
+            pet_state=self.store.get(),
+            user_name=self.cfg.get("user_name", "主人"),
+            config=self.cfg,
+            window_info=None,
+        )
+
+    def _show_chat(self) -> None:
+        """托盘'聊天'唤出面板（v0.11 真全局热键占位）。"""
+        if self._chat_window is None:
+            self.bubble.show(
+                "还没设置 DS key，聊天暂不可用～", anchor=self._pet_anchor()
+            )
+            return
+        self._chat_bridge.reset_offline()
+        self._chat_window.show()
+        self._chat_window.requestActivate()
+
+    def _on_chat_offline(self) -> None:
+        """断网/无 key：气泡提示，宠物仍 WANDER/交互/长大（T8）。"""
+        self.bubble.show(
+            "当前离线，聊天暂不可用～", anchor=self._pet_anchor()
+        )
 
     def _on_pet_moved(self, x: float, y: float, h: int) -> None:
         self.bubble.follow((x, y, h))
@@ -259,6 +363,18 @@ class PetApp:
         # ① ProactiveScheduler  ② EatMouseSession  ③ 全局热键 —— v0.x 均 pass
         # ④ 保存 PetState+Memory
         self._save_now()
+        # ⑤ 关 QML engine（v0.4 聊天面板）+ 中断流式 worker（防线程泄漏）
+        if self._chat_bridge is not None:
+            try:
+                self._chat_bridge.cancel()
+            except Exception:
+                pass
+        if self._chat_window is not None:
+            try:
+                self._chat_window.close()
+            except Exception:
+                pass
+        self._chat_engine = None
         # ⑤ 关 QML engine —— v0.x pass 占位
         # ⑥ 移除托盘
         self.tray.remove()
@@ -270,7 +386,7 @@ class PetApp:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="桌宠 v0.3.12")
+    parser = argparse.ArgumentParser(description="桌宠 v0.4.0")
     parser.add_argument(
         "--verbose", action="store_true", help="详细日志到 stderr"
     )
@@ -279,7 +395,7 @@ def main() -> int:
     adapter = get_platform_adapter()
     paths = adapter.get_paths()
     logger = setup_logging(args.verbose, paths["log_dir"])
-    logger.info("启动桌宠 v0.3.12（verbose=%s）", args.verbose)
+    logger.info("启动桌宠 v0.4.0（verbose=%s）", args.verbose)
 
     if not adapter.acquire_single_instance_lock():
         logger.info("已有实例运行，本进程退出。")

@@ -67,6 +67,26 @@ class PlatformAdapter:
         """
         return False
 
+    # ---- v0.4 DS key + 危险确认（平台密钥库/原生对话框，经此注入） ----
+    def get_ds_key(self) -> str | None:
+        """DS API key：平台密钥库优先，env ``DEEPSEEK_API_KEY`` 兜底。
+
+        都无→返 None（app 触发首次引导）。**不入 config.json 明文**。
+        基类返回 env 兜底（无密钥库概念），mac/win 覆盖。
+        """
+        return os.environ.get("DEEPSEEK_API_KEY") or None
+
+    def set_ds_key(self, key: str) -> None:
+        """存入平台密钥库。基类 no-op（无密钥库概念时调用方应自行降级）。"""
+        pass
+
+    def confirm_dangerous(
+        self, title: str, command: str, risk: str
+    ) -> bool:
+        """危险操作二次确认（平台原生模态对话框）。基类默认 True（不拦截），
+        mac 覆盖用 NSAlert，win 覆盖用 Qt 对话框（双端按钮文案对齐）。"""
+        return True
+
 
 def _mac_paths() -> dict:
     home = os.path.expanduser("~")
@@ -172,6 +192,66 @@ if sys.platform == "darwin":
 
         def create_pet_window(self, sprite):
             return window_mac.PetWindow(sprite)
+
+        # ---- v0.4：DS key 存 Keychain / 危险确认 NSAlert ----
+        def get_ds_key(self) -> str | None:
+            """Keychain（keyring）优先 → env ``DEEPSEEK_API_KEY`` 兜底 → None。
+
+            不入 config.json 明文。keyring 失败（Keychain 损坏/无授权）时
+            静默回退 env + 日志，不崩。
+            """
+            try:
+                import keyring
+
+                key = keyring.get_password("Desktop-Pet", "ds_api_key")
+                if key:
+                    return key
+            except Exception as exc:  # Keychain 未解锁/后端不可用
+                import logging
+
+                logging.getLogger("pet").warning(
+                    "Keychain 读取 DS key 失败，回退 env: %s", exc
+                )
+            return os.environ.get("DEEPSEEK_API_KEY") or None
+
+        def set_ds_key(self, key: str) -> None:
+            """存 Keychain。失败不崩（调用方 next get_ds_key 取 env 兜底）。"""
+            try:
+                import keyring
+
+                keyring.set_password("Desktop-Pet", "ds_api_key", key)
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("pet").warning("Keychain 存 DS key 失败: %s", exc)
+
+        def confirm_dangerous(
+            self, title: str, command: str, risk: str
+        ) -> bool:
+            """NSAlert 模态确认（显示命令+风险）。v0.4 框架就位不触发
+            （open_app 不危险）；v0.8 全工具用。失败默认 True（不拦）保守
+            放行 + 日志。按钮：第一=继续/第二=取消。"""
+            try:
+                from AppKit import (
+                    NSAlertFirstButtonReturn,
+                    NSAlertStyleInformational,
+                    NSAlert,
+                )
+
+                alert = NSAlert.alloc().init()
+                alert.setMessageText_(title)
+                alert.setInformativeText_(f"命令：{command}\n风险：{risk}")
+                alert.setAlertStyle_(NSAlertStyleInformational)
+                alert.addButtonWithTitle_("继续")
+                alert.addButtonWithTitle_("取消")
+                return alert.runModal() == NSAlertFirstButtonReturn
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("pet").warning(
+                    "NSAlert 失败，默认放行: %s", exc
+                )
+                return True
 
     def get_platform_adapter() -> PlatformAdapter:
         p = _mac_paths()

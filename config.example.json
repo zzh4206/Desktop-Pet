@@ -1,6 +1,5 @@
 {
   "provider": "emoji",
-  "ds_api_key": "",
   "age_speed_multiplier": 1.0,
   "log_level": "INFO",
   "interaction_gain": {
@@ -23,12 +22,6 @@
     "mood": 2,
     "fullness": 3,
     "cleanliness": 1.5
-  },
-  "interaction_gain": {
-    "pet": 5,
-    "feed": 20,
-    "clean": 15,
-    "poke": -8
   },
   "score": {
     "mood_weight": 0.4,

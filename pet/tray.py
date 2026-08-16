@@ -14,14 +14,26 @@ class TrayManager(QObject):
     def __init__(self, on_quit, parent=None):
         super().__init__(parent)
         self._on_quit = on_quit
+        self._on_chat = None
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
 
         menu = QMenu()
+        act_chat = menu.addAction("聊天")
+        act_chat.triggered.connect(self._emit_chat)
+        menu.addSeparator()
         act_quit = menu.addAction("退出")
         act_quit.triggered.connect(self._on_quit)
         self._tray.setContextMenu(menu)
         self._tray.show()
+
+    def set_chat_callback(self, cb) -> None:
+        """v0.4：托盘'聊天'唤出聊天面板（v0.11 真全局热键占位）。"""
+        self._on_chat = cb
+
+    def _emit_chat(self) -> None:
+        if self._on_chat is not None:
+            self._on_chat()
 
     @staticmethod
     def _make_icon() -> QIcon:
