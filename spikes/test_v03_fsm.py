@@ -121,7 +121,8 @@ def main() -> int:
         fsm.step(PetState.default(), sensors(windows=(win,)), DT)
         if fsm.mode == "idle":
             break
-    check("T8 走到窗壁沿边爬上窗顶", fsm.pos == (800.0, 700.0))
+    check("T8 走到窗壁沿边爬上窗顶(登顶内收6px)",
+          fsm.pos == (806.0, 700.0))
 
     # T9 全屏抑制：fullscreen_on 后 idle 到期不出新 WANDER
     fsm = BehaviorFSM(dict(WA))
@@ -184,8 +185,8 @@ def main() -> int:
         fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
         climbed_y.append(fsm.pos[1])
         steps += 1
-    check("T13 撞窗侧进入攀爬态后登顶", fsm.mode == "idle"
-          and fsm.pos == (800.0, 700.0))
+    check("T13 撞窗侧进入攀爬态后登顶(内收6px)", fsm.mode == "idle"
+          and fsm.pos == (806.0, 700.0))
     check("T13 攀爬是渐进的(经历多个中间 y, 非瞬移)",
           len([y for y in climbed_y if 700 < y < 900]) >= 3)
     # 从右侧撞 → 贴右沿爬
@@ -197,7 +198,7 @@ def main() -> int:
     while fsm.mode != "idle" and steps < int(12 / DT):
         fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
         steps += 1
-    check("T13 右侧撞入贴右沿登顶", fsm.pos == (1200.0, 700.0))
+    check("T13 右侧撞入贴右沿登顶(内收6px)", fsm.pos == (1194.0, 700.0))
     # 攀爬途中窗口消失 → 坠落回地板
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((700, 900))

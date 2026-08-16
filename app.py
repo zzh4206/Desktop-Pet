@@ -142,6 +142,8 @@ class PetApp:
         self.window.petMoved.connect(self._on_pet_moved)
 
         self.bubble = BubbleWidget()
+        # 图层探针排除自身（宠物站窗顶时探针点被自己身体覆盖 → 误否决支撑）
+        self.adapter.register_own_windows(self.window, self.bubble)
         self.tray = TrayManager(on_quit=self.shutdown, parent=self.app)
 
         # v0.4 聊天：key 引导 + DS 客户端 + 工具注册表 + QML 面板

@@ -544,8 +544,15 @@ class BehaviorFSM:
             if y >= wy + w["height"]:
                 continue  # 低于窗底：从窗体下方穿过，不撞侧
             wl, wr = w["x"], w["x"] + w["width"]
-            # 线段 (x0→x1) 与边线相交（端点异侧）
-            if (x0 - wl) * (x1 - wl) < 0 or (x0 - wr) * (x1 - wr) < 0:
+            # 命中判定：新进入横向跨度（含恰好落在边线上——异侧乘积<0 的
+            # 严格不等式漏掉 x1==wl/wr 的等号情形），或线段跨越边线
+            in0 = wl <= x0 <= wr
+            in1 = wl <= x1 <= wr
+            entered = (not in0) and in1
+            crossed = (
+                (x0 - wl) * (x1 - wl) < 0 or (x0 - wr) * (x1 - wr) < 0
+            )
+            if entered or crossed:
                 edge = wl if x0 < wl else wr  # 从哪侧撞入贴哪条边
                 cand = (float(edge), float(wy), w)
                 if best is None or cand[1] < best[1]:
@@ -651,10 +658,20 @@ class BehaviorFSM:
             return Action(ActionType.FALL, {"pos": self._pos})
         y = self._pos[1] - self._speed * dt
         if y <= self._climb_top_y:
-            # 登顶站定
-            self._pos = (self._climb_edge_x, self._climb_top_y)
+            # 登顶站定：向窗内收 6px——站在边缘线上时实时矩形差 1px 就会被
+            # 判"横向移开"而坠落（登顶即掉的根因之一）
+            x_top = self._climb_edge_x
+            w = self._climb_win
+            if w is not None:
+                cx = w["x"] + w["width"] / 2
+                inward = 6 if cx > x_top else -6
+                x_top = min(
+                    max(x_top + inward, w["x"] + 4), w["x"] + w["width"] - 4
+                )
+            self._pos = (self._clamp_x(x_top), self._climb_top_y)
             self._mode = _IDLE
             self._idle_left = self._new_idle()
+            self._stand_win = w  # 支撑窗已知，直接进入骑乘路径
         else:
             self._pos = (self._climb_edge_x, y)
         return Action(ActionType.MOVE_TO, {"pos": self._pos})

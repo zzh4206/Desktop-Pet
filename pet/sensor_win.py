@@ -190,13 +190,26 @@ def visible_windows(refresh: bool = False) -> list[dict]:
     return found
 
 
+_own_hwnds: set = set()
+
+
+def set_own_hwnds(hwnds) -> None:
+    """登记宠物自身窗口（本体/气泡）hwnd——图层探针被自身遮挡时放行。
+
+    宠物站窗顶时，探针点（窗顶下 5px）落在宠物身体覆盖范围内，
+    WindowFromPoint 会命中宠物自己 → 身份比对失败 → 支撑被误否决
+    （表现为：登顶即掉/站不稳/支撑窗记录丢失后悬空）。"""
+    global _own_hwnds
+    _own_hwnds = {int(h) for h in hwnds if h}
+
+
 def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     """图层双检查（FSM 攀爬/落点二次确认）：
 
     - ref=None：逻辑坐标 (x,y) 处是否有枚举到的实体窗口（任意命中即可）；
     - ref=候选窗 dict：该点**最顶层**实体窗是否就是 ref（比对 hwnd）——
       候选窗被别的窗盖住（如全屏窗在前）→ 返回 False，否决攀爬/落顶。
-    宠物自身/气泡是 NOACTIVATE/TOOL 窗不在有效集，不会误报。
+    - 命中宠物/气泡自身（已登记）→ 按几何候选覆盖判断放行（自身不算遮挡）。
     逻辑→物理坐标按所在屏 DPR 换算（多屏不同缩放逐屏判断）。
     """
     from PySide6.QtGui import QGuiApplication
@@ -213,10 +226,19 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     if not hwnd:
         return False
     root = _user32.GetAncestor(hwnd, _GA_ROOT) or hwnd  # 子控件 → 顶层
+    root_i = int(root)
+    if root_i in _own_hwnds:
+        # 探针被宠物自身遮挡：按几何候选覆盖判断（自身不算图层遮挡）
+        if ref is not None:
+            return (
+                ref["x"] <= x <= ref["x"] + ref["width"]
+                and ref["y"] <= y <= ref["y"] + ref["height"]
+            )
+        return True
     if ref is not None:
-        return int(root) == ref.get("hwnd")
+        return root_i == ref.get("hwnd")
     valid = {w.get("hwnd") for w in visible_windows()}
-    return int(root) in valid
+    return root_i in valid
 
 
 def _process_name(pid: int) -> str:

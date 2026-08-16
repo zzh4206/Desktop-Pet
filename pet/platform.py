@@ -67,6 +67,14 @@ class PlatformAdapter:
         """
         return False
 
+    def register_own_windows(self, *widgets) -> None:
+        """登记宠物自身窗口（本体/气泡）——图层探针排除自身遮挡。
+
+        win 端实装（sensor_win.set_own_hwnds）；mac 端 no-op（v0.3.13 图层
+        实装后如遇同类问题再补）。
+        """
+        pass
+
     # ---- v0.4 DS key + 危险确认（平台密钥库/原生对话框，经此注入） ----
     def get_ds_key(self) -> str | None:
         """DS API key：平台密钥库优先，env ``DEEPSEEK_API_KEY`` 兜底。
@@ -334,6 +342,15 @@ elif sys.platform == "win32":
 
         def is_fullscreen_active(self) -> bool:
             return sensor_win.foreground_fullscreen()[0]
+
+        def register_own_windows(self, *widgets) -> None:
+            ids = []
+            for wgt in widgets:
+                try:
+                    ids.append(int(wgt.winId()))
+                except Exception:
+                    pass
+            sensor_win.set_own_hwnds(ids)
 
     def _win_paths() -> dict:
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(
