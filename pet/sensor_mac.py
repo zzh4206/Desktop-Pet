@@ -254,10 +254,13 @@ def _solid_windows() -> list[dict]:
     return out
 
 
-def _top_window_wid_at(x: float, y: float) -> int | None:
+def _top_window_wid_at(x: float, y: float, skip_own: bool = False) -> int | None:
     """(x,y) 处最顶层实体窗 wid（_solid_windows 按 z-order front-to-back，
-    第一个包含点即最顶层）。无 Quartz/无命中 → None。"""
+    第一个包含点即最顶层）。skip_own=True 时跳过宠物自身窗（Z 序下探用）。
+    无 Quartz/无命中 → None。"""
     for w in _solid_windows():
+        if skip_own and w["wid"] in _own_wids:
+            continue
         if w["x"] <= x < w["x"] + w["width"] and w["y"] <= y < w["y"] + w["height"]:
             return w["wid"]
     return None
@@ -277,12 +280,20 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     if top is None:
         return False
     if top in _own_wids:
-        # 探针被宠物自身遮挡：按几何候选覆盖判断（自身不算图层遮挡）
+        # 探针被宠物自身遮挡：Z 序下探找第一个承接该点的非自身窗再身份比对
+        # （原"几何候选覆盖即放行"捷径会重新放行被盖住的窗——v0.3.16 win 同类）
+        next_top = _top_window_wid_at(x, y, skip_own=True)
+        if next_top is None:
+            # 下面无其他窗承接 → 候选窗没被遮挡，按几何候选覆盖放行
+            if ref is not None:
+                return (
+                    ref["x"] <= x <= ref["x"] + ref["width"]
+                    and ref["y"] <= y <= ref["y"] + ref["height"]
+                )
+            return True
+        # 对下探到的窗做身份比对
         if ref is not None:
-            return (
-                ref["x"] <= x <= ref["x"] + ref["width"]
-                and ref["y"] <= y <= ref["y"] + ref["height"]
-            )
+            return next_top == ref.get("wid")
         return True
     if ref is not None:
         return top == ref.get("wid")
