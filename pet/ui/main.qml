@@ -79,7 +79,10 @@ ApplicationWindow {
                     Row {
                         id: row
                         spacing: 8
-                        // pet 靠左（带头像）/ user 靠右
+                        // pet 行贴左（头像在左）/ user 行贴右（头像在右）：
+                        // layoutDirection 只反转内部顺序，行本身须锚定
+                        anchors.left: model.role === "user" ? undefined : parent.left
+                        anchors.right: model.role === "user" ? parent.right : undefined
                         layoutDirection: model.role === "user" ? Qt.RightToLeft : Qt.LeftToRight
                         leftPadding: 12
                         rightPadding: 12
@@ -185,6 +188,7 @@ ApplicationWindow {
                         font.pixelSize: 13
                         color: root.cPetText
                         placeholderTextColor: "#9a948c"
+                        verticalAlignment: TextInput.AlignVCenter
                         background: null
                         focus: true
                         selectByMouse: true
