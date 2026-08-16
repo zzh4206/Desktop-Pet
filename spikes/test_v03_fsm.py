@@ -483,6 +483,8 @@ def main() -> int:
           and fsm.pos[0] > 1200)
 
     # T27 撞顶反弹：快抛上边界不吸附——贴顶下一 tick 即离开（vy 反转）
+    # 触顶语义 = 头顶（y=工作区顶+身位96）：视觉 emoji 头先碰屏顶
+    _TOP = WA["y"] + 96.0
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((960, 800))
     fsm.drag_move((960, 800))
@@ -491,11 +493,11 @@ def main() -> int:
     hit_top_tick = None
     for i in range(int(3 / DT)):
         fsm.step(PetState.default(), sensors(), DT)
-        if fsm.pos[1] == WA["y"] and hit_top_tick is None:
+        if fsm.pos[1] <= _TOP and hit_top_tick is None:
             hit_top_tick = i
         if hit_top_tick is not None and i == hit_top_tick + 1:
             check("T27 撞顶次tick即离开(反弹不吸附)",
-                  fsm.pos[1] > WA["y"])
+                  fsm.pos[1] > _TOP)
     check("T27 上抛确实触顶", hit_top_tick is not None)
 
     # T27b 弧线顶点恰好触顶（触顶时 |vy|≈0）：最小弹速保证 0.3s 内降 ≥80px
@@ -511,16 +513,16 @@ def main() -> int:
         if fsm.mode in ("idle", "climb", "drag"):
             break
         ys.append(fsm.pos[1])
-        if fsm.pos[1] <= WA["y"] + 1:
+        if fsm.pos[1] <= _TOP + 1:
             top_at = i
     if top_at is not None:
         after = ys[top_at + 1:top_at + 7]  # 触顶后 0.3s
-        left = any(y >= 80 for y in after)  # 屏幕 y 向下为正
+        left = any(y >= _TOP + 80 for y in after)  # 屏幕 y 向下为正
         check("T27b 顶点触顶0.3s内脱离≥80px(不贴顶滑行)", left)
     else:
         check("T27b 该轨迹未触顶(参数漂移,重校)", False)
-    # 触顶期间任意时刻不越界
-    check("T27 全程不越上界", fsm.pos[1] >= WA["y"])
+    # 触顶期间任意时刻不越界（头顶不超出工作区顶）
+    check("T27 全程不越上界", fsm.pos[1] >= _TOP)
 
     # T28 上抛撞窗底弹回：不许穿体落顶（"吸附贴顶窗"的根因）
     midwin = {"x": 700, "y": 300, "width": 500, "height": 300}

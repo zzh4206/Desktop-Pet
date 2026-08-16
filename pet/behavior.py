@@ -252,7 +252,12 @@ class BehaviorFSM:
         self._drag_hist.append((time.monotonic(), cursor[0], cursor[1]))
 
     def drag_move(self, cursor: tuple) -> None:
-        self._pos = (self._clamp_x(cursor[0]), max(cursor[1], 1.0))
+        # y 下限 = 工作区顶+身位（头顶齐屏顶）——与 Qt 层 move_bottom_center
+        # 的钳制（min_y + height）同语义，防拖拽时 FSM/窗口位置错位
+        self._pos = (
+            self._clamp_x(cursor[0]),
+            max(cursor[1], self._work_area["y"] + self._pet_height),
+        )
         self._drag_hist.append((time.monotonic(), cursor[0], cursor[1]))
 
     def end_drag(self) -> None:
@@ -597,8 +602,12 @@ class BehaviorFSM:
         # 不飞出：撞顶反弹——弧线顶点触顶时 |vy|≈0，纯比例反弹给不出向下
         # 速度，宠物会贴顶以水平速度长距离滑行（重力从零加速慢），视觉
         # "吸附上边界"。故给最小向下弹速，保证触顶即快速脱离。
-        if y < self._work_area["y"]:
-            y = float(self._work_area["y"])
+        # 碰撞点是**头顶**（y-身位高）而非脚底：视觉上 emoji 头先碰屏顶，
+        # 若按脚底判定，自然抛物线顶点落在 [顶, 顶+身位] 区间时头顶钉在
+        # 屏边、vy≈0 悬滞对称落回——看起来"碰顶不反弹"，实则从未碰撞。
+        top_y = self._work_area["y"] + self._pet_height
+        if y < top_y:
+            y = float(top_y)
             if self._vy < 0:
                 self._vy = max(-self._vy * _BOUNCE_RESTITUTION, 500.0)
                 _log.debug("[物理] 撞屏顶反弹 vy=%.0f", self._vy)
