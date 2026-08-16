@@ -351,6 +351,19 @@ def fullscreen_status() -> tuple[bool, str]:
     return (False, "")
 
 
+def rect_at(ref: dict) -> dict | None:
+    """支撑窗实时矩形（逻辑坐标 {x,y,width,height}）。用 200ms 短缓存查 wid bounds
+    （win GetWindowRect O(1) 实时，mac 退 200ms 延迟但比几何兜底好——窗口移动 200ms
+    内骑乘跟随，vs rect_at=None 完全不跟随拖拽窗口后悬空）。无 wid/未找到 → None。"""
+    wid = (ref or {}).get("wid")
+    if not wid:
+        return None
+    for w in _solid_windows():
+        if w["wid"] == wid:
+            return {"x": w["x"], "y": w["y"], "width": w["width"], "height": w["height"]}
+    return None
+
+
 def build_sensors() -> Sensors:
     return Sensors(
         mouse_pos=mouse_pos(),
@@ -359,4 +372,5 @@ def build_sensors() -> Sensors:
         idle_time=0.0,
         solid_at=solid_at,
         alive_at=alive_at,
+        rect_at=rect_at,
     )
