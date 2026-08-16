@@ -522,6 +522,23 @@ def main() -> int:
     # 触顶期间任意时刻不越界
     check("T27 全程不越上界", fsm.pos[1] >= WA["y"])
 
+    # T28 上抛撞窗底弹回：不许穿体落顶（"吸附贴顶窗"的根因）
+    midwin = {"x": 700, "y": 300, "width": 500, "height": 300}
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((960, 800))
+    fsm.drag_move((960, 800))
+    fsm.end_drag()
+    fsm._vy = -1800.0                    # 从窗(底=600)下方直冲而上
+    hit_top = False
+    for _ in range(int(5 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(midwin,)), DT)
+        if fsm.mode in ("idle", "climb"):
+            break
+        if fsm.pos[1] == 300.0:
+            hit_top = True
+    check("T28 上抛不穿体落顶(无吸附)", not hit_top
+          and fsm.mode == "idle" and fsm.pos[1] == floor)
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()

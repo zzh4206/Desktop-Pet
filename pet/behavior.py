@@ -600,6 +600,21 @@ class BehaviorFSM:
         if self._mode == _THROWN and raw_x != x:
             self._vx = -self._vx * _WALL_RESTITUTION
             x0 = x  # 后续扫掠从墙点起，防穿透检测误报
+        # 上升穿窗体 → 撞窗底弹回（不许从下方穿透到顶上）：窗体对上升
+        # 方向是实心的——下落撞顶面是"落顶"，上升顶到的是底面，应弹回窗下。
+        # 否则上抛会穿体落顶，站在贴屏顶的窗口上像"吸附天花板"。
+        if self._vy < 0:
+            for w in self._valid_windows():
+                if not self._alive(w):
+                    continue
+                wl, wr = w["x"], w["x"] + w["width"]
+                if wl <= x <= wr and w["y"] < y < w["y"] + w["height"]:
+                    if self._solid_point(x, y, w):
+                        y = w["y"] + w["height"] + 1.0  # 推回窗底之下
+                        self._vy = max(
+                            -self._vy * _BOUNCE_RESTITUTION, 400.0
+                        )
+                        break
         # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）
         if self._mode == _THROWN and self._vx != 0.0:
             hit = self._hit_window_side(x0, x, y)
