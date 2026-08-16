@@ -378,6 +378,16 @@ def main() -> int:
     check("T22 窗下松手正常落地板(不瞬移上顶)",
           fsm.mode == "idle" and fsm.pos[1] == floor)
 
+    # T26 窗下落地后驻留：stand_win 不误记头顶窗，数 tick 后仍在地板（骑乘
+    # 路径不得把窗下落体拽上顶）
+    stayed = True
+    for _ in range(40):
+        fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.pos[1] != floor:
+            stayed = False
+            break
+    check("T26 窗下落体驻留地板(不被骑乘路径拽上顶)", stayed)
+
     # T22b 从窗底下方横向飞越窗边 → 不撞侧攀爬，直落地板
     fsm = BehaviorFSM(dict(WA))
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）

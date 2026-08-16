@@ -627,7 +627,13 @@ class BehaviorFSM:
             self._mode = _IDLE
             self._bounce_count = 0
             self._idle_left = self._new_idle()
-            self._stand_win = self._top_surface(x)[1]  # 记住支撑窗（骑乘用）
+            # 记住支撑窗（骑乘用）：只有落点确实在某窗顶上才记——落在窗
+            # 下方地板时 _top_surface 返回的是头顶最高窗，误记会被骑乘路径
+            # 当成"窗口上移"拽上顶（窗下落体弹顶的根因）
+            sy_p, w_p = self._top_surface(x)
+            self._stand_win = (
+                w_p if w_p is not None and abs(sy_p - sy) <= 2 else None
+            )
             return Action(ActionType.MOVE_TO, {"pos": self._pos})
         self._pos = (x, y)
         return Action(
