@@ -589,12 +589,13 @@ class BehaviorFSM:
         raw_x = x0 + self._vx * dt
         x = self._clamp_x(raw_x)
         y = self._pos[1] + self._vy * dt
-        # 不飞出：撞顶反弹（与地板同款恢复系数）——原实现 vy 清零会让宠物
-        # 贴着顶边以水平速度长距离滑行（重力从零加速慢），视觉"吸附上边界"
+        # 不飞出：撞顶反弹——弧线顶点触顶时 |vy|≈0，纯比例反弹给不出向下
+        # 速度，宠物会贴顶以水平速度长距离滑行（重力从零加速慢），视觉
+        # "吸附上边界"。故给最小向下弹速，保证触顶即快速脱离。
         if y < self._work_area["y"]:
             y = float(self._work_area["y"])
             if self._vy < 0:
-                self._vy = -self._vy * _BOUNCE_RESTITUTION
+                self._vy = max(-self._vy * _BOUNCE_RESTITUTION, 400.0)
         # 侧墙（工作区左右界）反弹（仅抛掷态；掉落无水平速度不涉及）
         if self._mode == _THROWN and raw_x != x:
             self._vx = -self._vx * _WALL_RESTITUTION

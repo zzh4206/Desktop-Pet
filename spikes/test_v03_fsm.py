@@ -497,6 +497,28 @@ def main() -> int:
             check("T27 撞顶次tick即离开(反弹不吸附)",
                   fsm.pos[1] > WA["y"])
     check("T27 上抛确实触顶", hit_top_tick is not None)
+
+    # T27b 弧线顶点恰好触顶（触顶时 |vy|≈0）：最小弹速保证 0.3s 内降 ≥80px
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((200, 900))
+    fsm.drag_move((200, 900))
+    fsm.end_drag()
+    fsm._vx, fsm._vy = 800.0, -1960.0      # 测试注入：顶点≈屏顶(升900px)
+    top_at = None
+    ys = []
+    for i in range(int(4 / DT)):
+        fsm.step(PetState.default(), sensors(), DT)
+        if fsm.mode in ("idle", "climb", "drag"):
+            break
+        ys.append(fsm.pos[1])
+        if fsm.pos[1] <= WA["y"] + 1:
+            top_at = i
+    if top_at is not None:
+        after = ys[top_at + 1:top_at + 7]  # 触顶后 0.3s
+        left = any(y >= 80 for y in after)  # 屏幕 y 向下为正
+        check("T27b 顶点触顶0.3s内脱离≥80px(不贴顶滑行)", left)
+    else:
+        check("T27b 该轨迹未触顶(参数漂移,重校)", False)
     # 触顶期间任意时刻不越界
     check("T27 全程不越上界", fsm.pos[1] >= WA["y"])
 
