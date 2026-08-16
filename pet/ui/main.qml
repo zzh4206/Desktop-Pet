@@ -113,13 +113,8 @@ ApplicationWindow {
                                 x: model.role === "user" ? 4 : 0
                                 width: Math.min(list.width - 110,
                                                 bubbleTxt.implicitWidth + 22)
-                                radius: 12
-                                // 靠头像侧的角收直（对话感）
+                                radius: 12  // 四角一致（左右圆润程度相同）
                                 readonly property bool mine: model.role === "user"
-                                topRightRadius: mine ? 4 : radius
-                                bottomRightRadius: mine ? 4 : radius
-                                topLeftRadius: mine ? radius : 4
-                                bottomLeftRadius: mine ? radius : 4
                                 color: mine ? root.cUser : root.cPet
                                 // 柔和投影（气泡浮起感）
                                 Rectangle {
