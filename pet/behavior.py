@@ -611,14 +611,18 @@ class BehaviorFSM:
             if self._vy < 0:
                 self._vy = max(-self._vy * _BOUNCE_RESTITUTION, 500.0)
                 _log.debug("[物理] 撞屏顶反弹 vy=%.0f", self._vy)
-        # 侧墙（工作区左右界）反弹（仅抛掷态；掉落无水平速度不涉及）
+        # 侧墙（工作区左右界）反弹（仅抛掷态；掉落无水平速度不涉及）。
+        # 最小离墙速度：轻碰（0.4×微速≈0）会每 tick 钳制振荡、贴墙慢滑
+        # （同撞屏顶吸附的老问题）——保证弹开后至少 350px/s 离墙。
         if self._mode == _THROWN and raw_x != x:
             self._vx = -self._vx * _WALL_RESTITUTION
+            away = 1.0 if raw_x < self._left() else -1.0
+            if abs(self._vx) < 350.0:
+                self._vx = away * 350.0
+                _log.debug("[物理] 撞侧墙最小离墙速度 vx=%.0f", self._vx)
             x0 = x  # 后续扫掠从墙点起，防穿透检测误报
         # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）。**先于窗底弹回**：
-        # 斜上抛撞边时同一 tick 已进入窗体带且 vy<0，若先弹回会把宠物推到
-        # 窗底之下、撞侧检测因带外失效 → 视觉"碰边缘突然下坠脱离不爬"。
-        # 抛掷横向撞窗侧 → 贴边攀爬（不瞬移上顶）
+        # 斜上抛撞边同 tick 已在带内且 vy<0，先弹回会推到带外致攀爬失效。
         if self._mode == _THROWN and self._vx != 0.0:
             hit = self._hit_window_side(x0, x, y)
             if hit is not None:

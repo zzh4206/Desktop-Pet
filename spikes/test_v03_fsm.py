@@ -172,12 +172,13 @@ def main() -> int:
             break
     check("T12 轻抬松手垂直落到地板(不上飞)", fsm.pos[1] == floor)
 
-    # T13 抛掷撞窗口侧面 → 沿边逐渐爬到顶（不瞬移）
+    # T13 抛掷撞窗口侧面 → 沿边逐渐爬到顶（不瞬移；柔触 |vx|≤1200）
     win13 = {"x": 800, "y": 700, "width": 400, "height": 300}
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
-    fsm.drag_move((700 + 96, 900))     # vx≈800 → 右飞撞窗左沿
+    _time.sleep(0.12)
+    fsm.drag_move((700 + 96, 900))     # 0.12s 移 96px → vx≈800 柔触
     fsm.end_drag()
     steps = 0
     climbed_y = []
@@ -193,6 +194,7 @@ def main() -> int:
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((1300, 900))
     fsm.drag_move((1300, 900))
+    _time.sleep(0.12)
     fsm.drag_move((1300 - 96, 900))
     fsm.end_drag()
     while fsm.mode != "idle" and steps < int(12 / DT):
@@ -203,6 +205,7 @@ def main() -> int:
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
+    _time.sleep(0.12)
     fsm.drag_move((700 + 96, 900))
     fsm.end_drag()
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
@@ -227,6 +230,7 @@ def main() -> int:
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
+    _time.sleep(0.12)
     fsm.drag_move((700 + 96, 900))
     fsm.end_drag()
     fsm._vx = 10000.0               # 测试注入：单 tick 位移 500px 跨整窗
@@ -269,6 +273,7 @@ def main() -> int:
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
+    _time.sleep(0.12)
     fsm.drag_move((796, 900))
     fsm.end_drag()
     ghost = Sensors(
@@ -288,6 +293,7 @@ def main() -> int:
     fsm = BehaviorFSM(dict(WA))
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
+    _time.sleep(0.12)
     fsm.drag_move((796, 900))
     fsm.end_drag()
     layered = Sensors(
@@ -421,6 +427,7 @@ def main() -> int:
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
+    _time.sleep(0.12)
     fsm.drag_move((796, 900))
     fsm.end_drag()
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
@@ -565,6 +572,7 @@ def main() -> int:
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
+    _time.sleep(0.12)
     fsm.drag_move((796, 900))
     fsm.end_drag()
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
@@ -581,6 +589,7 @@ def main() -> int:
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
     fsm.begin_drag((700, 900))
     fsm.drag_move((700, 900))
+    _time.sleep(0.12)
     fsm.drag_move((796, 900))
     fsm.end_drag()
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
@@ -591,6 +600,26 @@ def main() -> int:
     a = fsm.step(PetState.default(), near_s, DT)
     check("T30 攀爬中小幅移动跟随重贴边(不坠落)",
           fsm.mode == "climb" and fsm._climb_edge_x == 820.0)
+
+    # T31 轻碰屏幕侧墙：最小离墙速度 350 —— 不贴墙慢滑（吸附）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((1, 500))         # 贴左墙
+    fsm.drag_move((1, 500))
+    fsm.end_drag()
+    fsm._vx, fsm._vy = -60.0, 0.0    # 微弱左飘撞左墙
+    fsm._mode = "thrown"
+    fsm.step(PetState.default(), sensors(), DT)
+    check("T31 轻碰左墙获得离墙速度(≥350)",
+          fsm._vx >= 350.0 and fsm.pos[0] >= WA["x"])
+    # 快速撞右墙同样有效
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((1890, 500))
+    fsm.drag_move((1890, 500))
+    fsm.end_drag()
+    fsm._vx, fsm._vy = 2000.0, 0.0
+    fsm._mode = "thrown"
+    fsm.step(PetState.default(), sensors(), DT)
+    check("T31 硬撞右墙反弹离墙", fsm._vx <= -350.0)
 
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
