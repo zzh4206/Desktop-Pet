@@ -1,5 +1,9 @@
 """桌宠入口 —— 设计思路.md §2.5（单实例锁 + shutdown 七步序）。
 
+``APP_VERSION``：当前构建标识（日志首行打印，用于确认运行的是哪一版——
+单实例锁会让第二次启动静默退出，肉眼看旧进程容易误判"没修好"）。
+
+
 **平台库-free**：本文件不 import fcntl/pyobjc/sensor_mac/window_mac，所有平台
 特定（单实例锁 / dock 隐藏 / 传感器 / 浮窗创建）经 ``platform.py`` 注入。
 
@@ -70,6 +74,8 @@ from pet.pet_state import PetStateStore, Stage
 from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
+
+APP_VERSION = "v0.3.18+win"
 
 _SAVE_DEBOUNCE_MS = 500       # 变更后 500ms 内多次只存一次
 _SAVE_PERIODIC_MS = 30_000    # 定时存档
@@ -487,7 +493,7 @@ def main() -> int:
     adapter = get_platform_adapter()
     paths = adapter.get_paths()
     logger = setup_logging(args.verbose, paths["log_dir"])
-    logger.info("启动桌宠 v0.5.0（verbose=%s）", args.verbose)
+    logger.info("启动桌宠 %s（verbose=%s）", APP_VERSION, args.verbose)
 
     if not adapter.acquire_single_instance_lock():
         logger.info("已有实例运行，本进程退出。")
