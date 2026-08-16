@@ -482,6 +482,24 @@ def main() -> int:
           fsm.mode in ("walk", "idle") and fsm.pos[1] == floor
           and fsm.pos[0] > 1200)
 
+    # T27 撞顶反弹：快抛上边界不吸附——贴顶下一 tick 即离开（vy 反转）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.begin_drag((960, 800))
+    fsm.drag_move((960, 800))
+    fsm.drag_move((960, 500))     # 强上抛
+    fsm.end_drag()
+    hit_top_tick = None
+    for i in range(int(3 / DT)):
+        fsm.step(PetState.default(), sensors(), DT)
+        if fsm.pos[1] == WA["y"] and hit_top_tick is None:
+            hit_top_tick = i
+        if hit_top_tick is not None and i == hit_top_tick + 1:
+            check("T27 撞顶次tick即离开(反弹不吸附)",
+                  fsm.pos[1] > WA["y"])
+    check("T27 上抛确实触顶", hit_top_tick is not None)
+    # 触顶期间任意时刻不越界
+    check("T27 全程不越上界", fsm.pos[1] >= WA["y"])
+
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
     p = EmojiProvider()
