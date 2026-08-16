@@ -132,7 +132,7 @@ class ChatBridge(QAbstractListModel):
     # ---- worker 信号 ----
     @Slot(str)
     def _on_delta(self, chunk: str) -> None:
-        self._set_streaming(self._streaming + chunk)
+        pass  # delta 丢弃——不显示流式黄框，DS 回复直接落定为 assistant 气泡
 
     @Slot(object)
     def _on_done(self, appended: list) -> None:

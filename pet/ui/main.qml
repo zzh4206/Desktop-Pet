@@ -60,23 +60,6 @@ ApplicationWindow {
             }
         }
 
-        // 流式占位：正在生成的助手消息
-        Text {
-            Layout.fillWidth: true
-            visible: Chat.streamingText.length > 0
-            text: Chat.streamingText
-            textFormat: Text.RichText
-            wrapMode: Text.Wrap
-            color: "#333"
-            leftPadding: 10; rightPadding: 10; topPadding: 4; bottomPadding: 4
-            Rectangle {
-                z: -1
-                anchors.fill: parent
-                color: "#fff3d6"
-                radius: 10
-            }
-        }
-
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
