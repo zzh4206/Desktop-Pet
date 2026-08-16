@@ -9,7 +9,6 @@ ApplicationWindow {
     width: 420
     height: 560
     visible: false
-    flags: Qt.WindowStaysOnTopHint  // 聊天窗口常置顶（点桌面不降层，高于宠物浮窗）
     color: "#fafafa"
 
     // 关闭不退出 app：Esc/窗口 X 仅隐藏
@@ -27,11 +26,34 @@ ApplicationWindow {
 
             ListView {
                 id: list
-                model: Chat.messages
+                model: Chat
                 spacing: 6
-                delegate: Loader {
+
+                // inline delegate（model.role/model.rich 直接可见，不用 Loader/Component）
+                delegate: Item {
                     width: list.width
-                    sourceComponent: model.modelData.role === "user" ? userBubble : petBubble
+                    height: bubbleRect.height
+
+                    Rectangle {
+                        id: bubbleRect
+                        // user 靠右蓝 / pet 靠左灰
+                        anchors.right: model.role === "user" ? parent.right : undefined
+                        anchors.left: model.role === "user" ? undefined : parent.left
+                        width: Math.min(list.width * 0.75, bubbleTxt.implicitWidth + 16)
+                        color: model.role === "user" ? "#4a90d9" : "#ececec"
+                        radius: 10
+
+                        Text {
+                            id: bubbleTxt
+                            anchors.centerIn: parent
+                            width: parent.width - 16
+                            text: model.rich
+                            textFormat: Text.RichText
+                            wrapMode: Text.Wrap
+                            color: model.role === "user" ? "white" : "#222"
+                        }
+                        implicitHeight: bubbleTxt.implicitHeight + 16
+                    }
                 }
 
                 onCountChanged: Qt.callLater(function() { list.positionViewAtEnd() })
@@ -77,61 +99,6 @@ ApplicationWindow {
                         input.text = ""
                     }
                 }
-            }
-        }
-    }
-
-    Component {
-        id: userBubble
-        Item {
-            width: parent ? parent.width : 420
-            height: userRect.height
-
-            Rectangle {
-                id: userRect
-                anchors.right: parent.right
-                // 宽 = 自然宽与上限取小；txt.implicitWidth 是不换行自然宽（稳定）
-                width: Math.min(list.width * 0.75, userTxt.implicitWidth + 16)
-                color: "#4a90d9"
-                radius: 10
-
-                Text {
-                    id: userTxt
-                    anchors.centerIn: parent
-                    width: parent.width - 16
-                    text: model.modelData.rich
-                    textFormat: Text.RichText
-                    wrapMode: Text.Wrap
-                    color: "white"
-                }
-                implicitHeight: userTxt.implicitHeight + 16
-            }
-        }
-    }
-
-    Component {
-        id: petBubble
-        Item {
-            width: parent ? parent.width : 420
-            height: petRect.height
-
-            Rectangle {
-                id: petRect
-                anchors.left: parent.left
-                width: Math.min(list.width * 0.75, petTxt.implicitWidth + 16)
-                color: "#ececec"
-                radius: 10
-
-                Text {
-                    id: petTxt
-                    anchors.centerIn: parent
-                    width: parent.width - 16
-                    text: model.modelData.rich
-                    textFormat: Text.RichText
-                    wrapMode: Text.Wrap
-                    color: "#222"
-                }
-                implicitHeight: petTxt.implicitHeight + 16
             }
         }
     }

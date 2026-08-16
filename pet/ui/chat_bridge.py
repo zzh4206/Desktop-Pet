@@ -1,13 +1,12 @@
 """QML 聊天面板桥接 —— 设计思路.md §五 / 版本规划 v0.4。
 
-``ChatBridge``（QObject）暴露给 QML：``send(text)`` 发起一轮对话，
-``messages``（QVariantList，role/content/rich）驱动 ListView，``streamingText``
-是正在流式生成的助手消息。markdown→HTML 最小转换（加粗/斜体/代码/换行），
-QML ``Text`` 用 ``RichText`` 渲染。
+``ChatBridge(QAbstractListModel)``：messages 走 QAbstractListModel（beginInsertRows
+触发 QML ListView 刷新——singleton Property notify 在 PySide6 6.10 不刷新 ListView、
+setContextProperty QML 见 null，QAbstractListModel 是唯一可靠方案）。``send(text)``
+发起对话，``streamingText`` 是流式占位。markdown→HTML 最小转换（**粗**/*斜*/`code`）。
 
-ChatBridge **不 import requests/keyring/AppKit**——DS 请求经注入的
-``DeepSeekClient``+``ChatWorker``，工具经 ``ToolRegistry``，key 经 ``app``。
-v0.11 真全局热键；v0.4 唤出经托盘/聚焦（``show()``/``hide()`` 由 app 调）。
+ChatBridge **不 import requests/keyring/AppKit**——DS 经注入的 ``DeepSeekClient``+
+``ChatWorker``，工具经 ``ToolRegistry``，key 经 ``app``。
 """
 
 from __future__ import annotations
@@ -17,8 +16,14 @@ import logging
 import re
 from typing import Optional
 
-from PySide6.QtCore import Property, QObject, Qt, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QModelIndex,
+    Property,
+    Qt,
+    Signal,
+    Slot,
+)
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 
 log = logging.getLogger("pet")
@@ -38,38 +43,59 @@ def _md_to_html(text: str) -> str:
     return s
 
 
-class ChatBridge(QObject):
-    """QML ↔ DS 的桥。生命周期由 app 持有。"""
+class ChatBridge(QAbstractListModel):
+    """QML ↔ DS 桥。messages 走 QAbstractListModel（insertRows 刷新 ListView）。"""
 
-    messagesChanged = Signal()
+    _RoleRole = Qt.UserRole + 1
+    _ContentRole = Qt.UserRole + 2
+    _RichRole = Qt.UserRole + 3
+
     streamingChanged = Signal()
-    offlineRequested = Signal()  # app 接 → 气泡"当前离线"
-    failedReply = Signal(str)  # 降级回复文本 → app 气泡（可选）
+    offlineRequested = Signal()
+    failedReply = Signal(str)
 
     def __init__(self, client, registry, make_ctx, parent=None) -> None:
-        """``make_ctx``: callable() -> ToolContext（app 注入，按需取当前 state）。"""
         super().__init__(parent)
         self._client = client
         self._registry = registry
         self._make_ctx = make_ctx
-        self._history: list = []  # list[ChatTurn]
-        self._messages: list = []  # QVariantList: {role, content, rich}
+        self._messages: list = []
+        self._history: list = []  # list[ChatTurn] 喂 DS（与 messages 同步）
         self._streaming = ""
         self._worker = None
         self._offline = False
 
-    # ---- QML 属性 ----
-    def messages(self) -> list:
-        return self._messages
+    # ---- QAbstractListModel ----
+    def roleNames(self):
+        return {
+            self._RoleRole: b"role",
+            self._ContentRole: b"content",
+            self._RichRole: b"rich",
+        }
 
-    messages = Property(list, fget=messages, notify=messagesChanged)
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return len(self._messages)
 
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or role < Qt.UserRole:
+            return None
+        row = index.row()
+        if row < 0 or row >= len(self._messages):
+            return None
+        msg = self._messages[row]
+        if role == self._RoleRole:
+            return msg["role"]
+        if role == self._ContentRole:
+            return msg["content"]
+        if role == self._RichRole:
+            return msg["rich"]
+        return None
+
+    # ---- 流式占位 Property ----
     def streamingText(self) -> str:
         return self._streaming
 
-    streamingText = Property(
-        str, fget=streamingText, notify=streamingChanged
-    )
+    streamingText = Property(str, fget=streamingText, notify=streamingChanged)
 
     # ---- 发送一轮 ----
     @Slot(str)
@@ -81,9 +107,8 @@ class ChatBridge(QObject):
             self.offlineRequested.emit()
             return
         if self._worker is not None and self._worker.isRunning():
-            return  # 上一轮未完，忽略（防并发竞态）
+            return
 
-        # 立即显示用户消息
         self._append_message("user", text)
         self._set_streaming("")
         from ..llm import ChatWorker
@@ -99,10 +124,10 @@ class ChatBridge(QObject):
 
     @Slot()
     def cancel(self) -> None:
-        """关面板时调，中断流式（T15 不泄漏线程）。"""
+        """关面板时调，中断流式（不泄漏线程）。"""
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
-            self._worker.quit()  # 流式已 cancel，run 自然退出
+            self._worker.quit()
 
     # ---- worker 信号 ----
     @Slot(str)
@@ -111,7 +136,6 @@ class ChatBridge(QObject):
 
     @Slot(object)
     def _on_done(self, appended: list) -> None:
-        # appended = [user, assistant, (tool, assistant)*]
         final_text = ""
         for turn in appended:
             self._history.append(turn)
@@ -119,7 +143,6 @@ class ChatBridge(QObject):
                 final_text = turn.content
         if not final_text:
             final_text = self._streaming
-        # 把流式占位落定为正式助手消息
         self._append_message("assistant", final_text)
         self._set_streaming("")
         self._worker = None
@@ -127,45 +150,39 @@ class ChatBridge(QObject):
     @Slot()
     def _on_offline(self) -> None:
         self._offline = True
-        # 流式占位落空，清掉
         self._set_streaming("")
         self._worker = None
         self.offlineRequested.emit()
 
     @Slot(str)
     def _on_failed(self, reply: str) -> None:
-        # 降级：把流式占位落为降级回复
         self._append_message("assistant", reply)
         self._set_streaming("")
         self._worker = None
 
     # ---- 内部 ----
     def _append_message(self, role: str, content: str) -> None:
-        # 新 list 引用（非 in-place append）——QML model: Chat.messages 绑定
-        # singleton Property notify 时 re-read，新引用强制 QML ListView 刷新
-        # （in-place append 同引用，QML model 不检测内容变→不刷新）
+        """QAbstractListModel insertRows——触发 QML ListView 刷新（可靠，
+        不靠 Property notify）。只管 UI messages；_history 由 _on_done 的
+        appended（ChatTurn）管，避免重复/类型混。"""
+        row = len(self._messages)
+        self.beginInsertRows(QModelIndex(), row, row)
         self._messages = self._messages + [
             {"role": role, "content": content, "rich": _md_to_html(content)}
         ]
-        self.messagesChanged.emit()
+        self.endInsertRows()
 
     def _set_streaming(self, text: str) -> None:
         self._streaming = text
         self.streamingChanged.emit()
 
     def reset_offline(self) -> None:
-        """app 重连/有 key 后重置离线态，重新允许聊天。"""
         self._offline = False
 
 
-def load_chat_panel(bridge: ChatBridge, qml_path: str) -> QQmlApplicationEngine:
-    """载入 QML 聊天面板。
-
-    用 ``qmlRegisterSingletonInstance`` 注入 bridge（v0.4 在本机 PySide6
-    6.10 实测：``setContextProperty`` 不解析（QML 见 null），singleton 稳；
-    singleton 只注册一次（模块 flag 防重复）。QML 侧 ``import PetChat 1.0``
-    用 ``Chat`` 访问 bridge。
-    """
+def load_chat_panel(bridge: "ChatBridge", qml_path: str) -> QQmlApplicationEngine:
+    """载入 QML 聊天面板。singleton 注入 bridge（QAbstractListModel 实例），
+    QML 侧 ``import PetChat 1.0`` 用 ``Chat`` 访问。"""
     global _SINGLETON_REGISTERED
     if not _SINGLETON_REGISTERED:
         qmlRegisterSingletonInstance(

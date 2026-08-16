@@ -250,6 +250,7 @@ class PetApp:
             return
         self._chat_bridge.reset_offline()
         self._chat_window.show()
+        self._chat_window.raise_()  # 点后跳最高层（不常置顶，失焦正常降层，像微信）
         self._chat_window.requestActivate()
 
     def _on_chat_offline(self) -> None:
