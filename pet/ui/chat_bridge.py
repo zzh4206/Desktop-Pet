@@ -141,9 +141,12 @@ class ChatBridge(QObject):
 
     # ---- 内部 ----
     def _append_message(self, role: str, content: str) -> None:
-        self._messages.append(
+        # 新 list 引用（非 in-place append）——QML model: Chat.messages 绑定
+        # singleton Property notify 时 re-read，新引用强制 QML ListView 刷新
+        # （in-place append 同引用，QML model 不检测内容变→不刷新）
+        self._messages = self._messages + [
             {"role": role, "content": content, "rich": _md_to_html(content)}
-        )
+        ]
         self.messagesChanged.emit()
 
     def _set_streaming(self, text: str) -> None:

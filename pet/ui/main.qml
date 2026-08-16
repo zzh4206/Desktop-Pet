@@ -9,6 +9,7 @@ ApplicationWindow {
     width: 420
     height: 560
     visible: false
+    flags: Qt.WindowStaysOnTopHint  // 聊天窗口常置顶（点桌面不降层，高于宠物浮窗）
     color: "#fafafa"
 
     // 关闭不退出 app：Esc/窗口 X 仅隐藏
