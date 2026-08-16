@@ -13,6 +13,43 @@ v0.2：接 ``PetStateStore``（load 启动 / save debounce+定时+shutdown）+ 1
 
 from __future__ import annotations
 
+import os
+import sys
+import threading
+# 抑制 macOS 系统日志噪音：OS_ACTIVITY_MODE + stderr 过滤管道（TSM/IMK 输入法
+# mach port 日志经 stderr NSLog，OS_ACTIVITY_MODE 不覆盖，过滤管道拦截 TSM/IMK 行）
+os.environ.setdefault("OS_ACTIVITY_MODE", "disable")
+import warnings
+warnings.filterwarnings(
+    "ignore", message=".*urllib3 v2 only supports OpenSSL.*"
+)
+
+# stderr 过滤管道：过滤 macOS TSM/IMK 系统日志行（第一次 TextField 键入触发），
+# 保留 Python logging/traceback。dup2 fd2→管道，daemon 线程过滤后写原 stderr
+_orig_stderr_fd = os.dup(2)
+_r, _w = os.pipe()
+os.dup2(_w, 2)
+def _filter_stderr():
+    buf = b""
+    while True:
+        try:
+            chunk = os.read(_r, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            t = line.decode(errors="replace")
+            if "TSM AdjustCapsLock" in t or "IMKCFRunLoopWakeUpReliable" in t:
+                continue
+            try:
+                os.write(_orig_stderr_fd, line + b"\n")
+            except OSError:
+                pass
+threading.Thread(target=_filter_stderr, daemon=True).start()
+
 import argparse
 import logging
 import os
