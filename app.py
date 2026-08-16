@@ -418,6 +418,7 @@ class PetApp:
 
     # ---- v0.3 拖拽 ----
     def _on_drag_started(self, x: float, y: float) -> None:
+        self.bubble.hide()  # 拖动开始关气泡（含 WARNING 永久停留的，防拖动跟随"再现"）
         self.fsm.begin_drag((x, y))
         self.window.move_bottom_center(x, y)
 
