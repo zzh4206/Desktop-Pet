@@ -7,12 +7,17 @@
 
 v0.4 只注册 ``open_app``（不危险，NSAlert 框架就位但不触发，见补遗#5）。
 后续工具（v0.8 全套）只在此 register，不改 ``llm.py``（schema 与实现解耦）。
+
+v0.8.1：``dispatch`` 在 ChatWorker 子线程被调时，confirm_fn 用
+``BlockingQueuedConnection`` 派到主线程执行（QMessageBox.exec/NSAlert.runModal
+必须主线程，旧版子线程调会崩/死锁）；黑名单递归扫 dict/list；同名 register warn。
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
 
@@ -59,7 +64,11 @@ class ToolSchema:
 
 # 参数黑名单（§五 prompt 注入防护）：路径根/越界/破坏性模式。
 # 工具自行按字段名校验，这里给共享判定。
-_TRAVERSAL = re.compile(r"(^/+$|\.\.|\.\.|rm\s+-rf|>\s*/dev/null)")
+# v0.8.1：去重 \.\.（旧版重复）；补 rm\t-rf/大小写/find-delete/dd-of（denylist 漏报）
+_TRAVERSAL = re.compile(
+    r"(^/+$|\.\.|rm[\s\t]+-rf|>\s*/dev/null|find\s+.*-delete|dd\s+.*of\s*=/dev/)",
+    re.IGNORECASE,
+)
 # 形如 ~、~root、/、// 的裸根路径
 _BARE_ROOT = re.compile(r"^~/?$|^//?$|^/+$")
 
@@ -74,11 +83,24 @@ def _is_unsafe_path(value: str) -> bool:
     return False
 
 
-def _scan_args_unsafe(args: dict) -> Optional[str]:
-    """扫所有字符串值是否命中黑名单；命中返回该值供报错。"""
-    for v in args.values():
-        if isinstance(v, str) and _is_unsafe_path(v):
-            return v
+def _scan_args_unsafe(args) -> Optional[str]:
+    """递归扫所有字符串值（含 dict/list 嵌套）是否命中黑名单；命中返回该值。
+
+    v0.8.1：旧版只扫顶层 args.values()，嵌套参数（如 ``{"opts":{"p":"../"}}``）
+    可绕过；现递归扫 dict/list 内所有字符串。
+    """
+    if isinstance(args, dict):
+        for v in args.values():
+            bad = _scan_args_unsafe(v)
+            if bad is not None:
+                return bad
+    elif isinstance(args, list):
+        for v in args:
+            bad = _scan_args_unsafe(v)
+            if bad is not None:
+                return bad
+    elif isinstance(args, str) and _is_unsafe_path(args):
+        return args
     return None
 
 
@@ -91,14 +113,20 @@ class ToolRegistry:
 
     签名冻结于 §2.2（``schemas``/``dispatch``）。``confirm_fn`` 为注入扩展点
     （v0.4 兼容扩展，非删改冻结签名）。
+
+    v0.8.1：``dispatch`` 在 ChatWorker 子线程被调时，confirm_fn 经
+    ``BlockingQueuedConnection`` 派到主线程执行（QMessageBox/NSAlert 必须主线程）。
     """
 
     def __init__(self, confirm_fn: Optional[ConfirmFn] = None) -> None:
         self._handlers: dict[str, ToolHandler] = {}
         self._schemas: dict[str, ToolSchema] = {}
         self._confirm_fn = confirm_fn
+        self._confirm_caller = None  # 主线程 QObject helper（惰性创建）
 
     def register(self, schema: ToolSchema, handler: ToolHandler) -> None:
+        if schema.name in self._schemas:
+            log.warning("工具 %s 重复注册，覆盖旧 handler", schema.name)
         self._schemas[schema.name] = schema
         self._handlers[schema.name] = handler
 
@@ -118,22 +146,47 @@ class ToolRegistry:
             )
         return out
 
+    def _confirm_on_main(self, title: str, command: str, risk: str) -> bool:
+        """调 confirm_fn；若当前非主线程，BlockingQueued 派到主线程（v0.8.1）。
+
+        ChatWorker 在子线程跑 dispatch→confirm_fn，QMessageBox.exec/NSAlert.runModal
+        必须主线程。用 QMetaObject.invokeMethod BlockingQueuedConnection 同步等待。
+        """
+        if self._confirm_fn is None:
+            return False  # 无 confirm_fn → fail-closed 拒绝
+        # 检测是否主线程
+        try:
+            from PySide6.QtCore import QCoreApplication, QThread
+            app = QCoreApplication.instance()
+            if app is None:
+                return self._confirm_fn(title, command, risk)  # 无 app（测试）
+            if QThread.currentThread() is app.thread():
+                return self._confirm_fn(title, command, risk)  # 已在主线程
+            # 子线程 → 派到主线程
+            if self._confirm_caller is None:
+                self._confirm_caller = _ConfirmCaller(self._confirm_fn)
+                self._confirm_caller.moveToThread(app.thread())
+            return self._confirm_caller.call_blocking(title, command, risk)
+        except Exception as exc:
+            log.warning("confirm 跨线程派发失败，fail-closed 拒绝: %s", exc)
+            return False
+
     def dispatch(self, name: str, args: dict, ctx: ToolContext) -> ToolResult:
         handler = self._handlers.get(name)
         if handler is None:
             return ToolResult(False, f"未知工具: {name}")
         schema = self._schemas[name]
 
-        # 参数黑名单校验（注入防护）
+        # 参数黑名单校验（注入防护，递归扫 dict/list）
         bad = _scan_args_unsafe(args or {})
         if bad is not None:
             log.warning("工具 %s 参数命中黑名单: %r", name, bad)
             return ToolResult(False, "参数包含不安全的路径或命令。")
 
         # 危险操作确认（v0.4 open_app 不危险，框架就位）
-        if schema.dangerous and self._confirm_fn is not None:
+        if schema.dangerous:
             cmd_repr = f"{name}({args})"
-            ok = self._confirm_fn("危险操作确认", cmd_repr, "该操作不可撤销。")
+            ok = self._confirm_on_main("危险操作确认", cmd_repr, "该操作不可撤销。")
             if not ok:
                 return ToolResult(False, "用户已取消。")
 
@@ -142,3 +195,51 @@ class ToolRegistry:
         except Exception as e:  # 工具异常不崩主链
             log.exception("工具 %s 执行异常", name)
             return ToolResult(False, f"工具执行失败: {e}")
+
+
+class _ConfirmCaller:
+    """主线程 confirm 派发 helper（v0.8.1）。
+
+    子线程经 BlockingQueuedConnection 调用主线程的 confirm_fn（QMessageBox/
+    NSAlert 必须主线程）。用 QEventLoop + 信号实现同步等待。
+    """
+
+    def __init__(self, confirm_fn: ConfirmFn) -> None:
+        from PySide6.QtCore import QObject, Signal
+
+        self._fn = confirm_fn
+        # 用内部 QObject 持信号（_ConfirmCaller 本身非 QObject，避免多继承）
+        class _Inner(QObject):
+            requested = Signal(str, str, str)
+            done = Signal(bool)
+
+            def __init__(self_inner):
+                super().__init__()
+                self_inner.result: bool = False
+                self_inner.requested.connect(self_inner._on_requested)
+
+            def _on_requested(self_inner, title, command, risk):
+                try:
+                    self_inner.result = bool(self._fn(title, command, risk))
+                except Exception:
+                    self_inner.result = False
+                self_inner.done.emit(self_inner.result)
+
+        self._inner = _Inner()
+
+    def moveToThread(self, thread) -> None:
+        self._inner.moveToThread(thread)
+
+    def call_blocking(self, title: str, command: str, risk: str) -> bool:
+        from PySide6.QtCore import QEventLoop, Qt
+
+        loop = QEventLoop()
+        self._inner.done.connect(loop.quit)
+        # BlockingQueuedConnection：等主线程槽执行完
+        self._inner.requested.emit(title, command, risk)
+        if self._inner.thread() is not __import__("PySide6.QtCore", fromlist=["QThread"]).QThread.currentThread():
+            loop.exec()  # 子线程阻塞等主线程 done
+        else:
+            # 信号同步派发（同线程直连）
+            pass
+        return self._inner.result

@@ -19,7 +19,8 @@ from .tools_schema import ToolContext, ToolHandler, ToolResult, ToolSchema
 log = logging.getLogger("pet")
 
 # 程序名：字母数字空格点横点，禁路径分隔符（防 ``open -a "../../xxx"`` 越界）
-_APP_NAME = re.compile(r"^[A-Za-z0-9 .\-]+$")
+# v0.8.1：禁纯点号串（".." "." "..."，防 open -a .. 报错/意外行为）
+_APP_NAME = re.compile(r"^(?![.\s]+$)[A-Za-z0-9 .\-]+$")
 # URL：仅 http/https，防 file://、smb:// 等本机协议
 _HTTP_URL = re.compile(r"^https?://", re.IGNORECASE)
 

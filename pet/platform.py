@@ -91,9 +91,13 @@ class PlatformAdapter:
     def confirm_dangerous(
         self, title: str, command: str, risk: str
     ) -> bool:
-        """危险操作二次确认（平台原生模态对话框）。基类默认 True（不拦截），
-        mac 覆盖用 NSAlert，win 覆盖用 Qt 对话框（双端按钮文案对齐）。"""
-        return True
+        """危险操作二次确认（平台原生模态对话框）。
+
+        v0.8.1：基类默认 False（fail-closed 拒绝危险操作，旧版 True 放行与
+        "危险操作必须二次确认" Must 相悖）。mac/win 子类覆盖用原生模态对话框；
+        失败兜底也返 False（拒绝）。
+        """
+        return False
 
 
 def _mac_paths() -> dict:
@@ -256,8 +260,13 @@ if sys.platform == "darwin":
             self, title: str, command: str, risk: str
         ) -> bool:
             """NSAlert 模态确认（显示命令+风险）。v0.4 框架就位不触发
-            （open_app 不危险）；v0.8 全工具用。失败默认 True（不拦）保守
-            放行 + 日志。按钮：第一=继续/第二=取消。"""
+            （open_app 不危险）；v0.8 全工具用。v0.8.1：失败 fail-closed
+            返 False（拒绝，旧版 True 放行违反安全 Must）。按钮：第一=继续/第二=取消。
+
+            **线程安全**（v0.8.1）：NSAlert runModal 必须主线程；本方法经
+            ToolRegistry.dispatch 在 ChatWorker 子线程被调时，由 dispatch 负责
+            跨线程派发（BlockingQueuedConnection），此处假设已在主线程。
+            """
             try:
                 from AppKit import (
                     NSAlertFirstButtonReturn,
@@ -276,9 +285,9 @@ if sys.platform == "darwin":
                 import logging
 
                 logging.getLogger("pet").warning(
-                    "NSAlert 失败，默认放行: %s", exc
+                    "NSAlert 失败，fail-closed 拒绝: %s", exc
                 )
-                return True
+                return False
 
     def get_platform_adapter() -> PlatformAdapter:
         p = _mac_paths()
@@ -408,9 +417,14 @@ elif sys.platform == "win32":
                               risk: str) -> bool:
             """Qt 模态确认（显示命令+风险），按钮文案与 mac NSAlert 对齐
             （继续/取消）。v0.4 open_app 不危险不触发；v0.8 全工具用。
-            失败默认放行 + 日志（与 mac 保守策略一致）。"""
+            v0.8.1：失败 fail-closed 返 False（拒绝，旧版 True 放行违反安全 Must）。
+
+            **线程安全**（v0.8.1）：QMessageBox.exec 必须主线程；本方法经
+            ToolRegistry.dispatch 在 ChatWorker 子线程被调时，由 dispatch 负责
+            跨线程派发（BlockingQueuedConnection），此处假设已在主线程。
+            """
             try:
-                from PySide6.QtWidgets import QApplication, QMessageBox
+                from PySide6.QtWidgets import QMessageBox
 
                 box = QMessageBox()
                 box.setIcon(QMessageBox.Icon.Warning)
@@ -424,9 +438,9 @@ elif sys.platform == "win32":
                 import logging
 
                 logging.getLogger("pet").warning(
-                    "Qt 确认框失败，默认放行: %s", exc
+                    "Qt 确认框失败，fail-closed 拒绝: %s", exc
                 )
-                return True
+                return False
 
     def _win_paths() -> dict:
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(
