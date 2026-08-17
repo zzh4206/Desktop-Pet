@@ -21,7 +21,12 @@ log = logging.getLogger("pet")
 
 @dataclass
 class ToolResult:
-    """工具执行结果。``success`` 决定是否把 ``message`` 当作工具结果回 DS。"""
+    """工具执行结果。
+
+    ``success=False`` 时，``llm._dispatch_tool_calls`` 在 ``message`` 前加
+    ``[工具失败]`` 标记回灌 DS（让模型知道失败可决策重试/改道，v0.4.12 起真
+    读取此字段；此前 success 被忽略，失败结果照常回灌误导 DS）。
+    """
 
     success: bool
     message: str

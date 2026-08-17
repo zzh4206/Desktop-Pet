@@ -98,6 +98,7 @@ class DeepSeekClient:
         self._model = model
         self._system = {"role": "system", "content": system_prompt}
         self._timeout = timeout
+        self._resp = None  # 流式响应引用（cancel() 调 close 真中断用）
         self.usage = Usage()
 
     def _headers(self) -> dict:
@@ -127,8 +128,10 @@ class DeepSeekClient:
         """单次流式请求。``on_delta(text)`` 逐 chunk 回调（增量文本）。
 
         返回 (full_text, tool_calls, usage_dict)。失败按 §五降级链处理。
+        ``resp`` 提升到 ``self._resp``——``cancel()`` 可调 ``resp.close()`` 真中断
+        流式 socket（旧版只置标志位，iter_lines 仍跑满 read 超时 120s）。
         """
-        resp = requests.post(
+        self._resp = requests.post(
             f"{self._base_url}/chat/completions",
             headers=self._headers(),
             json=self._payload(messages, tools, stream=True),
@@ -136,67 +139,85 @@ class DeepSeekClient:
             stream=True,
         )
         # 4xx/5xx：额度/鉴权/服务端——降级预设回复
-        if resp.status_code >= 400:
+        if self._resp.status_code >= 400:
             body = ""
             try:
-                body = resp.text[:200]
+                body = self._resp.text[:200]
             except Exception:
                 pass
-            log.warning("DS HTTP %s: %s", resp.status_code, body)
+            log.warning("DS HTTP %s: %s", self._resp.status_code, body)
             return FALLBACK_REPLY, [], {}
 
         full = []
         tool_calls: dict[int, dict] = {}  # index 聚合 DS 分片 tool_call
         usage = {}
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data:"):
-                continue
-            data = line[len("data:") :].strip()
-            if data == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            u = chunk.get("usage")
-            if u:
-                usage = u
-            for choice in chunk.get("choices", []):
-                delta = choice.get("delta", {})
-                content = delta.get("content")
-                if content:
-                    full.append(content)
-                    if on_delta:
-                        on_delta(content)
-                for tc in delta.get("tool_calls", []) or []:
-                    idx = tc.get("index", 0)
-                    slot = tool_calls.setdefault(
-                        idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-                    )
-                    if tc.get("id"):
-                        slot["id"] = tc["id"]
-                    fn = tc.get("function", {})
-                    if fn.get("name"):
-                        slot["function"]["name"] = fn["name"]
-                    if fn.get("arguments"):
-                        slot["function"]["arguments"] += fn["arguments"]
+        try:
+            for line in self._resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                u = chunk.get("usage")
+                if u:
+                    usage = u
+                for choice in chunk.get("choices", []):
+                    delta = choice.get("delta", {})
+                    content = delta.get("content")
+                    if content:
+                        full.append(content)
+                        if on_delta:
+                            on_delta(content)
+                    for tc in delta.get("tool_calls", []) or []:
+                        idx = tc.get("index", 0)
+                        slot = tool_calls.setdefault(
+                            idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                        )
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function", {})
+                        if fn.get("name"):
+                            slot["function"]["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            slot["function"]["arguments"] += fn["arguments"]
+        except requests.ConnectionError:
+            # cancel() 调 resp.close() 会使 iter_lines 抛 ConnectionError
+            raise OfflineError("流式中断（用户取消或连接断开）")
+        finally:
+            self._resp = None
         return "".join(full), list(tool_calls.values()), usage
 
     def _non_stream_once(
         self, messages: list, tools: Optional[list]
     ) -> tuple[str, list, dict]:
         """非流式（降级/工具结果回灌后续轮，无需逐字回显）。"""
-        resp = requests.post(
-            f"{self._base_url}/chat/completions",
-            headers=self._headers(),
-            json=self._payload(messages, tools, stream=False),
-            timeout=self._timeout,
-        )
+        try:
+            resp = requests.post(
+                f"{self._base_url}/chat/completions",
+                headers=self._headers(),
+                json=self._payload(messages, tools, stream=False),
+                timeout=self._timeout,
+            )
+        except requests.ConnectionError:
+            # 离线：激活 OfflineError（run 的 except OfflineError 分支生效）
+            raise OfflineError("非流式请求连接失败（疑似离线）")
         if resp.status_code >= 400:
             log.warning("DS HTTP %s: %s", resp.status_code, resp.text[:200])
             return FALLBACK_REPLY, [], {}
-        data = resp.json()
-        msg = data["choices"][0]["message"]
+        try:
+            data = resp.json()
+            choices = data.get("choices") or []
+            if not choices:
+                log.warning("DS 返回无 choices: %s", str(data)[:200])
+                return FALLBACK_REPLY, [], {}
+            msg = choices[0].get("message") or {}
+        except (ValueError, KeyError, TypeError) as e:
+            log.warning("DS 响应解析失败: %s", e)
+            return FALLBACK_REPLY, [], {}
         return (
             msg.get("content") or "",
             msg.get("tool_calls") or [],
@@ -206,19 +227,31 @@ class DeepSeekClient:
     def _dispatch_tool_calls(
         self, tool_calls: list, ctx
     ) -> list[dict]:
-        """执行 DS 返的 tool_calls，回灌 tool 结果消息。"""
+        """执行 DS 返的 tool_calls，回灌 tool 结果消息。
+
+        失败工具（``res.success=False``）带 ``[工具失败]`` 标记回灌——让 DS
+        知道失败可自行决策重试/改道，而非当作正常结果（v0.4.12 前 success 字段
+        被忽略，失败结果照常回灌误导 DS）。
+        """
         results = []
         for tc in tool_calls:
+            tc_id = tc.get("id", "")
+            if not tc_id:
+                # 流式首轮分片未收到 id——跳过，避免回灌空 tool_call_id 致续轮报错
+                log.warning("DS tool_call 无 id，跳过: %s", tc)
+                continue
             name = tc["function"]["name"]
             try:
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            log.info("DS 工具调用 %s args=%s", name, args)
+            if log.isEnabledFor(logging.INFO):
+                log.info("DS 工具调用 %s args=%s", name, args)
             res = self._registry.dispatch(name, args, ctx)
-            results.append(
-                _tool_result_message(tc["id"], res.message)
-            )
+            content = res.message
+            if not getattr(res, "success", True):
+                content = f"[工具失败] {res.message}"
+            results.append(_tool_result_message(tc_id, content))
         return results
 
     def chat_once(
@@ -260,8 +293,11 @@ class DeepSeekClient:
             if text2 and on_delta:
                 on_delta(text2)
             if text2:
+                # 触顶（rounds 达上限）时末轮仍带 tool_calls——清空避免
+                # 下次 user 消息喂到"assistant 带 tool_calls 无 tool 结果"致 DS 报错
+                final_tc = list(tool_calls) if rounds < self._MAX_TOOL_ROUNDS else []
                 appended.append(
-                    ChatTurn("assistant", text2, tool_calls=list(tool_calls))
+                    ChatTurn("assistant", text2, tool_calls=final_tc)
                 )
                 text = text2
         return text, appended
@@ -297,7 +333,15 @@ class ChatWorker(QThread):
         self._cancelled = False
 
     def cancel(self) -> None:
+        """中断流式：置标志 + 关闭底层 resp socket（iter_lines 抛 ConnectionError
+        → OfflineError 退出），而非旧版只置标志让流式跑满 120s read 超时。"""
         self._cancelled = True
+        # 关闭流式响应 socket——_stream_once 的 iter_lines 会抛 ConnectionError
+        try:
+            if self._client._resp is not None:
+                self._client._resp.close()
+        except Exception:
+            pass
 
     @Slot()
     def run(self) -> None:  # noqa: C901 - 降级分支多
@@ -307,7 +351,9 @@ class ChatWorker(QThread):
                 self._history, self._ctx, on_delta=self._emit_delta
             )
         except OfflineError:
-            self.offline.emit()
+            # cancel() 关 resp 触发的 ConnectionError→OfflineError 不算离线
+            if not self._cancelled:
+                self.offline.emit()
             return
         except requests.Timeout:
             log.warning("DS 请求超时，降级预设回复")

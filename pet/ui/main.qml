@@ -142,6 +142,59 @@ ApplicationWindow {
                 }
 
                 onCountChanged: Qt.callLater(function() { list.positionViewAtEnd() })
+
+                // 流式占位气泡：Chat.streamingText 非空时显示在列表底部，
+                // 逐字增长（v0.4 Must "流式打字机"）。_on_done 落定后清空→隐藏。
+                footer: Item {
+                    width: list.width
+                    height: Chat.streamingText.length > 0 ? streamRow.implicitHeight : 0
+                    visible: Chat.streamingText.length > 0
+
+                    Row {
+                        id: streamRow
+                        spacing: 8
+                        anchors.left: parent.left
+                        leftPadding: 12
+                        rightPadding: 12
+
+                        Rectangle {  // pet 头像
+                            width: 30; height: 30; radius: 15
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: root.cAccent
+                            Text {
+                                anchors.centerIn: parent
+                                text: "🐱"
+                                font.pixelSize: 18
+                                color: "white"
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.min(list.width - 110,
+                                            streamTxt.implicitWidth + 22)
+                            height: streamTxt.implicitHeight + 18
+                            radius: 12
+                            color: root.cPet
+                            Rectangle {
+                                anchors.fill: parent; z: -1
+                                radius: parent.radius; color: "#14222222"
+                            }
+                            Text {
+                                id: streamTxt
+                                anchors.centerIn: parent
+                                width: parent.width - 22
+                                text: Chat.streamingText
+                                textFormat: Text.RichText
+                                wrapMode: Text.Wrap
+                                color: root.cPetText
+                                font.pixelSize: 13
+                                lineHeight: 1.25
+                            }
+                        }
+                    }
+                }
+                onContentHeightChanged: Qt.callLater(function() { list.positionViewAtEnd() })
             }
         }
 

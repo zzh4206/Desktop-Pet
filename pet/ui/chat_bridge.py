@@ -34,11 +34,25 @@ _CODE = re.compile(r"`(.+?)`")
 
 
 def _md_to_html(text: str) -> str:
-    """最小 markdown→HTML（**粗**/*斜*/`code`/换行），转义防 XSS。"""
+    """最小 markdown→HTML（**粗**/*斜*/`code`/换行），转义防 XSS。
+
+    code span 先替换为占位符，bold/italic 处理完再还原——防 `` `a*b*c` `` 里
+    code 内的 ``*`` 被 _ITALIC 误匹配成斜体（v0.4.12）。
+    """
     s = html.escape(text)
-    s = _CODE.sub(r"<code>\1</code>", s)
+    # code 占位保护：先收 code span，避免内部 * 被后续 italic 误匹配
+    codes: list[str] = []
+
+    def _stash_code(m: re.Match) -> str:
+        codes.append(m.group(1))
+        return f"\x00CODE{len(codes) - 1}\x00"
+
+    s = _CODE.sub(_stash_code, s)
     s = _BOLD.sub(r"<b>\1</b>", s)
     s = _ITALIC.sub(r"<i>\1</i>", s)
+    # 还原 code span
+    for i, c in enumerate(codes):
+        s = s.replace(f"\x00CODE{i}\x00", f"<code>{c}</code>")
     s = s.replace("\n", "<br>")
     return s
 
@@ -130,18 +144,40 @@ class ChatBridge(QAbstractListModel):
 
     @Slot()
     def cancel(self) -> None:
-        """关面板时调，中断流式（不泄漏线程）。"""
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.cancel()
-            self._worker.quit()
+        """关面板时调，真中断流式 + 等待 worker 退出 + 断信号（不泄漏线程）。
+
+        v0.4.12：cancel() 调 worker.cancel()（关 resp socket 真中断，非旧版只置
+        标志跑满 120s）；wait(2000) 等 worker 退出；断 done 信号防"幽灵回复"
+        （cancel 后 worker 若恰好完成仍 emit done → _on_done 把回复追加进已
+        关闭面板 history，下次打开看到幽灵消息）；清 _worker 让 send() 不被
+        isRunning() 静默吞新消息。
+        """
+        w = self._worker
+        if w is not None:
+            try:
+                w.done.disconnect(self._on_done)
+            except (TypeError, RuntimeError):
+                pass
+            if w.isRunning():
+                w.cancel()
+                w.wait(2000)
+            w.deleteLater()
+        self._worker = None
+        self._set_streaming("")
 
     # ---- worker 信号 ----
     @Slot(str)
     def _on_delta(self, chunk: str) -> None:
-        pass  # delta 丢弃——不显示流式黄框，DS 回复直接落定为 assistant 气泡
+        # 真流式：累加 streaming 逐字显示（v0.4 Must "DS 回复流式打字机"）。
+        # _on_done 时把 streaming 并入正式 assistant message 并清空。
+        if self._worker is None:
+            return  # cancel 已断信号，迟到的 delta 丢弃
+        self._set_streaming(self._streaming + chunk)
 
     @Slot(object)
     def _on_done(self, appended: list) -> None:
+        if self._worker is None:
+            return  # cancel 后迟到的 done，丢弃（防幽灵回复）
         final_text = ""
         for turn in appended:
             self._history.append(turn)
@@ -155,14 +191,22 @@ class ChatBridge(QAbstractListModel):
 
     @Slot()
     def _on_offline(self) -> None:
+        # 失败/离线路径也追加 _history（user 已在 send 追加 UI，这里补 assistant
+        # turn 进 DS history），否则下次 send 喂 DS 的 history 缺这轮，上下文脱节
+        from ..llm import OFFLINE_REPLY, ChatTurn
         self._offline = True
         self._set_streaming("")
+        self._append_message("assistant", OFFLINE_REPLY)
+        self._history.append(ChatTurn("assistant", OFFLINE_REPLY))
         self._worker = None
         self.offlineRequested.emit()
 
     @Slot(str)
     def _on_failed(self, reply: str) -> None:
+        # 降级回复也进 _history（同 _on_offline 理由）
+        from ..llm import ChatTurn
         self._append_message("assistant", reply)
+        self._history.append(ChatTurn("assistant", reply))
         self._set_streaming("")
         self._worker = None
 
@@ -182,6 +226,7 @@ class ChatBridge(QAbstractListModel):
         self._streaming = text
         self.streamingChanged.emit()
 
+    @Slot()
     def reset_offline(self) -> None:
         self._offline = False
 
