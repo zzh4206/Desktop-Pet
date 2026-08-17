@@ -295,16 +295,52 @@ class PetApp:
         )
 
     def _show_chat(self) -> None:
-        """托盘'聊天'唤出面板（v0.11 真全局热键占位）。"""
+        """托盘'聊天'唤出面板（v0.11 真全局热键占位）。
+
+        全屏 app 在前台时，聊天面板移到桌面 Space（非全屏 Space）展示——
+        像微信全屏下开聊天切到桌面。mac 用 NSWindow 的 collectionBehavior
+        加入桌面 Space（canJoinAllSpaces + moveToCurrentSpace 降级到桌面）。"""
         if self._chat_window is None:
             self.bubble.show(
                 "还没设置 DS key，聊天暂不可用～", anchor=self._pet_anchor()
             )
             return
         self._chat_bridge.reset_offline()
+        # 全屏时聊天面板移到桌面 Space（非全屏 Space），像微信
+        if getattr(self, "_fullscreen", False):
+            self._move_chat_to_desktop_space()
         self._chat_window.show()
         self._chat_window.raise_()  # 点后跳最高层（不常置顶，失焦正常降层，像微信）
         self._chat_window.requestActivate()
+
+    def _move_chat_to_desktop_space(self) -> None:
+        """全屏时把聊天面板移到桌面 Space（非全屏 Space）。
+
+        mac 全屏 app 独占一个 Space；聊天面板默认跟 app 走（在全屏 Space），
+        会被全屏 app 盖住。改 NSWindow collectionBehavior 让它加入所有 Space
+        但不跟全屏——用户切到桌面 Space 即可看到。"""
+        try:
+            from ctypes import c_void_p
+
+            from objc import objc_object
+
+            wid = int(self._chat_window.winId())
+            view = objc_object(c_void_p=wid)
+            nswin = view.window() if view is not None else None
+            if nswin is None:
+                return
+            from AppKit import (
+                NSWindowCollectionBehaviorCanJoinAllSpaces,
+                NSWindowCollectionBehaviorStationary,
+            )
+
+            nswin.setCollectionBehavior_(
+                NSWindowCollectionBehaviorCanJoinAllSpaces
+                | NSWindowCollectionBehaviorStationary
+            )
+            self.logger.info("聊天面板移到桌面 Space（全屏模式下可见）")
+        except Exception as exc:
+            self.logger.warning("聊天面板移 Space 失败: %s", exc)
 
     def _on_chat_offline(self) -> None:
         """断网/无 key：气泡提示，宠物仍 WANDER/交互/长大（T8）。"""

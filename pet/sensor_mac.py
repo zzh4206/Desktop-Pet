@@ -30,6 +30,7 @@ try:
     from Quartz import (
         CGWindowListCopyWindowInfo,
         kCGNullWindowID,
+        kCGWindowListOptionIncludingWindow,
         kCGWindowListOptionOnScreenOnly,
     )
 
@@ -301,12 +302,17 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
 
 
 def alive_at(ref: dict) -> bool:
-    """窗口存活可见（在 200ms 短缓存 OnScreenOnly 里）。ref 无 wid → True。
-    用 200ms 短缓存（win IsWindow+IsIconic O(1) 实时，mac 退 200ms 延迟）。"""
+    """窗口存活可见——按 wid 单窗查询（kCGWindowListOptionIncludingWindow），
+    O(1) 不枚举（win IsWindow+IsIconic 等价）。返空=已关闭/最小化。
+    无 Quartz/无 wid → True（不否决）。"""
     wid = (ref or {}).get("wid")
-    if not wid:
+    if not wid or not _HAS_QUARTZ:
         return True
-    return any(w["wid"] == wid for w in _solid_windows())
+    try:
+        wins = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, int(wid))
+    except Exception:
+        return True  # 查询失败 → 不否决
+    return len(wins) > 0  # 返空=已关闭/最小化
 
 
 def enumerate_windows() -> list[dict]:
@@ -352,16 +358,26 @@ def fullscreen_status() -> tuple[bool, str]:
 
 
 def rect_at(ref: dict) -> dict | None:
-    """支撑窗实时矩形（逻辑坐标 {x,y,width,height}）。用 200ms 短缓存查 wid bounds
-    （win GetWindowRect O(1) 实时，mac 退 200ms 延迟但比几何兜底好——窗口移动 200ms
-    内骑乘跟随，vs rect_at=None 完全不跟随拖拽窗口后悬空）。无 wid/未找到 → None。"""
+    """支撑窗实时矩形——按 wid 单窗查询（kCGWindowListOptionIncludingWindow），
+    O(1) 不枚举所有窗（win GetWindowRect 等价）。无 Quartz/wid → None。
+    返空=已关闭/最小化 → None 走几何兜底。"""
     wid = (ref or {}).get("wid")
-    if not wid:
+    if not wid or not _HAS_QUARTZ:
         return None
-    for w in _solid_windows():
-        if w["wid"] == wid:
-            return {"x": w["x"], "y": w["y"], "width": w["width"], "height": w["height"]}
-    return None
+    try:
+        wins = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, int(wid))
+    except Exception:
+        return None
+    if not wins:
+        return None  # 窗已关闭/最小化
+    b = wins[0].get("kCGWindowBounds")
+    if not b:
+        return None
+    try:
+        return {"x": int(b["X"]), "y": int(b["Y"]),
+                "width": int(b["Width"]), "height": int(b["Height"])}
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def build_sensors() -> Sensors:
