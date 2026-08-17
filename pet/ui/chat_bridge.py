@@ -63,6 +63,7 @@ class ChatBridge(QAbstractListModel):
         self._history: list = []  # list[ChatTurn] 喂 DS（与 messages 同步）
         self._streaming = ""
         self._worker = None
+        self.on_user_message = None  # v0.6 可选钩子：app 侧 follow-up 启发式
         self._offline = False
 
     # ---- QAbstractListModel ----
@@ -110,6 +111,11 @@ class ChatBridge(QAbstractListModel):
             return
 
         self._append_message("user", text)
+        if self.on_user_message is not None:
+            try:
+                self.on_user_message(text)  # v0.6 follow-up 启发式（不阻塞聊天）
+            except Exception:
+                pass
         self._set_streaming("")
         from ..llm import ChatWorker
 

@@ -75,7 +75,7 @@ from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
 
-APP_VERSION = "v0.4.10+win"
+APP_VERSION = "v0.6.0+win"
 
 _SAVE_DEBOUNCE_MS = 500       # 变更后 500ms 内多次只存一次
 _SAVE_PERIODIC_MS = 30_000    # 定时存档
@@ -159,6 +159,23 @@ class PetApp:
         self._chat_window = None
         self._chat_client = None
         self._setup_chat()
+
+        # v0.6 主动关怀（win 主笔）：30s 轮询；气泡锚宠物；idle 用传感器；
+        # 有 DS key 时链式唤醒走 LLM 隔离决策，否则本地罐头
+        from pet.proactive import ProactiveScheduler
+
+        self._proactive = ProactiveScheduler(
+            store=self.store,
+            bubble_fn=lambda t: self.bubble.show(t, anchor=self._pet_anchor()),
+            idle_fn=lambda: self.sensors.idle_time,
+            client=getattr(self, "_chat_client", None),
+            cfg=self.cfg.get("proactive", {}),
+        )
+        self._proactive_timer = QTimer(self.app)
+        self._proactive_timer.timeout.connect(
+            lambda: self._proactive.poll()
+        )
+        self._proactive_timer.start(30_000)
 
         # save：debounce（变更后 500ms）+ 定时 30s + shutdown
         self._save_timer = QTimer(self.app)
@@ -284,6 +301,8 @@ class PetApp:
         if self._chat_engine and self._chat_engine.rootObjects():
             self._chat_window = self._chat_engine.rootObjects()[0]
         self.tray.set_chat_callback(self._show_chat)
+        # v0.6 follow-up：用户消息含"去吃饭"等 → 30min 后回访（启发式）
+        self._chat_bridge.on_user_message = self._maybe_followup
 
     def _make_tool_context(self) -> ToolContext:
         """按需取当前 state 作为工具上下文（v0.4 工具不真用 state）。"""
@@ -293,6 +312,21 @@ class PetApp:
             config=self.cfg,
             window_info=None,
         )
+
+    _FOLLOWUP_RULES = (
+        (("去吃饭", "吃午饭", "吃晚饭", "吃饭去"), "饭点到了～吃饱回来了吗？"),
+        (("去洗澡",), "洗完舒服多了吧～"),
+        (("睡一觉", "去睡觉", "去午睡"), "睡醒了吗？精神好点没～"),
+    )
+
+    def _maybe_followup(self, text: str) -> None:
+        """v0.6：聊天消息启发式排 follow-up（30min 后回访气泡）。"""
+        for keys, msg in self._FOLLOWUP_RULES:
+            if any(k in text for k in keys):
+                import time as _t
+
+                self._proactive.follow_up(msg, _t.time() + 30 * 60)
+                break
 
     def _show_chat(self) -> None:
         """托盘'聊天'唤出面板（v0.11 真全局热键占位）。
@@ -499,7 +533,10 @@ class PetApp:
 
     def shutdown(self) -> None:
         """七步序（§2.5）；v0.2 起 ④保存 PetState 有实体。"""
-        # ① ProactiveScheduler  ② EatMouseSession  ③ 全局热键 —— v0.x 均 pass
+        # ① 停 ProactiveScheduler
+        if getattr(self, "_proactive_timer", None) is not None:
+            self._proactive_timer.stop()
+        # ② EatMouseSession  ③ 全局热键 —— v0.x 均 pass
         # ④ 保存 PetState+Memory
         self._save_now()
         # ⑤ 关 QML engine（v0.4 聊天面板）+ 中断流式 worker（防线程泄漏）
