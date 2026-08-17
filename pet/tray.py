@@ -18,6 +18,7 @@ class TrayManager(QObject):
         self._on_quit = on_quit
         self._on_chat = None
         self._on_reset = None
+        self._on_spit = None  # v0.7 强制吐出（吃鼠标时键盘热键外的备用出口）
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
 
@@ -26,6 +27,11 @@ class TrayManager(QObject):
         act_chat.triggered.connect(self._emit_chat)
         act_reset = menu.addAction("重新开始")
         act_reset.triggered.connect(self._emit_reset)
+        # v0.7 强制吐出：吃鼠标期间鼠标被抑制点不到菜单，故此菜单主要服务于
+        # 非锁定态的残留释放 + 键盘可达用户（Tab/方向键导航菜单）。主逃生口
+        # 仍是热键 Cmd+Option+T + 看门狗。
+        act_spit = menu.addAction("强制吐出")
+        act_spit.triggered.connect(self._emit_spit)
         menu.addSeparator()
         act_quit = menu.addAction("退出")
         act_quit.triggered.connect(self._on_quit)
@@ -41,6 +47,10 @@ class TrayManager(QObject):
         """v0.5：托盘'重新开始'→app 经 platform.confirm_dangerous 二次确认后清档复位。"""
         self._on_reset = cb
 
+    def set_spit_callback(self, cb) -> None:
+        """v0.7：托盘'强制吐出'→EatMouseSession.force_spit（停 CGEventTap + 回 idle）。"""
+        self._on_spit = cb
+
     def _emit_chat(self) -> None:
         if self._on_chat is not None:
             self._on_chat()
@@ -54,6 +64,10 @@ class TrayManager(QObject):
     def _emit_reset(self) -> None:
         if self._on_reset is not None:
             self._on_reset()
+
+    def _emit_spit(self) -> None:
+        if self._on_spit is not None:
+            self._on_spit()
 
     @staticmethod
     def _make_icon() -> QIcon:

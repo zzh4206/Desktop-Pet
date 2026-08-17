@@ -70,6 +70,7 @@ _DRAG = "drag"
 _FALL = "fall"
 _THROWN = "thrown"
 _CLIMB = "climb"   # 抛掷撞窗口侧面 → 沿边攀爬到顶（v0.3.5）
+_EAT_MOUSE = "eat_mouse"  # v0.7 吃鼠标态：冻结（不出 WANDER/物理），咀嚼
 
 # 物理常量（进 config 可后续提取；v0.3 先合理默认）
 _GRAVITY = 3500.0          # px/s²（v0.3.22：2000 太飘，屏顶落底 1s+ 被感知为吸附）
@@ -312,7 +313,7 @@ class BehaviorFSM:
 
     def handle_event(self, event: str) -> None:
         """v0.3：fullscreen_on/off（暂停/恢复 WANDER，空中/攀爬传送回底边中央）、
-        follow_toggle。"""
+        follow_toggle。v0.7：eat_mouse/eat_mouse_off（切/退吃鼠标冻结态）。"""
         if event == "fullscreen_on":
             self._suppressed = True
             # 全屏中不可见：空中/攀爬态收敛到地面（维持"不往顶上走"）；
@@ -331,6 +332,18 @@ class BehaviorFSM:
             self._suppressed = False
         elif event == "follow_toggle":
             self._follow = not self._follow
+        elif event == "eat_mouse":
+            # v0.7：进吃鼠标态——冻结（不出 WANDER/物理，咀嚼 emoji 占位），
+            # 速度清零防残留惯性；不收敛位置（就地冻结吃鼠标）。
+            # 全屏中吃鼠标罕见，但若发生也置 suppressed 保一致。
+            self._mode = _EAT_MOUSE
+            self._vx = self._vy = 0.0
+            self._follow = False
+        elif event == "eat_mouse_off":
+            # 吐出/释放 → 回 idle（原 EAT_MOUSE 才有意义；非此态 no-op）
+            if self._mode == _EAT_MOUSE:
+                self._mode = _IDLE
+                self._idle_left = self._new_idle()
 
     @property
     def mode(self) -> str:
@@ -426,6 +439,12 @@ class BehaviorFSM:
         cy = min(max(y, self._work_area["y"] + self._pet_height), self._bottom())
         if (cx, cy) != (x, y):
             self._pos = (cx, cy)
+
+        # v0.7 吃鼠标态：冻结——不出 WANDER/物理/攀爬，就地咀嚼。
+        # 返回 EAT_MOUSE action（app 仅按 fsm.pos 同步窗位=不动；
+        # 咀嚼动画为 v0.7 占位，留 provider/动画 v0.7.1+ 精修）
+        if self._mode == _EAT_MOUSE:
+            return Action(ActionType.EAT_MOUSE, {"pos": self._pos})
 
         # 支撑校验（IDLE/WALK）：骑乘跟随 + 关闭/最小化/拖走坠落
         if self._mode in (_IDLE, _WALK):

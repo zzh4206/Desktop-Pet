@@ -26,7 +26,12 @@
   "proactive": {
     "quiet_hours": [23, 8],
     "sedentary_min": 45,
-    "sedentary_cooldown_min": 30
+    "sedentary_cooldown_min": 30,
+    "eat_mouse_duration_s": 10,
+    "idle_threshold_min": 5,
+    "dnd": false,
+    "video_apps": ["IINA", "QuickTime Player", "VLC", "Safari", "Google Chrome", "Firefox", "Microsoft Edge", "Brave Browser", "Arc"],
+    "eat_mouse_gain": {"fullness": 5, "mood": 3}
   },
   "decay_per_hour": {
     "mood": 2,

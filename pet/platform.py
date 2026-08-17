@@ -71,6 +71,30 @@ class PlatformAdapter:
         """
         pass
 
+    # ---- v0.7 吃鼠标平台注入（mac 实装；win 待 WH_MOUSE_LL；基类 no-op
+    # 让共享 app 接线统一，EatMouseSession 见 mouse_lock=None 即静默不抑制） ----
+    def get_mouse_lock(self):
+        """平台鼠标抑制对象（mac=MouseLockMac）。基类返 None（不抑制）。"""
+        return None
+
+    def start_mouse_lock(self, duration_s: float) -> bool:
+        return False
+
+    def stop_mouse_lock(self) -> None:
+        pass
+
+    def is_mouse_locked(self) -> bool:
+        return False
+
+    def is_accessibility_trusted(self) -> bool:
+        return False
+
+    def is_active_content(self, video_apps) -> bool:
+        return False
+
+    def prompt_accessibility(self) -> None:
+        pass
+
     # ---- v0.4 DS key + 危险确认（平台密钥库/原生对话框，经此注入） ----
     def get_ds_key(self) -> str | None:
         """DS API key：平台密钥库优先，env ``DEEPSEEK_API_KEY`` 兜底。
@@ -136,6 +160,7 @@ if sys.platform == "darwin":
         def __init__(self, data_dir, log_dir, config_path, lock_path):
             super().__init__(data_dir, log_dir, config_path, lock_path)
             self._lock_fd: int | None = None  # 持有 fd 防释放锁
+            self._mouse_lock = None           # v0.7 MouseLockMac 单例（惰性）
 
         def acquire_single_instance_lock(self) -> bool:
             fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o644)
@@ -206,6 +231,46 @@ if sys.platform == "darwin":
 
         def create_pet_window(self, sprite):
             return window_mac.PetWindow(sprite)
+
+        # ---- v0.7 吃鼠标平台注入（补遗#7：经 adapter 注入，共享层不直
+        # import mouse_lock_mac；CGEventTap/pyobjc 全封在 mouse_lock_mac） ----
+        def get_mouse_lock(self):
+            """惰性建 MouseLockMac 单例（ProactiveScheduler/EatMouseSession
+            经此拿平台 mouse_lock）。"""
+            if self._mouse_lock is None:
+                from . import mouse_lock_mac
+
+                self._mouse_lock = mouse_lock_mac.MouseLockMac()
+            return self._mouse_lock
+
+        def start_mouse_lock(self, duration_s: float) -> bool:
+            return self.get_mouse_lock().start(duration_s)
+
+        def stop_mouse_lock(self) -> None:
+            self.get_mouse_lock().force_spit()
+
+        def is_mouse_locked(self) -> bool:
+            return self.get_mouse_lock().active
+
+        def is_accessibility_trusted(self) -> bool:
+            """Accessibility 是否授权（吃鼠标 + 热键前置检测；未开只提示不抑制）。"""
+            from . import mouse_lock_mac
+
+            return mouse_lock_mac.MouseLockMac.accessibility_trusted()
+
+        def is_active_content(self, video_apps) -> bool:
+            """前台视频播放器白名单命中（T8 活跃内容检测）。"""
+            from . import mouse_lock_mac
+
+            return mouse_lock_mac.MouseLockMac.is_active_content(
+                tuple(video_apps) if video_apps else None
+            )
+
+        def prompt_accessibility(self) -> None:
+            """深链到系统设置「隐私与安全 → 辅助功能」（未授权时引导）。"""
+            from . import mouse_lock_mac
+
+            mouse_lock_mac.open_accessibility_settings()
 
         # ---- v0.3.13 mac 适配：图层探针排除自身（win register_own_windows 同类）----
         def register_own_windows(self, *widgets) -> None:

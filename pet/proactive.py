@@ -18,7 +18,7 @@ ctx=None 崩 + 人设冲突）；JSON 解析剥离 ```json``` 围栏容错。
 
 平台库-free：时钟/气泡/LLM 全部注入（`now_fn`/`bubble_fn`/`client`），
 app 用 QTimer 驱动 `poll()`；测试用假时钟直接调 `poll(now)`。
-EatMouseSession v0.7 实装（接口占位）。
+EatMouseSession v0.7 实装（薄包装 platform mouse_lock + FSM 事件派发）。
 """
 
 from __future__ import annotations
@@ -47,6 +47,11 @@ _SEDENTARY_TOPICS = ("喝口水休息一下眼睛～", "站起来活动一下吧
 _MORNING_HOURS = (8, 11)                        # 早安窗口
 _NIGHT_HOURS = (21, 23)                         # 晚安窗口
 
+# ---- v0.7 吃鼠标参数（进 config.proactive 覆盖） ----
+_EAT_DURATION = 10.0        # 单次锁定时长（s）——≤15s 铁律由 mouse_lock 兜底钳制
+_EAT_IDLE_MIN = 5.0         # 铁律5 idle gate：idle<此值只气泡不吃
+_EAT_GAIN = {"fullness": 5.0, "mood": 3.0}     # 养成回血（§七 +饱食/+心情）
+
 _FESTIVALS = {  # MM-DD → 名称（config festivals 可扩展）
     "01-01": "元旦", "02-14": "情人节", "05-01": "劳动节",
     "06-01": "儿童节", "10-01": "国庆节", "12-25": "圣诞节",
@@ -60,16 +65,57 @@ _DECISION_SYSTEM = (
 
 
 class EatMouseSession:
-    """v0.7 实装（吃鼠标），此处接口占位。"""
+    """吃鼠标 session（接口冻结于 设计思路.md §2.2；v0.7 实装行为）。
 
-    def start(self, duration_s: float) -> None:  # pragma: no cover
-        raise NotImplementedError("v0.7")
+    薄包装：经 platform 注入的 ``mouse_lock``（mac=MouseLockMac）做系统层
+    鼠标抑制，**不直 import 平台库**（补遗#7）。门禁（idle/DND/活跃内容/
+    accessibility）由上层 ``ProactiveScheduler.eat_mouse`` 判；本 session 只管
+    start 抑制 + force_spit 吐出 + DND 中吐出。
 
-    def force_spit(self) -> None:  # pragma: no cover
-        raise NotImplementedError("v0.7")
+    FSM 事件由注入的 ``fsm_event_fn`` 派发（``eat_mouse`` 切咀嚼态 / ``eat_mouse_off``
+    回 idle）——动画由 FSM 驱动（§七），session 只管系统层。
+    """
 
-    def on_dnd_active(self) -> bool:  # pragma: no cover
-        raise NotImplementedError("v0.7")
+    def __init__(self, mouse_lock=None, fsm_event_fn=None) -> None:
+        self._lock = mouse_lock        # platform MouseLockMac | None
+        self._fsm = fsm_event_fn       # callable(event: str) -> None | None
+
+    @property
+    def active(self) -> bool:
+        """是否正在抑制鼠标（委托 platform mouse_lock.active）。无注入 → False。"""
+        return bool(self._lock.active) if self._lock is not None else False
+
+    def start(self, duration_s: float) -> None:
+        """抑制鼠标（§2.2：``-> None``）。无 platform mouse_lock → 无操作。
+
+        成功抑制时发 FSM ``eat_mouse`` 事件切咀嚼态；失败（权限/系统拒绝）
+        不发事件（不进 EAT_MOUSE 态），由上层据 ``active`` 决定提示。
+        """
+        if self._lock is None:
+            return
+        ok = self._lock.start(duration_s)
+        if ok and self._fsm is not None:
+            try:
+                self._fsm("eat_mouse")
+            except Exception:
+                _log.warning("[吃鼠标] fsm eat_mouse 事件派发异常", exc_info=True)
+
+    def force_spit(self) -> None:
+        """强制吐出（热键/托盘/shutdown 调；幂等）。停抑制 + 回 idle 态。"""
+        if self._lock is not None:
+            self._lock.force_spit()
+        if self._fsm is not None:
+            try:
+                self._fsm("eat_mouse_off")
+            except Exception:
+                _log.warning("[吃鼠标] fsm eat_mouse_off 事件派发异常", exc_info=True)
+
+    def on_dnd_active(self) -> bool:
+        """DND 生效时调：若正在吃 → 立即吐出。返是否刚才在吃（铁律4）。"""
+        was = self.active
+        if was:
+            self.force_spit()
+        return was
 
 
 class ProactiveScheduler:
@@ -81,6 +127,15 @@ class ProactiveScheduler:
         client=None,                     # DeepSeekClient | None（无则本地罐头）
         cfg: dict | None = None,
         now_fn=time.time,
+        # v0.7 吃鼠标平台注入（全可选；None 时 eat_mouse 退化为静默/不抑制，
+        # 保持 win/纯逻辑测试向后兼容）。平台 mouse_lock + 各门禁检查器均经此
+        # 注入，共享 ProactiveScheduler 零平台库（补遗#7）。
+        mouse_lock=None,                 # platform MouseLockMac | None
+        dnd_fn=None,                     # callable() -> bool 系统专注/勿扰
+        active_content_fn=None,          # callable() -> bool 前台视频白名单命中
+        accessibility_fn=None,           # callable() -> bool Accessibility 已授权
+        fsm_event_fn=None,               # callable(event: str) -> None 切 EAT_MOUSE
+        prompt_accessibility_fn=None,     # callable() -> None 深链系统设置
     ) -> None:
         self._store = store
         self._bubble = bubble_fn
@@ -98,6 +153,23 @@ class ProactiveScheduler:
         self._sedentary_min = float(c.get("sedentary_min", _SEDENTARY_MIN))
         self._cooldown = float(
             c.get("sedentary_cooldown_min", _SEDENTARY_COOLDOWN)
+        )
+        # v0.7 吃鼠标参数
+        self._eat_duration = float(c.get("eat_mouse_duration_s", _EAT_DURATION))
+        self._eat_idle_min = float(c.get("idle_threshold_min", _EAT_IDLE_MIN))
+        self._dnd_manual = bool(c.get("dnd", False))
+        gain = c.get("eat_mouse_gain")
+        self._eat_gain = dict(gain) if isinstance(gain, dict) else dict(_EAT_GAIN)
+
+        # v0.7 平台注入
+        self._mouse_lock = mouse_lock
+        self._dnd_fn = dnd_fn
+        self._active_content_fn = active_content_fn
+        self._accessibility_fn = accessibility_fn
+        self._fsm_event_fn = fsm_event_fn
+        self._prompt_accessibility_fn = prompt_accessibility_fn
+        self._eat_session = EatMouseSession(
+            mouse_lock=mouse_lock, fsm_event_fn=fsm_event_fn
         )
 
         self._next_wake_at: float | None = None      # 链式唤醒时间戳
@@ -132,9 +204,94 @@ class ProactiveScheduler:
         _log.info("[主动] follow-up 排定 %s @%s",
                   event, datetime.fromtimestamp(when).strftime("%H:%M"))
 
-    def eat_mouse(self, duration_s: float) -> EatMouseSession:  # pragma: no cover
-        """v0.7 实装；接口冻结占位。"""
-        raise NotImplementedError("v0.7")
+    def eat_mouse(self, duration_s: float) -> EatMouseSession:
+        """v0.7 吃鼠标入口（§2.2 冻结签名）。四门禁全过 → 抑制鼠标 + 切
+        EAT_MOUSE 态 + 养成回血；任一门禁不过 → 不抑制（只气泡由上层久坐
+        分支已发，此处不叠加，保持 v0.6 久坐提醒行为不变）。
+
+        门禁（铁律）：idle≥idle_threshold_min(5) / 非 DND / 非活跃内容 /
+        Accessibility 已授权。无 platform mouse_lock（win / 未注入）→ 静默
+        返回，久坐 topic 气泡已发，不抑制不叠加。
+        """
+        sess = self._eat_session
+        # 无平台 mouse_lock → 不抑制，静默（久坐 topic 已气泡）
+        if self._mouse_lock is None:
+            return sess
+        # 铁律5 idle gate：idle<阈值 → 不吃（温和气泡已由上层发）
+        try:
+            idle_s = self._idle()
+        except Exception:
+            _log.warning("[吃鼠标] idle_fn 异常，跳过", exc_info=True)
+            idle_s = 0.0
+        if idle_s < self._eat_idle_min * 60.0:
+            return sess
+        # 铁律4 DND：专注/勿扰 → 不吃；DND 期间若已在吃 → 吐出
+        if self._dnd_active():
+            sess.on_dnd_active()
+            return sess
+        # T8 活跃内容：前台视频 → 不吃
+        if self._active_content_fn is not None:
+            try:
+                if self._active_content_fn():
+                    return sess
+            except Exception:
+                _log.warning("[吃鼠标] active_content_fn 异常，放行不抑制",
+                             exc_info=True)
+        # T9 Accessibility：未授权 → 提示 + 深链，不抑制
+        if self._accessibility_fn is not None:
+            try:
+                trusted = self._accessibility_fn()
+            except Exception:
+                _log.warning("[吃鼠标] accessibility_fn 异常，fail-closed 不抑制",
+                             exc_info=True)
+                trusted = False
+            if not trusted:
+                self._emit_bubble(
+                    "需要辅助功能权限，我才能帮你管住鼠标哦～"
+                    "（系统设置→隐私与安全→辅助功能）",
+                    self._now(),
+                )
+                if self._prompt_accessibility_fn is not None:
+                    try:
+                        self._prompt_accessibility_fn()
+                    except Exception:
+                        _log.warning("[吃鼠标] 引导辅助功能设置异常",
+                                     exc_info=True)
+                return sess
+        # 全门禁通过 → 抑制 + FSM EAT_MOUSE + 回血
+        sess.start(duration_s)
+        if sess.active:
+            self._emit_bubble(
+                "帮你管住小鼠标休息一下～吐出按 ⌘⌥T 或点托盘", self._now()
+            )
+            # 养成回血（§七 +饱食/+心情）
+            if self._eat_gain:
+                try:
+                    self._store.update(**self._eat_gain)
+                except Exception:
+                    _log.warning("[吃鼠标] 养成回血异常", exc_info=True)
+        else:
+            # tap 创建失败（权限被拒/系统拒绝）→ 不抑制，提示
+            self._emit_bubble("没管住鼠标（权限或系统拒绝），先气泡提醒～",
+                              self._now())
+        return sess
+
+    def force_spit(self) -> None:
+        """强制吐出（托盘菜单调；热键/shutdown 经 mouse_lock/EatMouseSession
+        同样路径）。无 mouse_lock → 无操作。"""
+        self._eat_session.force_spit()
+
+    def _dnd_active(self) -> bool:
+        """勿扰/专注模式是否生效（铁律4）。config ``proactive.dnd`` 手动
+        开关 + 可选系统检测 ``dnd_fn``；任一为真 → DND。"""
+        if self._dnd_manual:
+            return True
+        if self._dnd_fn is not None:
+            try:
+                return bool(self._dnd_fn())
+            except Exception:
+                _log.warning("[吃鼠标] dnd_fn 异常，按非 DND 处理", exc_info=True)
+        return False
 
     # ---- 深夜判定 ----
 
@@ -197,6 +354,11 @@ class ProactiveScheduler:
                 self._emit_bubble(msg, now)
                 _log.info("[主动] 久坐提醒(空闲%.0fmin): %s", idle_min, msg)
                 self._last_sedentary_at = now
+                # v0.7：休息提醒升级为吃鼠标（§七「把休息提醒+整蛊+养成缝成
+                # 一件」）。eat_mouse 内部四门禁（idle/DND/活跃内容/
+                # accessibility）+ mouse_lock 抑制；无平台 mouse_lock
+                # （win/测试）时静默，topic 气泡已发不叠加，保持 v0.6 行为。
+                self.eat_mouse(self._eat_duration)
         else:
             self._sedentary_since = None
             self._sedentary_count = 0

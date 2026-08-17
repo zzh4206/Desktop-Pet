@@ -165,17 +165,32 @@ class PetApp:
         self._chat_client = None
         self._setup_chat()
 
-        # v0.6 主动关怀（win 主笔）：30s 轮询；气泡锚宠物；idle 用传感器；
-        # 有 DS key 时链式唤醒走 LLM 隔离决策，否则本地罐头
+        # v0.6 主动关怀（win 主笔）+ v0.7 吃鼠标（mac）：
+        # 30s 轮询；气泡锚宠物；idle 用传感器；有 DS key 时链式唤醒走 LLM
+        # 隔离决策，否则本地罐头。v0.7 注入平台 mouse_lock + 四门禁检查器 +
+        # FSM 事件派发（共享 ProactiveScheduler 零平台库，经 adapter 注入）。
         from pet.proactive import ProactiveScheduler
 
+        proactive_cfg = self.cfg.get("proactive", {})
         self._proactive = ProactiveScheduler(
             store=self.store,
             bubble_fn=lambda t: self.bubble.show(t, anchor=self._pet_anchor()),
             idle_fn=lambda: self.sensors.idle_time,
             client=getattr(self, "_chat_client", None),
-            cfg=self.cfg.get("proactive", {}),
+            cfg=proactive_cfg,
+            mouse_lock=self.adapter.get_mouse_lock(),
+            # mac DND v0.7 走 config 手动开关（proactive.dnd）；osascript
+            # 专注模式检测留 v0.7.1（T6 config 路径已满足 Must）
+            dnd_fn=None,
+            active_content_fn=lambda: self.adapter.is_active_content(
+                proactive_cfg.get("video_apps")
+            ),
+            accessibility_fn=self.adapter.is_accessibility_trusted,
+            fsm_event_fn=lambda ev: self.fsm.handle_event(ev),
+            prompt_accessibility_fn=self.adapter.prompt_accessibility,
         )
+        # v0.7 托盘「强制吐出」→ EatMouseSession.force_spit（停 CGEventTap + 回 idle）
+        self.tray.set_spit_callback(self._proactive.force_spit)
         self._proactive_timer = QTimer(self.app)
         self._proactive_timer.timeout.connect(
             lambda: self._proactive.poll()
@@ -581,7 +596,16 @@ class PetApp:
                     t.stop()
                 except Exception:
                     pass
-        # ② EatMouseSession  ③ 全局热键 —— v0.x 均 pass
+        # ② v0.7 释放 EatMouseSession（停 CGEventTap + 回 idle）——v0.2.5 起占位
+        # pass，v0.7 实体化。force_spit 幂等，未在吃也安全。
+        if getattr(self, "_proactive", None) is not None:
+            try:
+                self._proactive.force_spit()
+            except Exception:
+                self.logger.warning("shutdown 释放 EatMouseSession 异常",
+                                    exc_info=True)
+        # ③ 全局热键 —— v0.11（v0.7 强制吐出热键由 mouse_lock_mac 键盘
+        # listen tap 承载，随 EatMouseSession 释放一并停止）
         # ④ 保存 PetState+Memory
         self._save_now()
         # ⑤ 关 QML engine（v0.4 聊天面板）+ 中断流式 worker（防线程泄漏）
