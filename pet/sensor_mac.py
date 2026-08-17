@@ -68,6 +68,31 @@ def set_own_wids(wids) -> None:
 # 全屏判定时忽略的 owner（桌面/菜单栏/Dock/Window Server）
 _DESKTOP_OWNERS = {"Window Server", "Dock", "程序坞", "Finder", "ControlCenter"}
 
+# v0.6 系统空闲秒（免权限 O(1)）——ProactiveScheduler 久坐检测用
+try:
+    from Quartz import (
+        CGEventSourceSecondsSinceLastEventType,
+        kCGAnyInputEventType,
+        kCGEventSourceStateHIDSystemState,
+    )
+
+    _HAS_CGEVENT = True
+except Exception:
+    _HAS_CGEVENT = False
+
+
+def idle_seconds() -> float:
+    """系统空闲秒（最后一次键盘/鼠标输入到现在）。免权限 O(1)。
+    ProactiveScheduler 久坐检测用。无 Quartz → 0.0（不触发久坐）。"""
+    if not _HAS_CGEVENT:
+        return 0.0
+    try:
+        return float(CGEventSourceSecondsSinceLastEventType(
+            kCGEventSourceStateHIDSystemState, kCGAnyInputEventType
+        ))
+    except Exception:
+        return 0.0
+
 
 def mouse_pos() -> tuple:
     from PySide6.QtGui import QCursor
@@ -385,7 +410,7 @@ def build_sensors() -> Sensors:
         mouse_pos=mouse_pos(),
         work_area=work_area(),
         windows=enumerate_windows(),
-        idle_time=0.0,
+        idle_time=idle_seconds(),
         solid_at=solid_at,
         alive_at=alive_at,
         rect_at=rect_at,
