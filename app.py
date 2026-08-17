@@ -29,36 +29,36 @@ warnings.filterwarnings(
 )
 
 # stderr 过滤管道：过滤 macOS TSM/IMK 系统日志行（第一次 TextField 键入触发），
-# 保留 Python logging/traceback。dup2 fd2→管道，daemon 线程过滤后写原 stderr
-_orig_stderr_fd = os.dup(2)
-_r, _w = os.pipe()
-os.dup2(_w, 2)
-def _filter_stderr():
-    buf = b""
-    while True:
-        try:
-            chunk = os.read(_r, 4096)
-        except OSError:
-            break
-        if not chunk:
-            break
-        buf += chunk
-        while b"\n" in buf:
-            line, buf = buf.split(b"\n", 1)
-            t = line.decode(errors="replace")
-            if "TSM AdjustCapsLock" in t or "IMKCFRunLoopWakeUpReliable" in t:
-                continue
+# 保留 Python logging/traceback。dup2 fd2→管道，daemon 线程过滤后写原 stderr。
+# v0.6.3：仅 mac 启用（TSM/IMK 是 macOS 专有，win 上无意义却 dup2 重定向 stderr）
+if sys.platform == "darwin":
+    _orig_stderr_fd = os.dup(2)
+    _r, _w = os.pipe()
+    os.dup2(_w, 2)
+    def _filter_stderr():
+        buf = b""
+        while True:
             try:
-                os.write(_orig_stderr_fd, line + b"\n")
+                chunk = os.read(_r, 4096)
             except OSError:
-                pass
-threading.Thread(target=_filter_stderr, daemon=True).start()
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                t = line.decode(errors="replace")
+                if "TSM AdjustCapsLock" in t or "IMKCFRunLoopWakeUpReliable" in t:
+                    continue
+                try:
+                    os.write(_orig_stderr_fd, line + b"\n")
+                except OSError:
+                    pass
+    threading.Thread(target=_filter_stderr, daemon=True).start()
 
 import argparse
 import logging
-import os
 import signal
-import sys
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCursor
@@ -281,7 +281,7 @@ class PetApp:
         text, ok = QInputDialog.getText(
             None,
             "设置 DeepSeek API Key",
-            "请输入 DeepSeek API Key（存入 macOS 钥匙串，不写明文文件）：",
+            "请输入 DeepSeek API Key（存入系统密钥库，不写明文文件）：",
         )
         text = (text or "").strip()
         if ok and text:
@@ -290,9 +290,15 @@ class PetApp:
         return None
 
     def _build_chat_panel(self, registry) -> None:
-        """载入 QML 聊天面板（不可见，托盘/聚焦唤出）。"""
+        """载入 QML 聊天面板（不可见，托盘/聚焦唤出）。
+
+        v0.6.3：先注册 fallback chat callback（_show_chat 会气泡提示未设 key），
+        防 QML 载入抛异常时 tray callback 未注册致托盘聊天点击静默无反应。
+        """
         import os
 
+        # 先注册 fallback：即使 QML 载入失败，托盘聊天也有反馈
+        self.tray.set_chat_callback(self._show_chat)
         from pet.ui.chat_bridge import ChatBridge, load_chat_panel
 
         qml_path = os.path.join(
@@ -302,12 +308,15 @@ class PetApp:
             self._chat_client, registry, self._make_tool_context
         )
         self._chat_bridge.offlineRequested.connect(self._on_chat_offline)
-        self._chat_engine = load_chat_panel(self._chat_bridge, qml_path)
-        if self._chat_engine and self._chat_engine.rootObjects():
-            self._chat_window = self._chat_engine.rootObjects()[0]
-        self.tray.set_chat_callback(self._show_chat)
+        try:
+            self._chat_engine = load_chat_panel(self._chat_bridge, qml_path)
+            if self._chat_engine and self._chat_engine.rootObjects():
+                self._chat_window = self._chat_engine.rootObjects()[0]
+        except Exception as exc:
+            self.logger.warning("QML 聊天面板载入失败，托盘聊天走气泡兜底: %s", exc)
         # v0.6 follow-up：用户消息含"去吃饭"等 → 30min 后回访（启发式）
-        self._chat_bridge.on_user_message = self._maybe_followup
+        if self._chat_bridge is not None:
+            self._chat_bridge.on_user_message = self._maybe_followup
 
     def _make_tool_context(self) -> ToolContext:
         """按需取当前 state 作为工具上下文（v0.4 工具不真用 state）。"""
@@ -384,7 +393,9 @@ class PetApp:
     def _on_chat_offline(self) -> None:
         """断网/无 key：气泡提示，宠物仍 WANDER/交互/长大（T8）。"""
         self.bubble.show(
-            "当前离线，聊天暂不可用～", anchor=self._pet_anchor()
+            "当前离线，聊天暂不可用～",
+            kind=BubbleType.WARNING,
+            anchor=self._pet_anchor(),
         )
 
     def _on_pet_moved(self, x: float, y: float, h: int) -> None:
@@ -595,7 +606,7 @@ class PetApp:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="桌宠 v0.5.0")
+    parser = argparse.ArgumentParser(description=f"桌宠 {APP_VERSION}")
     parser.add_argument(
         "--verbose", action="store_true", help="详细日志到 stderr"
     )

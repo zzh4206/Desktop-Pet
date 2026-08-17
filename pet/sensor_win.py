@@ -89,6 +89,14 @@ _user32.GetMonitorInfoW.argtypes = [
 ]
 _user32.WindowFromPoint.argtypes = [_POINT]
 _user32.WindowFromPoint.restype = wintypes.HWND
+_user32.IsWindow.argtypes = [wintypes.HWND]
+_user32.IsWindow.restype = wintypes.BOOL
+_user32.IsIconic.argtypes = [wintypes.HWND]
+_user32.IsIconic.restype = wintypes.BOOL
+_user32.GetWindowThreadProcessId.argtypes = [
+    wintypes.HWND, ctypes.POINTER(wintypes.DWORD),
+]
+_user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
 # 子控件句柄 → 顶层窗口（WindowFromPoint 可能命中窗口内的控件）
 _GA_ROOT = 2
@@ -100,6 +108,8 @@ _kernel32.QueryFullProcessImageNameW.argtypes = [
     ctypes.c_void_p, wintypes.DWORD,
     ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR,
 ]
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+_kernel32.CloseHandle.restype = wintypes.BOOL
 
 _GWL_STYLE = -16
 _GWL_EXSTYLE = -20
@@ -164,7 +174,7 @@ def visible_windows(refresh: bool = False) -> list[dict]:
     """
     global _windows_cache, _windows_cache_at
     now = _tick_count_ms() / 1000.0
-    if not refresh and _windows_cache and now - _windows_cache_at < _WINDOWS_TTL_S:
+    if not refresh and _windows_cache is not None and now - _windows_cache_at < _WINDOWS_TTL_S:
         return _windows_cache
 
     found: list[dict] = []
@@ -180,7 +190,7 @@ def visible_windows(refresh: bool = False) -> list[dict]:
             return True
         rect = _hwnd_to_rect(hwnd)
         if rect and rect["width"] > 40 and rect["height"] > 40:
-            rect["hwnd"] = int(hwnd) if hasattr(hwnd, "value") else int(hwnd)
+            rect["hwnd"] = int(hwnd)
             found.append(rect)
         return True
 
@@ -338,14 +348,6 @@ def foreground_fullscreen() -> tuple[bool, str]:
     return (fs, _process_name(_window_pid(hwnd)) if fs else "")
 
 
-def get_mouse_pos() -> tuple[int, int]:
-    """物理像素屏幕坐标（v0.3 高 DPI 适配时再统一换算 Qt 逻辑坐标）。"""
-    pt = _POINT()
-    if not _user32.GetCursorPos(ctypes.byref(pt)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    return (pt.x, pt.y)
-
-
 def get_idle_seconds() -> float:
     """系统空闲秒数（GetLastInputInfo，无需特权）。供吃鼠标 idle gate / 主动关怀。"""
     info = _LASTINPUTINFO(cbSize=ctypes.sizeof(_LASTINPUTINFO))
@@ -354,22 +356,6 @@ def get_idle_seconds() -> float:
         return 0.0
     now = _tick_count_ms()
     return max(0.0, (now - info.dwTime) / 1000.0)
-
-
-def get_primary_work_area() -> dict:
-    """主屏可用工作区（已排除任务栏），SPI_GETWORKAREA（Qt 备选见 work_area）。
-
-    多屏：v0.3 配合高 DPI Spike 扩展为 EnumDisplayMonitors 取合集。
-    """
-    rc = _RECT()
-    ok = _user32.SystemParametersInfoW(
-        _SPI_GETWORKAREA, 0, ctypes.byref(rc), 0
-    )
-    if not ok:
-        # 兜底：整主屏（少见失败；Qt 侧 QScreen.availableGeometry 为备选实现）
-        rc = _RECT(left=0, top=0, right=1920, bottom=1080)
-    return {"left": rc.left, "top": rc.top,
-            "right": rc.right, "bottom": rc.bottom}
 
 
 def mouse_pos() -> tuple:

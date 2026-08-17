@@ -15,9 +15,12 @@ v0.3：``windows``（窗口框枚举）+ 全屏检测。用 ``Quartz.CGWindowLis
 
 from __future__ import annotations
 
+import logging
 import time
 
 from .behavior import Sensors
+
+log = logging.getLogger("pet")
 
 try:
     from AppKit import NSScreen  # noqa: F401  仅探测可用性
@@ -91,6 +94,7 @@ def idle_seconds() -> float:
             kCGEventSourceStateHIDSystemState, kCGAnyInputEventType
         ))
     except Exception:
+        log.warning("idle_seconds 查询失败", exc_info=True)
         return 0.0
 
 
@@ -106,6 +110,7 @@ def work_area() -> dict:
         try:
             return _work_area_ns()
         except Exception:
+            log.warning("work_area NS 查询失败, 回退 Qt", exc_info=True)
             pass
     return _work_area_qt()
 
@@ -176,6 +181,7 @@ def _screen_full_frames() -> list[tuple[int, int, int, int]]:
                                int(round(w)), int(round(h))))
             return frames
         except Exception:
+            log.warning("_screen_full_frames NS 查询失败, 回退 Qt", exc_info=True)
             pass
     from PySide6.QtGui import QGuiApplication
 
@@ -195,6 +201,28 @@ def _is_fullscreen_bounds(b, screen_frames) -> bool:
     return False
 
 
+def _filter_window(w) -> bool:
+    """普通实体窗过滤（_enumerate_windows_uncached / _solid_windows 共用）：
+    layer==0、非桌面 owner、bounds 可解析且 w/h>=40。不通过 → False。"""
+    try:
+        layer = int(w.get("kCGWindowLayer", 0))
+    except (TypeError, ValueError):
+        layer = 0
+    if layer != 0:
+        # 菜单栏/Dock/桌面层（正层）与负层都不算普通窗口
+        return False
+    if w.get("kCGWindowOwnerName", "") in _DESKTOP_OWNERS:
+        return False
+    b = w.get("kCGWindowBounds")
+    if not b:
+        return False
+    try:
+        ww, hh = int(b["Width"]), int(b["Height"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return ww >= 40 and hh >= 40
+
+
 def _enumerate_windows_uncached() -> list[dict]:
     """CGWindowList 枚举可见窗口框（Qt 坐标），过滤桌面/Dock/菜单栏。
     返回 list of {x,y,width,height,owner,wid}。无 Quartz → []。
@@ -207,31 +235,20 @@ def _enumerate_windows_uncached() -> list[dict]:
             kCGWindowListOptionOnScreenOnly, kCGNullWindowID
         )
     except Exception:
+        log.warning("窗口枚举失败", exc_info=True)
         return []
     for w in wins:
-        try:
-            layer = int(w.get("kCGWindowLayer", 0))
-        except (TypeError, ValueError):
-            layer = 0
-        if layer != 0:
-            # 菜单栏/Dock/桌面层（正层）与负层都不算普通窗口
-            continue
-        owner = w.get("kCGWindowOwnerName", "")
-        if owner in _DESKTOP_OWNERS:
+        if not _filter_window(w):
             continue
         b = w.get("kCGWindowBounds")
-        if not b:
-            continue
         try:
             x, y = int(b["X"]), int(b["Y"])
             ww, hh = int(b["Width"]), int(b["Height"])
             wid = int(w.get("kCGWindowNumber", 0))
         except (KeyError, TypeError, ValueError):
             continue
-        if ww < 40 or hh < 40:
-            continue
         out.append({"x": x, "y": y, "width": ww, "height": hh,
-                    "owner": str(owner), "wid": wid})
+                    "owner": str(w.get("kCGWindowOwnerName", "")), "wid": wid})
     return out
 
 
@@ -253,28 +270,17 @@ def _solid_windows() -> list[dict]:
         except Exception:
             wins = []
         for w in wins:
-            try:
-                layer = int(w.get("kCGWindowLayer", 0))
-            except (TypeError, ValueError):
-                layer = 0
-            if layer != 0:
-                continue
-            owner = w.get("kCGWindowOwnerName", "")
-            if owner in _DESKTOP_OWNERS:
+            if not _filter_window(w):
                 continue
             b = w.get("kCGWindowBounds")
-            if not b:
-                continue
             try:
                 wx, wy = int(b["X"]), int(b["Y"])
                 ww, hh = int(b["Width"]), int(b["Height"])
                 wid = int(w.get("kCGWindowNumber", 0))
             except (KeyError, TypeError, ValueError):
                 continue
-            if ww < 40 or hh < 40:
-                continue
             out.append({"x": wx, "y": wy, "width": ww, "height": hh,
-                        "owner": str(owner), "wid": wid})
+                        "owner": str(w.get("kCGWindowOwnerName", "")), "wid": wid})
     _SOLID_CACHE = out
     _SOLID_CACHE_TS = now
     return out
@@ -323,7 +329,7 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
         return True
     if ref is not None:
         return top == ref.get("wid")
-    return any(w["wid"] == top for w in _solid_windows())
+    return True
 
 
 def alive_at(ref: dict) -> bool:
@@ -336,6 +342,7 @@ def alive_at(ref: dict) -> bool:
     try:
         wins = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, int(wid))
     except Exception:
+        log.warning("alive_at 查询失败", exc_info=True)
         return True  # 查询失败 → 不否决
     return len(wins) > 0  # 返空=已关闭/最小化
 
@@ -362,6 +369,7 @@ def fullscreen_status() -> tuple[bool, str]:
             kCGWindowListOptionOnScreenOnly, kCGNullWindowID
         )
     except Exception:
+        log.warning("全屏检测枚举失败", exc_info=True)
         return (False, "")
     screen_frames = _screen_full_frames()
     for w in wins:
@@ -392,6 +400,7 @@ def rect_at(ref: dict) -> dict | None:
     try:
         wins = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, int(wid))
     except Exception:
+        log.warning("rect_at 查询失败", exc_info=True)
         return None
     if not wins:
         return None  # 窗已关闭/最小化

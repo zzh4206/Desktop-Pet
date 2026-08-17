@@ -47,7 +47,6 @@ class WindowBase(QWidget):
         self._anchor = sprite.anchor
         self._provider = None                 # 注入 AssetProvider（on_state_change 切 emoji）
         self._press_start: tuple | None = None
-        self._drag_candidate = False
         self._dragging = False
         self._grab_dx = 0.0                   # 按下点 → 宠物 bottom_center 偏移
         self._grab_dy = 0.0
@@ -158,7 +157,6 @@ class WindowBase(QWidget):
             event.position().y(),
             event.timestamp(),
         )
-        self._drag_candidate = False
         # v0.3 拖拽准备：记录抓取偏移（按住哪里就从哪里拎）
         g = event.globalPosition()
         bx, by = self._bottom_center_global()
@@ -215,4 +213,4 @@ class WindowBase(QWidget):
         menu.addSeparator()
         menu.addAction("设置", self.settingsRequested.emit)
         menu.addAction("退出", self.quitRequested.emit)
-        menu.exec(event.globalPos())
+        menu.exec(event.globalPosition().toPoint())

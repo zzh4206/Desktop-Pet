@@ -9,9 +9,14 @@ v0.10+ 才是文件路径）。签名不动，语义这样用。
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from .pet_state import Branch, Mood, PetState, Stage
+
+if TYPE_CHECKING:
+    # 仅类型检查期 import：运行时仍需在 get_frames 内局部 import
+    # （behavior → asset_provider → behavior 反向引用会循环，故局部懒加载）
+    from .behavior import ActionType
 
 
 # 默认显示尺寸（逻辑像素，HiDPI 由 Qt 处理），bottom_center 为锚点
@@ -44,7 +49,6 @@ _EMOJI_BY_MOOD: dict[Mood, str] = {
     Mood.HAPPY: "😺",
     Mood.NEUTRAL: "🐱",
     Mood.SAD: "😿",
-    Mood.SLEEPY: "😴",
     Mood.HUNGRY: "🙀",
 }
 
@@ -57,19 +61,16 @@ _HEALTHY_BY_STAGE_MOOD: dict[tuple[Stage, Mood], str] = {
     (Stage.YOUNG, Mood.HAPPY): "😺",
     (Stage.YOUNG, Mood.NEUTRAL): "🐱",
     (Stage.YOUNG, Mood.SAD): "😿",
-    (Stage.YOUNG, Mood.SLEEPY): "😴",
     (Stage.YOUNG, Mood.HUNGRY): "🙀",
     # ADULT：成猫系（emoji 明显比幼大一档）
     (Stage.ADULT, Mood.HAPPY): "😸",
     (Stage.ADULT, Mood.NEUTRAL): "🐈",
     (Stage.ADULT, Mood.SAD): "😾",
-    (Stage.ADULT, Mood.SLEEPY): "😪",
     (Stage.ADULT, Mood.HUNGRY): "😹",
     # FINAL：黑猫终态系
     (Stage.FINAL, Mood.HAPPY): "😻",
     (Stage.FINAL, Mood.NEUTRAL): "🐈‍⬛",
     (Stage.FINAL, Mood.SAD): "😿",
-    (Stage.FINAL, Mood.SLEEPY): "😴",
     (Stage.FINAL, Mood.HUNGRY): "🙀",
 }
 
@@ -86,7 +87,6 @@ _WALK_FRAME2: dict[Mood, str] = {
     Mood.HAPPY: "😸",
     Mood.NEUTRAL: "🐈",
     Mood.SAD: "😾",
-    Mood.SLEEPY: "😪",
     Mood.HUNGRY: "😹",
 }
 _ACT_FRAME = "😽"  # 伸懒腰/打滚峰值占位帧
@@ -127,7 +127,9 @@ class EmojiProvider:
     ) -> list[SpriteRef]:
         """v0.3 动作帧序列（emoji 占位）：MOVE_TO 行走 2 帧交替，
         ANIMATE 3 帧（本体→峰值→本体），其余动作降级静态单帧。"""
-        from .behavior import ActionType  # 局部 import 防循环依赖
+        # 局部 import 防循环依赖：behavior 顶层 import asset_provider，
+        # 此处反向引用须懒加载（开销极小，仅每次 get_frames 一次查表）。
+        from .behavior import ActionType
 
         base = self.get_static(state, skin)
         mood = _mood_from_state(state)

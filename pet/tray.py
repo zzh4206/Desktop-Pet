@@ -5,6 +5,8 @@ v0.1：``QSystemTrayIcon`` + “退出”菜单。退出回调走 app 层 ``shut
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, QObject
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
@@ -28,6 +30,7 @@ class TrayManager(QObject):
         act_quit = menu.addAction("退出")
         act_quit.triggered.connect(self._on_quit)
         self._tray.setContextMenu(menu)
+        self._menu = menu  # 保留引用，remove() 时 deleteLater 释放
         self._tray.show()
 
     def set_chat_callback(self, cb) -> None:
@@ -41,6 +44,12 @@ class TrayManager(QObject):
     def _emit_chat(self) -> None:
         if self._on_chat is not None:
             self._on_chat()
+        else:
+            # 未设 chat callback（正常应在 _build_chat_panel 里注册 fallback）；
+            # tray 无 bubble 引用，记日志便于排查托盘聊天点击无反应
+            logging.getLogger("pet").warning(
+                "托盘'聊天'点击但未注册 callback（聊天面板未初始化？）"
+            )
 
     def _emit_reset(self) -> None:
         if self._on_reset is not None:
@@ -64,4 +73,9 @@ class TrayManager(QObject):
         return QIcon(pix)
 
     def remove(self) -> None:
+        # hide + deleteLater 释放托盘与菜单（旧版只 hide，QSystemTrayIcon 留到
+        # app.quit 才回收；显式 deleteLater 让退出更干净，防二次 shutdown 重入）
         self._tray.hide()
+        self._tray.deleteLater()
+        if getattr(self, "_menu", None) is not None:
+            self._menu.deleteLater()
