@@ -68,6 +68,7 @@ def main() -> int:
     # exec 抛 AttributeError 被 Qt 吞 → 菜单不弹。此断言锁 menu.exec 路径）
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtCore import QPoint as _QPoint  # QPoint 在 QtCore
     from PySide6.QtWidgets import QMenu
 
     def _close_popup():

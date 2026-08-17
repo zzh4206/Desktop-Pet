@@ -213,4 +213,6 @@ class WindowBase(QWidget):
         menu.addSeparator()
         menu.addAction("设置", self.settingsRequested.emit)
         menu.addAction("退出", self.quitRequested.emit)
-        menu.exec(event.globalPosition().toPoint())
+        # QContextMenuEvent 非 QSinglePointEvent 子类，无 globalPosition()
+        # （v0.2.2 勘误回归修复：该调用 AttributeError 被 Qt 吞→菜单不弹）
+        menu.exec(event.globalPos())

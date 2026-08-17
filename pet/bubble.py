@@ -9,7 +9,8 @@ from __future__ import annotations
 from enum import Enum
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication, QPoint
+from PySide6.QtCore import QPoint
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 
