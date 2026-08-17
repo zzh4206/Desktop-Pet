@@ -259,15 +259,29 @@ class DeepSeekClient:
         history: list[ChatTurn],
         ctx,
         on_delta=None,
+        system_override: Optional[str] = None,
+        tools_override: Optional[list] = None,
     ) -> tuple[str, list[ChatTurn]]:
         """跑一轮 agent loop：DS→（tool_calls→dispatch→回灌→DS 续）→最终回复。
 
         ``history`` 含到本轮为止的完整上下文（含本轮 user）。返回
         (assistant_text, appended_turns)——app 把 appended_turns 追加进历史。
         首轮流式回显（``on_delta``）；工具结果回灌后续轮非流式（避免重复刷屏）。
+
+        v0.6.2：``system_override`` 替换默认人设 system prompt（proactive 决策
+        用决策指令而非宠物人设）；``tools_override=None`` 显式不挂工具（DS 不返
+        tool_calls，治 proactive 传 ctx=None 致 dispatch 崩）。``tools_override``
+        省略则用 registry.schemas()。
         """
-        messages = [self._system] + [t.to_message() for t in history]
-        tools = self._registry.schemas() or None
+        if system_override is not None:
+            sys_msg = {"role": "system", "content": system_override}
+        else:
+            sys_msg = self._system
+        messages = [sys_msg] + [t.to_message() for t in history]
+        if tools_override is None and system_override is None:
+            tools = self._registry.schemas() or None
+        else:
+            tools = tools_override  # 决策轮显式 None → DS 不返 tool_calls
         appended: list[ChatTurn] = []
 
         text, tool_calls, usage = self._stream_once(messages, tools, on_delta)

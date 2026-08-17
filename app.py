@@ -345,8 +345,8 @@ class PetApp:
             )
             return
         self._chat_bridge.reset_offline()
-        # 全屏时聊天面板移到桌面 Space（非全屏 Space），像微信
-        if getattr(self, "_fullscreen", False):
+        # 全屏时聊天面板移到桌面 Space（mac 专属；win 无 Space 概念直接 raise）
+        if getattr(self, "_fullscreen", False) and sys.platform == "darwin":
             self._move_chat_to_desktop_space()
         self._chat_window.show()
         self._chat_window.raise_()  # 点后跳最高层（不常置顶，失焦正常降层，像微信）
@@ -551,10 +551,25 @@ class PetApp:
         self.window.play_frames(frames)
 
     def shutdown(self) -> None:
-        """七步序（§2.5）；v0.2 起 ④保存 PetState 有实体。"""
-        # ① 停 ProactiveScheduler
-        if getattr(self, "_proactive_timer", None) is not None:
-            self._proactive_timer.stop()
+        """七步序（§2.5）；v0.2 起 ④保存 PetState 有实体。
+
+        v0.6.2：幂等（_shutdown_done 标志防二次触发崩）；停全部 QTimer（旧版
+        只停 proactive_timer，其余靠 app.quit 后事件循环停止，但二次触发时
+        正在飞的回调可能访问已关闭资源）。
+        """
+        if getattr(self, "_shutdown_done", False):
+            return  # 幂等：二次触发直接返回
+        self._shutdown_done = True
+        # ① 停全部 QTimer（proactive/save/sensor/fullscreen/tick/decay/sig）
+        for name in ("_proactive_timer", "_periodic_save_timer", "_save_timer",
+                     "_sensor_timer", "_fullscreen_timer", "_tick_timer",
+                     "_decay_timer", "_sig_timer"):
+            t = getattr(self, name, None)
+            if t is not None:
+                try:
+                    t.stop()
+                except Exception:
+                    pass
         # ② EatMouseSession  ③ 全局热键 —— v0.x 均 pass
         # ④ 保存 PetState+Memory
         self._save_now()
@@ -570,7 +585,6 @@ class PetApp:
             except Exception:
                 pass
         self._chat_engine = None
-        # ⑤ 关 QML engine —— v0.x pass 占位
         # ⑥ 移除托盘
         self.tray.remove()
         # ⑦ QApplication.quit()

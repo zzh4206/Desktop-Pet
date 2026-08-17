@@ -86,19 +86,33 @@ def main() -> int:
     s.poll()
     check("T3 活动中不发久坐提醒", len(bubbles2) == 0)
 
-    # T4 深夜不打扰（23:00-08:00 静默；唤醒顺延）
+    # T4 深夜不打扰（23:00-08:00 静默；唤醒顺延到 quiet 结束，链不断）
     clock = FakeClock("2026-08-17 23:30")
     s, bubbles = make(clock, idle_s=999 * 60)  # 深夜即使久坐也不发
     s.poll()
     check("T4 深夜久坐静默", len(bubbles) == 0)
+    # N3：schedule_wake(1) 钳到 10min → 23:40 触发，仍在深夜 quiet 内
     s.schedule_wake(1, {})
-    clock.advance(2)
+    clock.advance(10)  # 到 23:40，仍在 quiet
     s.poll()
-    check("T4 深夜唤醒顺延不发", len(bubbles) == 0)
-    # follow-up 例外：深夜照发（用户自己约的）
-    s.follow_up("吃晚饭回来了吗？", clock() - 1)
+    # 顺延：不发，且重排到 quiet 结束（非丢弃，链不断）
+    check("T4 深夜唤醒顺延不发且未丢(_next_wake_at 重排)",
+          len(bubbles) == 0 and s._next_wake_at is not None)
+    # 顺延到次日 08:00 后补发（链条恢复）
+    clock.advance(8 * 60 + 20)  # 23:40 → 次日 08:00
     s.poll()
-    check("T4 深夜 follow-up 照发", bubbles == ["吃晚饭回来了吗？"])
+    check("T4 静默结束后补发唤醒(链条不断)",
+          len(bubbles) >= 1 and s._next_wake_at is not None)
+    # 清掉 bubbles 给后续 follow-up 测试
+    bubbles.clear()
+    s._next_wake_at = None
+    # follow-up 例外：深夜照发（用户自己约的）——用独立实例避免唤醒干扰
+    clock_f = FakeClock("2026-08-17 23:50")
+    s_f, bubbles_f = make(clock_f, idle_s=999 * 60)
+    s_f.poll()
+    s_f.follow_up("吃晚饭回来了吗？", clock_f() - 1)
+    s_f.poll()
+    check("T4 深夜 follow-up 照发", bubbles_f == ["吃晚饭回来了吗？"])
 
     # T5 follow-up 定时触发
     clock = FakeClock("2026-08-17 12:00")
@@ -130,11 +144,17 @@ def main() -> int:
     check("T7 节日祝福", any("国庆" in b for b in bubbles))
 
     # T8 LLM 隔离决策：假客户端返回 JSON → 采纳；坏 JSON → 本地兜底
+    # v0.6.2：chat_once 加 system_override/tools_override 参数（决策隔离）
     class FakeClient:
         def __init__(self, text):
             self.text = text
+            self.last_system_override = "UNSET"
+            self.last_tools_override = "UNSET"
 
-        def chat_once(self, history, ctx, on_delta=None):
+        def chat_once(self, history, ctx, on_delta=None,
+                      system_override=None, tools_override=None):
+            self.last_system_override = system_override
+            self.last_tools_override = tools_override
             return self.text, []
 
     clock = FakeClock("2026-08-17 10:00")
@@ -142,9 +162,25 @@ def main() -> int:
     s._client = FakeClient('{"message": "记得喝水哦", "next_min": 55}')
     d, m = s._decide({"hour": "10:00"})
     check("T8 LLM 决策采纳", d == 55 and m == "记得喝水哦")
+    # N4/N5：决策轮传 system_override=_DECISION_SYSTEM + tools_override=None
+    check("T8 决策隔离 system_override 传决策指令",
+          s._client.last_system_override is not None
+          and "决策器" in s._client.last_system_override)
+    check("T8 决策隔离 tools_override=None(不挂工具)",
+          s._client.last_tools_override is None)
     s._client = FakeClient("不是JSON")
     d, m = s._decide({})
     check("T8 坏输出退本地罐头", 30 <= d <= 120 and len(m) > 0)
+
+    # T22 N6 JSON 围栏容错：LLM 返 ```json``` 包裹的 JSON 也能解析
+    s._client = FakeClient('```json\n{"message": "休息一下", "next_min": 40}\n```')
+    d, m = s._decide({"hour": "10:00"})
+    check("T22 JSON 围栏容错解析", d == 40 and m == "休息一下")
+
+    # T23 N8 message 非字符串走罐头（防显示 "None"/"123"）
+    s._client = FakeClient('{"message": null, "next_min": 30}')
+    d, m = s._decide({"hour": "10:00"})
+    check("T23 message=null 走罐头不显示None", 30 <= d <= 120 and m != "None")
 
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
