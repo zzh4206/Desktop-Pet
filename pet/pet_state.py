@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import time
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
@@ -84,18 +85,23 @@ def _state_from_dict(d: dict | None) -> PetState:
     if not isinstance(d, dict):
         d = {}
 
-    def _num(name: str, default: float) -> float:
+    def _num(name: str, default: float, clamp_lo=None, clamp_hi=None) -> float:
         v = d.get(name, default)
         try:
-            return float(v)
+            val = float(v)
         except (TypeError, ValueError):
             log.warning("存档字段 %s 非法 %r，用默认 %s", name, v, default)
-            return default
+            val = default
+        if clamp_lo is not None and val < clamp_lo:
+            val = float(clamp_lo)
+        if clamp_hi is not None and val > clamp_hi:
+            val = float(clamp_hi)
+        return val
 
     return PetState(
-        mood=_num("mood", 80.0),
-        fullness=_num("fullness", 80.0),
-        cleanliness=_num("cleanliness", 80.0),
+        mood=_num("mood", 80.0, 0.0, 100.0),
+        fullness=_num("fullness", 80.0, 0.0, 100.0),
+        cleanliness=_num("cleanliness", 80.0, 0.0, 100.0),
         age=max(0.0, _num("age", 0.0)),
         stage=_enum_from_str(d.get("stage"), Stage, Stage.YOUNG),
         branch=_enum_from_str(d.get("branch"), Branch, Branch.HEALTHY),
@@ -126,6 +132,7 @@ class PetStateStore:
         self._last_update = (
             float(last_update) if last_update is not None else time.time()
         )
+        self._lock = threading.Lock()  # v0.5.3：保护 update/save/_notify 线程安全
 
     # ---- 冻结接口（签名不动） ----
     def get(self) -> PetState:
@@ -135,45 +142,91 @@ class PetStateStore:
         """按增量更新（deltas 是增量，不是绝对值）。frozen → replace。"""
         if not deltas:
             return
-        kwargs: dict = {}
-        for key, delta in deltas.items():
-            if not hasattr(self._state, key):
-                log.warning("update 忽略未知字段 %s", key)
-                continue
-            cur = getattr(self._state, key)
-            if key in _NUMERIC_FIELDS:
-                kwargs[key] = max(0.0, min(100.0, float(cur) + float(delta)))
-            elif key == "age":
-                kwargs[key] = max(0.0, float(cur) + float(delta))
-            else:
-                # stage / branch：直接赋值（delta 应已是 Enum）
-                kwargs[key] = delta
-        if kwargs:
-            self._state = replace(self._state, **kwargs)
-        self._last_update = time.time()
-        self._notify()
+        with self._lock:
+            kwargs: dict = {}
+            for key, delta in deltas.items():
+                if not hasattr(self._state, key):
+                    log.warning("update 忽略未知字段 %s", key)
+                    continue
+                cur = getattr(self._state, key)
+                if key in _NUMERIC_FIELDS:
+                    kwargs[key] = max(0.0, min(100.0, float(cur) + float(delta)))
+                elif key == "age":
+                    kwargs[key] = max(0.0, float(cur) + float(delta))
+                else:
+                    # stage / branch：校验 Enum 类型（防 update(stage="adult") 使
+                    # state.stage 变 str，后续 .value/_STAGE_ORDER.index 崩）
+                    if key == "stage":
+                        kwargs[key] = _enum_from_str(delta, Stage, self._state.stage)
+                    elif key == "branch":
+                        kwargs[key] = _enum_from_str(delta, Branch, self._state.branch)
+                    else:
+                        kwargs[key] = delta
+            if not kwargs:
+                return  # 无有效变更不 notify（旧版仍触发，v0.5.3）
+            new_state = replace(self._state, **kwargs)
+            # 只有实际变化才更新+notify（update(mood=0) 等值不触发）
+            if new_state == self._state:
+                self._last_update = time.time()
+                return
+            self._state = new_state
+            self._last_update = time.time()
+            observers = list(self._observers)
+        for cb in observers:
+            try:
+                cb(self._state)
+            except Exception:
+                log.exception("on_change 回调异常")
 
     def on_change(self, cb: Callable[[PetState], None]) -> None:
         self._observers.append(cb)
 
+    def off_change(self, cb: Callable[[PetState], None]) -> None:
+        """取消订阅（v0.5.3：旧版只增不减，重复注册重复触发）。"""
+        try:
+            self._observers.remove(cb)
+        except ValueError:
+            pass
+
     def save(self, path: str) -> None:
-        """原子写：.tmp → fsync → os.replace(.tmp→.json) → copy2(.json→.bak)。"""
+        """原子写：先 copy2 旧 .json→.bak（.bak 为上一版可兜底），再
+        .tmp→fsync→os.replace(.tmp→.json)→fsync 目录（POSIX）。
+
+        v0.5.3：.bak 改为 replace 前备份旧 .json（旧版 replace 后才 copy2，
+        .bak 是新 .json 副本，本次序列化错误时 .json/.bak 同时坏无法兜底）。
+        """
         dirpath = os.path.dirname(path)
         if dirpath:
             os.makedirs(dirpath, exist_ok=True)
-        data = {
-            "version": SCHEMA_VERSION,
-            "last_update": self._last_update,
-            "state": _state_to_dict(self._state),
-        }
+        with self._lock:
+            data = {
+                "version": SCHEMA_VERSION,
+                "last_update": self._last_update,
+                "state": _state_to_dict(self._state),
+            }
         tmp = path + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 f.flush()
                 os.fsync(f.fileno())
+            # 先备份旧 .json → .bak（replace 前旧版还在，可兜底本次序列化错误）
+            if os.path.exists(path):
+                try:
+                    shutil.copy2(path, path + ".bak")
+                except OSError:
+                    pass
             os.replace(tmp, path)
-            shutil.copy2(path, path + ".bak")
+            # POSIX 下 fsync 目录项变更持久化（Windows 无需，跳过）
+            if os.name != "nt":
+                try:
+                    dirfd = os.open(dirpath or ".", os.O_RDONLY)
+                    try:
+                        os.fsync(dirfd)
+                    finally:
+                        os.close(dirfd)
+                except OSError:
+                    pass
         except OSError:
             # 残留 .tmp 无害（下次 save 覆盖）；不让写盘失败崩 app
             if os.path.exists(tmp):
@@ -229,8 +282,10 @@ class PetStateStore:
         return _state_from_dict(raw.get("state")), last_update
 
     def _notify(self) -> None:
-        state = self._state
-        for cb in list(self._observers):
+        with self._lock:
+            state = self._state
+            observers = list(self._observers)
+        for cb in observers:
             try:
                 cb(state)
             except Exception:
@@ -249,15 +304,21 @@ class PetStateStore:
         第一次 apply_decay 即补上离线期间的衰减 + age 增长）。age 增长 =
         ``dt_days * age_speed_multiplier``（fast-mode 设大值秒级跳阶段）。
         """
+        decay_per_hour = decay_per_hour or {}
         now = time.time()
         dt_hours = (now - self._last_update) / 3600.0
         if dt_hours <= 0:
+            # 时钟回拨：仍更新 last_update，防衰减长期停滞（v0.5.3）
+            self._last_update = now
+            log.warning("apply_decay dt_hours<=0（时钟回拨?），重置 last_update")
             return
         deltas: dict = {}
         for key, rate in decay_per_hour.items():
             if key in _NUMERIC_FIELDS:
                 try:
-                    deltas[key] = -float(rate) * dt_hours
+                    # 校验 rate 非负（负配置致数值不降反升，v0.5.3）
+                    rate = max(0.0, float(rate))
+                    deltas[key] = -rate * dt_hours
                 except (TypeError, ValueError):
                     log.warning("decay_per_hour.%s 非法 %r，跳过", key, rate)
         # v0.5：年龄随 wall-clock 增长（age_speed_multiplier 进 config，含 fast-mode）
@@ -274,43 +335,60 @@ class PetStateStore:
     # ---- v0.5 进化（非冻结接口，app apply_decay 后调） ----
     _STAGE_ORDER: tuple = (Stage.YOUNG, Stage.ADULT, Stage.FINAL)
 
-    def check_evolve(self, thresholds: dict, score_cfg: dict) -> dict | None:
+    def check_evolve(
+        self, thresholds: dict, score_cfg: dict, avg_score: float | None = None
+    ) -> dict | None:
         """age 到当前 stage 阈值 → 进化一阶 + 判定分支。
 
         ``thresholds`` 形如 ``{"young": 7, "adult": 21}``（key 取 Stage.value，
         总 age 阈值；FINAL 不在表中即不再进化）。``score_cfg`` 形如
         ``{"mood_weight":0.4,"fullness_weight":0.4,"cleanliness_weight":0.2,
-        "healthy_threshold":70}``。分支取**当前养护分**（TODO 时间平均，
-        fast-mode 下当前≈平均），≥阈值→HEALTHY 否则 NEGLECTED。命中则内部
-        ``update(stage=, branch=)`` 触发 observer（持久化/emoji 切换）并返回
-        事件 dict；未命中返回 None。一次调用最多进化一阶（防刷屏）。
+        "healthy_threshold":70}``。分支取养护分：``avg_score`` 优先（离线多阶
+        进化时传时间平均分，避免数值衰减到底全判 NEGLECTED，v0.5.3），否则用
+        当前瞬时养护分。命中则内部 ``update(stage=, branch=)`` 触发 observer
+        （持久化/emoji 切换）并返回事件 dict；未命中返回 None。一次调用最多
+        进化一阶（防刷屏，app 离线补衰减后循环调用补齐多阶）。
         """
+        thresholds = thresholds or {}
+        score_cfg = score_cfg or {}
         state = self._state
         if state.stage == Stage.FINAL:
             return None
         try:
-            thr = float(thresholds.get(state.stage.value, 0))
+            # 阈值缺省 inf（旧版缺省 0 致漏配立即进化，v0.5.3）
+            thr = float(thresholds.get(state.stage.value, float("inf")))
         except (TypeError, ValueError):
-            log.warning("evolve_threshold_days.%s 非法，按 0", state.stage.value)
-            thr = 0.0
+            log.warning("evolve_threshold_days.%s 非法，按 inf", state.stage.value)
+            thr = float("inf")
         if state.age < thr:
             return None
-        idx = self._STAGE_ORDER.index(state.stage)
-        new_stage = self._STAGE_ORDER[idx + 1]
-        score = (
-            float(score_cfg.get("mood_weight", 0.4)) * state.mood
-            + float(score_cfg.get("fullness_weight", 0.4)) * state.fullness
-            + float(score_cfg.get("cleanliness_weight", 0.2)) * state.cleanliness
-        )
+        try:
+            idx = self._STAGE_ORDER.index(state.stage)
+            new_stage = self._STAGE_ORDER[idx + 1]
+        except (ValueError, IndexError):
+            log.warning("stage %s 不在 _STAGE_ORDER 或已末阶", state.stage)
+            return None
+        # 养护分：avg_score 优先（离线多阶进化用时间平均，否则瞬时）
+        if avg_score is None:
+            score = (
+                float(score_cfg.get("mood_weight", 0.4)) * state.mood
+                + float(score_cfg.get("fullness_weight", 0.4)) * state.fullness
+                + float(score_cfg.get("cleanliness_weight", 0.2)) * state.cleanliness
+            )
+        else:
+            score = float(avg_score)
         try:
             healthy = float(score_cfg.get("healthy_threshold", 70))
         except (TypeError, ValueError):
             healthy = 70.0
         new_branch = Branch.HEALTHY if score >= healthy else Branch.NEGLECTED
-        # TODO(v0.5+)：分支取本阶段养护分时间平均（需累计本阶段分+计数），
-        # 当前用进化那一刻的瞬时分；fast-mode 衰减慢，瞬时≈平均，Must 不卡。
         self.update(stage=new_stage, branch=new_branch)
-        return {"from_stage": state.stage, "to_stage": new_stage, "branch": new_branch}
+        # 返回 .value 字符串（旧版返 Enum 不可 json.dumps，v0.5.3）
+        return {
+            "from_stage": state.stage.value,
+            "to_stage": new_stage.value,
+            "branch": new_branch.value,
+        }
 
     def reset(self) -> None:
         """v0.5 重置：清内存状态回 default（YOUNG/HEALTHY/age=0/数值默认），

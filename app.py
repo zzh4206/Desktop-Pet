@@ -407,15 +407,29 @@ class PetApp:
 
     # ---- 衰减 / 持久化 ----
     def _apply_decay(self) -> None:
+        # M2：离线补衰减前快照养护分——apply_decay 一次推过多个 age 阈值时，
+        # check_evolve 循环补齐多阶，但每阶用离线前的快照分判分支（非衰减后
+        # 的瞬时底值，否则离线多日回来连续进化全判 NEGLECTED 失真）。
+        score_cfg = self.cfg.get("score", {})
+        pre_state = self.store.get()
+        pre_score = (
+            float(score_cfg.get("mood_weight", 0.4)) * pre_state.mood
+            + float(score_cfg.get("fullness_weight", 0.4)) * pre_state.fullness
+            + float(score_cfg.get("cleanliness_weight", 0.2)) * pre_state.cleanliness
+        )
         self.store.apply_decay(
             self.cfg.get("decay_per_hour", {}),
             age_speed_multiplier=self.cfg.get("age_speed_multiplier", 1.0),
         )
-        event = self.store.check_evolve(
-            self.cfg.get("evolve_threshold_days", {}),
-            self.cfg.get("score", {}),
-        )
-        if event is not None:
+        # 循环 check_evolve 补齐离线多阶进化（旧版只调一次漏多阶，A6）
+        while True:
+            event = self.store.check_evolve(
+                self.cfg.get("evolve_threshold_days", {}),
+                score_cfg,
+                avg_score=pre_score,
+            )
+            if event is None:
+                break
             self._on_evolve(event)
 
     def _on_evolve(self, event: dict) -> None:
@@ -427,7 +441,7 @@ class PetApp:
         故这里显式刷一次防净空钻行误判）。气泡一次，不每 tick 刷屏
         （check_evolve 跨阈值后下一 tick stage 已进阶即返 None）。
         """
-        names = {Stage.YOUNG: "幼年", Stage.ADULT: "成年", Stage.FINAL: "终形态"}
+        names = {"young": "幼年", "adult": "成年", "final": "终形态"}
         to = event.get("to_stage")
         msg = f"我长大了！现在进入{names.get(to, '新阶段')}了～"
         self.fsm.set_pet_height(self.window.height())
