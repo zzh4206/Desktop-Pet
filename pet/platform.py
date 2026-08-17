@@ -51,19 +51,15 @@ class PlatformAdapter:
     def get_sensors(self):
         raise NotImplementedError
 
-    def is_fullscreen(self) -> bool:
-        """前台是否全屏/演示模式（v0.3）：True→app 隐藏浮窗 + 暂停 WANDER。
-        mac 实现委托 sensor_mac（Quartz）；win 端以后填，默认 False。"""
-        return False
-
     def create_pet_window(self, sprite):
         raise NotImplementedError
 
     def is_fullscreen_active(self) -> bool:
         """前台是否全屏窗口（v0.3 全屏/演示检测）。
 
-        基类返回 False（不抑制）；mac/win 各自覆盖。mac 端 v0.3 待补
-        NSWorkspace + CGWindowList 实现（登记于 工作表 v0.3 mac端）。
+        基类返回 False（不抑制）；mac/win 各自覆盖。
+        v0.12.1：删冗余 is_fullscreen 中间层（仅 mac 自家调用），
+        mac 直接在 is_fullscreen_active 调 sensor_mac.fullscreen_status。
         """
         return False
 
@@ -110,6 +106,12 @@ def _mac_paths() -> dict:
 
     for d in (data_dir, log_dir, config_dir):
         os.makedirs(d, exist_ok=True)
+        # v0.12.1：data_dir/log_dir 收紧到 0o700（存 pet_state.json 含养成数据，
+        # 旧版 0o755 其他用户可读；config_dir 同理）
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
     if os.path.exists(config_path):
         try:
             os.chmod(config_path, 0o600)
@@ -160,12 +162,12 @@ if sys.platform == "darwin":
 
         @staticmethod
         def _activate_existing(pid: int | None) -> None:
-            """派发 osascript 后台前置已有实例，不阻塞——第二实例立即退出，
-            不残留为第二个桌宠进程。唤醒是 best-effort。"""
+            """派发 osascript 前置已有实例。v0.12.1：改 subprocess.run timeout
+            （旧版 Popen 不 wait，Popen 对象 GC 可能杀掉 osascript 致唤醒失败）。"""
             if not pid:
                 return
             try:
-                subprocess.Popen(
+                subprocess.run(
                     [
                         "osascript",
                         "-e",
@@ -177,8 +179,9 @@ if sys.platform == "darwin":
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    timeout=5,
                 )
-            except OSError:
+            except (OSError, subprocess.TimeoutExpired):
                 pass
 
         def hide_dock_icon(self) -> None:
@@ -189,18 +192,17 @@ if sys.platform == "darwin":
                 )
 
                 NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.getLogger("pet").warning(
+                    "hide_dock_icon 失败（AppKit 未装?）: %s", exc)
 
         def get_sensors(self):
             return sensor_mac.build_sensors()
 
-        def is_fullscreen(self) -> bool:
-            return sensor_mac.fullscreen_status()[0]
-
         def is_fullscreen_active(self) -> bool:
-            # win app 调此名；复用 mac is_fullscreen（Quartz CGWindowList 全屏检测）
-            return self.is_fullscreen()
+            # v0.12.1：删冗余 is_fullscreen 中间层，直接调 sensor_mac
+            return sensor_mac.fullscreen_status()[0]
 
         def create_pet_window(self, sprite):
             return window_mac.PetWindow(sprite)
@@ -220,8 +222,10 @@ if sys.platform == "darwin":
                     nswin = view.window() if view is not None else None
                     if nswin is not None:
                         wids.add(int(nswin.windowNumber()))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    import logging
+                    logging.getLogger("pet").warning(
+                        "register_own_windows 登记 widget 失败: %s", exc)
             sensor_mac.set_own_wids(wids)
 
         # ---- v0.4：DS key 存 Keychain / 危险确认 NSAlert ----
@@ -307,7 +311,7 @@ elif sys.platform == "win32":
 
         def __init__(self, data_dir, log_dir, config_path, lock_path):
             super().__init__(data_dir, log_dir, config_path, lock_path)
-            self._lock_fd = None
+            self._lock_fd: int | None = None  # v0.12.1：注解对齐 mac
 
         def acquire_single_instance_lock(self) -> bool:
             fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR)
@@ -336,7 +340,12 @@ elif sys.platform == "win32":
         @staticmethod
         def _activate_existing(pid: int | None) -> None:
             """best-effort 前置已有实例：按 pid 枚举可见顶层窗口后
-            SetForegroundWindow（注意其参数是 HWND，非进程句柄）。"""
+            SetForegroundWindow（注意其参数是 HWND，非进程句柄）。
+
+            v0.12.1：加 AllowSetForegroundWindow(ASFW_ANY) 解除前台锁定
+            （旧版第二实例无前台权限，SetForegroundWindow 静默失败不前置）。
+            多窗口时取第一个可见顶层窗（宠物本体通常唯一，聊天窗隐藏态）。
+            """
             if not pid:
                 return
             try:
@@ -344,6 +353,12 @@ elif sys.platform == "win32":
                 from ctypes import wintypes
 
                 _u = ctypes.WinDLL("user32")
+                # P3：解除前台锁定，让 SetForegroundWindow 生效
+                try:
+                    ASFW_ANY = -1  # DWORD(-1) = ASFW_ANY
+                    _u.AllowSetForegroundWindow(ASFW_ANY)
+                except Exception:
+                    pass  # 旧版 Windows 可能无此 API
 
                 @ctypes.WINFUNCTYPE(
                     wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
