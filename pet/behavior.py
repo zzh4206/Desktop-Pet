@@ -100,6 +100,7 @@ class BehaviorFSM:
         self._pet_height = float(cfg.get("pet_height_px", _PET_HEIGHT))
         self._idle_min = float(cfg.get("wander_idle_min_s", 5))
         self._idle_max = float(cfg.get("wander_idle_max_s", 15))
+        self._first_idle_s = float(cfg.get("first_idle_s", 3))
         self._margin = float(cfg.get("edge_margin_px", 40))
 
         bottom = work_area.get("y", 0) + work_area.get("height", 0)
@@ -107,7 +108,7 @@ class BehaviorFSM:
         self._pos: tuple[float, float] = (cx, bottom)  # bottom_center
         self._target: tuple[float, float] = self._pos
         self._mode = _IDLE
-        self._idle_left = float(cfg.get("first_idle_s", 3))
+        self._idle_left = self._first_idle_s
         self._first = True
 
         # v0.3 物理/模式
@@ -140,7 +141,11 @@ class BehaviorFSM:
 
     def on_state_change(self, state: PetState) -> None:
         """饱食<20 → 觅食（idle 缩短）；心情<30 → 发呆（idle 拉长）；
-        v0.3：心情>60 → WANDER 更频繁（idle 再缩短）。"""
+        v0.3：心情>60 → WANDER 更频繁（idle 再缩短）。
+
+        **契约**：本方法需由 app 在 PetStateStore.on_change 订阅 + 启动时
+        立即触发一次（app.py 已接线）。FSM 不自行订阅 store——若 app 遗漏，
+        _hunger_factor/_mood_factor 维持 1.0，数值调制静默失效。"""
         if state.fullness < 20:
             self._hunger_factor = 2.0
         else:
@@ -163,7 +168,7 @@ class BehaviorFSM:
     def _right(self) -> float:
         return self._work_area["x"] + self._work_area["width"]
 
-    def _valid_windows_raw(self):
+    def _valid_windows(self):
         """几何有效窗（不含图层校验；_surface_y 里再做身份校验）。"""
         floor = self._bottom()
         top = self._work_area["y"]
@@ -191,8 +196,8 @@ class BehaviorFSM:
         except Exception:
             return None
 
-    def _top_surface(self, x: float, y_min: float = -1e9) -> tuple:
-        """图层+存活校验下，顶不低于 y_min 的最高表面 → (表面y, 提供窗|None)。
+    def _top_surface(self, x: float) -> tuple:
+        """图层+存活校验下的最高表面 → (表面y, 提供窗|None)。
 
         窗口过滤（防"落到屏幕外消失"）：
         - 顶部高于工作区顶的窗口不算面（最大化窗口 Win32 矩形带 -8px
@@ -204,8 +209,8 @@ class BehaviorFSM:
         """
         floor = self._bottom()
         cands = [
-            w for w in self._valid_windows_raw()
-            if w["x"] <= x <= w["x"] + w["width"] and w["y"] >= y_min
+            w for w in self._valid_windows()
+            if w["x"] <= x <= w["x"] + w["width"]
         ]
         cands.sort(key=lambda w: w["y"])  # 自上而下找第一个图层可见的
         for w in cands:
@@ -234,7 +239,7 @@ class BehaviorFSM:
     def _new_idle(self) -> float:
         if self._first:
             self._first = False
-            return 3.0
+            return self._first_idle_s  # 首段 idle 用配置值（非硬编码 3.0）
         # v0.2 数值调制：饱食低 → 缩短（÷hunger_factor），心情低 → 拉长（×mood_factor）
         base = random.uniform(self._idle_min, self._idle_max)
         scaled = base * self._mood_factor / self._hunger_factor
@@ -318,6 +323,10 @@ class BehaviorFSM:
                 self._mode = _IDLE
                 self._vx = self._vy = 0.0
                 self._idle_left = self._new_idle()
+                # 清残留窗口引用：收敛到地面后旧支撑/攀爬窗已无关，
+                # 否则下 tick 支撑校验 rect 路径会拿旧窗 rect 把宠物拽回原窗顶
+                self._stand_win = None
+                self._climb_win = None
         elif event == "fullscreen_off":
             self._suppressed = False
         elif event == "follow_toggle":
@@ -332,10 +341,6 @@ class BehaviorFSM:
         return self._pos
 
     # ---- 主循环 ----
-
-    def _valid_windows(self):
-        """有效平台窗（几何过滤；图层校验在 _surface_y/_solid_point 内做）。"""
-        yield from self._valid_windows_raw()
 
     def _window_spanning(self, x: float, y: float, require_band: bool = True):
         """x 落在某有效窗横向范围内且脚下没入其顶超深度阈值
@@ -409,10 +414,16 @@ class BehaviorFSM:
         self._alive_at = sensors.alive_at
         self._rect_at = sensors.rect_at
 
+        # dt 钳制：时钟回拨/卡顿致 dt<=0 或过大时反向积分/大步穿体，
+        # 钳到 [0, 0.05]（50ms 上限对齐 _tick 间隔，防一帧大位移穿墙）
+        dt = max(0.0, min(dt, 0.05))
+
         # 防御钳制：任何状态下都在工作区内（防偶发消失）
+        # y 下限 = 工作区顶+身位（头顶齐屏顶），与 drag_move/_step_air 撞顶
+        # 同语义——脚贴屏顶时头已穿出工作区顶，裸 work_area.y 会漏钳
         x, y = self._pos
         cx = self._clamp_x(x)
-        cy = min(max(y, self._work_area["y"]), self._bottom())
+        cy = min(max(y, self._work_area["y"] + self._pet_height), self._bottom())
         if (cx, cy) != (x, y):
             self._pos = (cx, cy)
 
@@ -426,12 +437,20 @@ class BehaviorFSM:
                 if not self._alive(w) or not (
                     rect["x"] <= x <= rect["x"] + rect["width"]
                 ) or rect["y"] >= self._bottom() - 1:
-                    # 关闭/最小化/横向移开/贴底失效 → 坠落
-                    self._stand_win = None
-                    self._mode = _FALL
-                    self._vx = self._vy = 0.0
-                    return Action(ActionType.FALL, {"pos": self._pos})
-                if abs(rect["y"] - y) > 2:
+                    # 旧支撑窗关闭/最小化/横向移开/贴底失效：
+                    # 先回退几何复判脚下是否有其他窗支撑（平走到等高相邻窗 B
+                    # 时 x 越界旧窗 A 的 rect，但 B 明明在脚下——直接坠会误判）
+                    sy2, w2 = self._top_surface(x)
+                    if w2 is not None and abs(sy2 - y) <= 2:
+                        self._stand_win = w2  # 换到新支撑窗继续骑乘
+                        self._pos = (x, sy2)
+                    else:
+                        # 确无支撑 → 坠落
+                        self._stand_win = None
+                        self._mode = _FALL
+                        self._vx = self._vy = 0.0
+                        return Action(ActionType.FALL, {"pos": self._pos})
+                elif abs(rect["y"] - y) > 2:
                     # 骑乘：窗口上/下移，脚贴合新窗顶（上移即"被吞没弹顶"）
                     self._pos = (x, rect["y"])
             else:
@@ -482,11 +501,13 @@ class BehaviorFSM:
             if abs(tx - self._pos[0]) > 4:
                 self._target = (tx, ty)
                 self._mode = _WALK
-                return action
+                # 转 WALK 当帧返回 MOVE_TO（非 ANIMATE），避免一帧"动画但不移动"
+                return Action(ActionType.MOVE_TO, {"pos": self._pos})
         # WANDER 自发目标：follow 模式下不出（光标即目标，防到点后被游走带离）
         if self._idle_left <= 0 and not self._suppressed and not self._follow:
             self._target = self._new_target()
             self._mode = _WALK
+            return Action(ActionType.MOVE_TO, {"pos": self._pos})
         return action
 
     def _step_walk(self, dt: float) -> Action:
@@ -559,11 +580,12 @@ class BehaviorFSM:
                 continue  # 低于窗底：从窗体下方穿过，不撞侧
             wl, wr = w["x"], w["x"] + w["width"]
             # 命中判定：新进入横向跨度（含恰好落在边线上——异侧乘积<0 的
-            # 严格不等式漏掉 x1==wl/wr 的等号情形），或线段跨越边线
+            # 严格不等式漏掉 x1==wl/wr 的等号情形），或线段跨越边线。
+            # crossed 须"原本在外"(not in0)——从窗内穿出不算撞侧（飞离非撞入）
             in0 = wl <= x0 <= wr
             in1 = wl <= x1 <= wr
             entered = (not in0) and in1
-            crossed = (
+            crossed = not in0 and (
                 (x0 - wl) * (x1 - wl) < 0 or (x0 - wr) * (x1 - wr) < 0
             )
             if entered or crossed:
@@ -584,7 +606,7 @@ class BehaviorFSM:
           消除"窗下松手瞬移上顶"。"""
         floor = self._bottom()
         cands = [
-            w for w in self._valid_windows_raw()
+            w for w in self._valid_windows()
             if w["x"] <= x <= w["x"] + w["width"]
             and w["y"] >= y_prev - self._climb_min_depth
         ]
@@ -635,19 +657,27 @@ class BehaviorFSM:
         # 上升穿窗体 → 撞窗底弹回（不许从下方穿透到顶上）：窗体对上升
         # 方向是实心的——下落撞顶面是"落顶"，上升顶到的是底面，应弹回窗下。
         # 否则上抛会穿体落顶，站在贴屏顶的窗口上像"吸附天花板"。
+        # **线段扫掠**（v0.3.29）：用 y_prev→y 线段与窗体竖带 [wy, wy+h] 的
+        # 相交判定，而非只看终点 y——上抛速度大时一 tick 可从窗下跨到窗顶上方，
+        # 终点 y 不落在窗体内会漏检穿体（矮窗 height<30px 尤甚）。
         if self._vy < 0:
+            y_prev = self._pos[1]
             for w in self._valid_windows():
                 if not self._alive(w):
                     continue
                 wl, wr = w["x"], w["x"] + w["width"]
-                if wl <= x <= wr and w["y"] < y < w["y"] + w["height"]:
+                wy, wh = w["y"], w["height"]
+                # 线段 [y_prev, y] 与竖带 [wy, wy+wh] 相交且横向在窗内
+                if (wl <= x <= wr
+                        and min(y_prev, y) <= wy + wh
+                        and max(y_prev, y) >= wy):
                     if self._solid_point(x, y, w):
-                        y = w["y"] + w["height"] + 1.0  # 推回窗底之下
+                        y = wy + wh + 1.0  # 推回窗底之下
                         self._vy = max(
                             -self._vy * _BOUNCE_RESTITUTION, 500.0
                         )
                         _log.debug("[物理] 撞窗底弹回 wy=%.0f 新y=%.0f",
-                                   w["y"], y)
+                                   wy, y)
                         break
         sy = self._fall_surface(x, self._pos[1])  # 从上方跨越才算落顶
         if y >= sy:
@@ -739,6 +769,17 @@ class BehaviorFSM:
             self._vx = 0.0
             self._vy = 0.0
             return Action(ActionType.FALL, {"pos": self._pos})
+        # 图层复验：攀爬窗若被别的窗（如全屏窗）盖住，继续爬会站到"被盖住的"
+        # 窗顶上——与 _top_surface/_fall_surface 否决被盖窗的语义矛盾。
+        # 每 tick 复验边线向窗内 5px 体点的顶层窗是否仍是 climb_win。
+        if self._climb_win is not None and not self._solid_edge(
+            self._climb_edge_x, self._climb_top_y, self._pos[1]
+        ):
+            self._mode = _FALL
+            self._vx = 0.0
+            self._vy = 0.0
+            _log.debug("[物理] 攀爬窗被盖住脱离 x=%.0f", self._climb_edge_x)
+            return Action(ActionType.FALL, {"pos": self._pos})
         y = self._pos[1] - self._speed * dt
         if y <= self._climb_top_y:
             # 登顶站定：向窗内收 6px——站在边缘线上时实时矩形差 1px 就会被
@@ -754,7 +795,13 @@ class BehaviorFSM:
             self._pos = (self._clamp_x(x_top), self._climb_top_y)
             self._mode = _IDLE
             self._idle_left = self._new_idle()
-            self._stand_win = w  # 支撑窗已知，直接进入骑乘路径
+            # 登顶后复验图层：若窗已被盖住（每 tick 复验在登顶瞬间可能
+            # 恰好未触发），不记 _stand_win 走几何兜底（_top_surface 会
+            # 否决被盖窗），避免站到"被盖住的"窗顶上
+            if w is not None and self._solid_point(x_top, self._climb_top_y + 5, w):
+                self._stand_win = w  # 支撑窗已知且仍是顶层，直接进骑乘路径
+            else:
+                self._stand_win = None  # 走几何兜底
             _log.debug("[物理] 攀爬登顶 x=%.0f y=%.0f", *self._pos)
         else:
             self._pos = (self._climb_edge_x, y)

@@ -316,13 +316,16 @@ def main() -> int:
     fsm.drag_move((700, 710))
     fsm.drag_move((796, 710))
     fsm.end_drag()
+    never_climbed = True
     for _ in range(int(3 / DT)):
         fsm.step(PetState.default(), sensors(windows=(win13,)), DT)
+        if fsm.mode == "climb":
+            never_climbed = False
         if fsm.mode == "idle":
             break
     check("T20 浅掠顶沿→落顶站定(不贴侧攀爬)",
-          fsm.mode == "idle" and fsm.pos[1] == 700 and not
-          (fsm.pos[0] == 800.0 and False))
+          fsm.mode == "idle" and fsm.pos[1] == 700
+          and never_climbed and fsm.pos[0] != 800.0)
     # 拖到窗顶附近(深度 5px)松手 → 直接站上顶，不去贴边
     fsm = BehaviorFSM(dict(WA))
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）
@@ -637,6 +640,45 @@ def main() -> int:
         if fsm.mode == "idle":
             break
     check("T32 上升浅掠蹭边抓住攀爬(不被窗底弹离)", climbed)
+
+    # T33 跨等高相邻窗不坠：两窗顶 y 相同、横向相邻，从 A 平走到 B 不应进 FALL
+    # （v0.3.29 修支撑校验 rect 路径 x 越界回退 _top_surface 复判）
+    winA = {"x": 200, "y": 700, "width": 200, "height": 200, "hwnd": 10}
+    winB = {"x": 400, "y": 700, "width": 200, "height": 200, "hwnd": 11}
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (300, 700)  # 站在 winA 顶中央
+    fsm._stand_win = winA
+    fsm._mode = "walk"
+    fsm._target = (500, 700)  # 目标在 winB 顶（跨过边线 x=400）
+    fell = False
+    for _ in range(int(3 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(winA, winB)), DT)
+        if fsm.mode == "fall":
+            fell = True
+            break
+        if fsm.mode == "idle":
+            break
+    check("T33 跨等高相邻窗不坠(回退_top_surface复判)",
+          not fell and fsm.pos[1] == 700)
+
+    # T34 矮窗上抛不穿体：height=20px 窗正下方 vy≈-2200 上抛，
+    # 应被窗底弹回不穿到窗顶上方（v0.3.29 改线段扫掠）。
+    # 验：上抛瞬间 y 不低于窗顶 600（弹回窗底 621 之下），非穿到 598 等窗顶上方
+    short_win = {"x": 900, "y": 600, "width": 100, "height": 20, "hwnd": 20}
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (950, 700)  # 窗正下方（窗底 y=620，窗顶 y=600）
+    fsm._mode = "thrown"
+    fsm._vx = 0.0
+    fsm._vy = -2200.0  # 强上抛，一 tick 跨 ~110px 本会越过窗体
+    fsm._bounce_count = 0
+    min_y_seen = 700.0
+    for _ in range(int(2 / DT)):
+        fsm.step(PetState.default(), sensors(windows=(short_win,)), DT)
+        min_y_seen = min(min_y_seen, fsm.pos[1])
+        if fsm.mode == "idle":
+            break
+    # 窗顶 y=600；穿体表现为 y 跌破 600（到窗顶上方）。弹回则 y≥620（窗底下方）
+    check("T34 矮窗上抛线段扫掠不穿体", min_y_seen >= 600)
 
     # T10 get_frames：MOVE_TO 2 帧 / ANIMATE 3 帧
     from pet.asset_provider import EmojiProvider
