@@ -107,6 +107,11 @@ class PetApp:
 
         paths = adapter.get_paths()
         self.cfg = load_config(paths["config_path"])
+        # config log_level 校准 logger 级别（main 里 setup_logging 用默认 INFO）
+        if not verbose and self.cfg.get("log_level"):
+            lvl_map = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
+            self.logger.setLevel(lvl_map.get(
+                str(self.cfg["log_level"]).upper(), 20))
         self._state_path = os.path.join(paths["data_dir"], "pet_state.json")
 
         # 养成 store：启动 load（无存档→default）；重启数值一致靠此
