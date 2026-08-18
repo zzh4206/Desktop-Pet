@@ -80,6 +80,7 @@ class EatMouseSession:
     def __init__(self, mouse_lock=None, fsm_event_fn=None) -> None:
         self._lock = mouse_lock        # platform MouseLockMac | None
         self._fsm = fsm_event_fn       # callable(event: str) -> None | None
+        self._was_active = False       # 释放检测（sync_release 用）
 
     @property
     def active(self) -> bool:
@@ -95,21 +96,39 @@ class EatMouseSession:
         if self._lock is None:
             return
         ok = self._lock.start(duration_s)
-        if ok and self._fsm is not None:
-            try:
-                self._fsm("eat_mouse")
-            except Exception:
-                _log.warning("[吃鼠标] fsm eat_mouse 事件派发异常", exc_info=True)
+        if ok:
+            # v0.7.4：eat_mouse 事件由 scheduler 两段式入口发（此处再发会在
+            # 到达后重复触发追赶）；此处只记 active 供释放检测
+            self._was_active = True
 
     def force_spit(self) -> None:
         """强制吐出（热键/托盘/shutdown 调；幂等）。停抑制 + 回 idle 态。"""
         if self._lock is not None:
             self._lock.force_spit()
+        self._was_active = False
         if self._fsm is not None:
             try:
                 self._fsm("eat_mouse_off")
             except Exception:
                 _log.warning("[吃鼠标] fsm eat_mouse_off 事件派发异常", exc_info=True)
+
+    def sync_release(self) -> None:
+        """释放检测（scheduler.eat_mouse_tick 每 tick 调）：
+
+        看门狗超时/任何外部路径直接释放 mouse_lock 时不经过 force_spit——
+        FSM 会冻在 EAT_MOUSE（宠物悬空在光标处）。此处监测锁 active→False
+        的跳变，补发 eat_mouse_off 回 idle（支撑校验自然坠落）。跨平台：
+        不改 mouse_lock 接口，mac 看门狗同款问题一并覆盖。
+        """
+        if self._was_active and not self.active:
+            self._was_active = False
+            if self._fsm is not None:
+                try:
+                    self._fsm("eat_mouse_off")
+                    _log.info("[吃鼠标] 自动释放→FSM 回 idle(坠落)")
+                except Exception:
+                    _log.warning("[吃鼠标] 释放检测事件派发异常",
+                                 exc_info=True)
 
     def on_dnd_active(self) -> bool:
         """DND 生效时调：若正在吃 → 立即吐出。返是否刚才在吃（铁律4）。"""
@@ -315,6 +334,11 @@ class ProactiveScheduler:
         pending 6s deadline 到 → eat_mouse_arrived（FSM 的 _EAT_MOUSE
         态冻结在当前位置，视觉即"在光标处吃"）。
         """
+        # 释放检测（恒执行：自动释放后 FSM 回 idle 坠落）
+        try:
+            self._eat_session.sync_release()
+        except Exception:
+            pass
         if self._eat_pending is None:
             return
         if self._now() >= self._eat_pending[1]:

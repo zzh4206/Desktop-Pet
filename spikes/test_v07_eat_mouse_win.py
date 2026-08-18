@@ -190,6 +190,40 @@ def main() -> int:
     pr2.eat_mouse_tick()
     check("E5 approach 超时兜底开吃", locked["v"] is True)
 
+    # ---- F 自动释放检测：看门狗超时(不经 force_spit)→FSM 回 idle 坠落 ----
+    ev2 = []
+    lock2 = FakeLock()  # 复用类：active 手控
+    pr3 = ProactiveScheduler(
+        store=st, bubble_fn=bubbles.append, idle_fn=lambda: 999.0,
+        client=None, cfg={"sedentary_min": 0.01, "quiet_hours": [3, 3]},
+        mouse_lock=lock2, fsm_event_fn=ev2.append,
+    )
+    pr3.eat_mouse(5.0)          # pending
+    pr3.eat_mouse_arrived()     # 锁 active
+    check("F1 到达后锁 active 且只发一次 eat_mouse",
+          ev2 == ["eat_mouse"] and lock2.active)
+    # 模拟看门狗超时：mouse_lock 内部直接释放（不经 force_spit）
+    lock2.active = False
+    pr3.eat_mouse_tick()        # 释放检测
+    check("F2 自动释放→补发 eat_mouse_off", "eat_mouse_off" in ev2)
+    # FSM 全链路：EAT_MOUSE → off → 坠落
+    f3 = BehaviorFSM(dict(WA))
+    f3._pos = (500.0, 1000.0)
+    f3.handle_event("eat_mouse")
+    for _ in range(120):
+        a = f3.step(PetState.default(), sen, 0.05)
+        if a.type == ActionType.EAT_MOUSE:
+            break
+    f3.handle_event("eat_mouse_off")
+    a = f3.step(PetState.default(), sen, 0.05)
+    fell = False
+    for _ in range(100):
+        a = f3.step(PetState.default(), sen, 0.05)
+        if f3.mode in ("fall", "idle") and f3.pos[1] > 1000:
+            fell = True
+            break
+    check("F3 释放后宠物正常坠落(不悬空)", fell)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 
