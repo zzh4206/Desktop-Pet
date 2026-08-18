@@ -24,14 +24,30 @@
     "pet_height_px": 64
   },
   "proactive": {
-    "quiet_hours": [23, 8],
-    "sedentary_min": 0.2,
-    "sedentary_cooldown_min": 0.1,
-    "eat_mouse_duration_s": 6,
-    "idle_threshold_min": 0.1,
+    "quiet_hours": [
+      23,
+      8
+    ],
+    "sedentary_min": 45,
+    "sedentary_cooldown_min": 30,
+    "eat_mouse_duration_s": 10,
+    "idle_threshold_min": 5,
     "dnd": false,
-    "video_apps": ["IINA", "QuickTime Player", "VLC", "Safari", "Google Chrome", "Firefox", "Microsoft Edge", "Brave Browser", "Arc"],
-    "eat_mouse_gain": {"fullness": 5, "mood": 3}
+    "video_apps": [
+      "IINA",
+      "QuickTime Player",
+      "VLC",
+      "Safari",
+      "Google Chrome",
+      "Firefox",
+      "Microsoft Edge",
+      "Brave Browser",
+      "Arc"
+    ],
+    "eat_mouse_gain": {
+      "fullness": 5,
+      "mood": 3
+    }
   },
   "decay_per_hour": {
     "mood": 2,
