@@ -460,6 +460,42 @@ elif sys.platform == "win32":
                     pass
             sensor_win.set_own_hwnds(ids)
 
+        # ---- v0.7：吃鼠标（mouse_lock_win，W2 Spike 落地） ----
+        def get_mouse_lock(self):
+            from . import mouse_lock_win
+
+            return mouse_lock_win.get_mouse_lock_win()
+
+        def start_mouse_lock(self, duration_s: float) -> bool:
+            return self.get_mouse_lock().start(duration_s)
+
+        def stop_mouse_lock(self) -> None:
+            self.get_mouse_lock().force_spit()
+
+        def is_mouse_locked(self) -> bool:
+            return self.get_mouse_lock().active
+
+        def is_accessibility_trusted(self) -> bool:
+            # win 无 Accessibility 概念：钩子/热键/剪贴板均无需特权 → 恒真
+            return True
+
+        def prompt_accessibility(self) -> None:
+            # no-op（win 无辅助功能授权流程；UIPI 提升窗口降级已在
+            # MouseLockWin.start 内处理为返回 False 走气泡路径）
+            pass
+
+        def is_active_content(self, video_apps) -> bool:
+            # 活跃内容检测：前台进程名 ∈ 视频白名单（复用 v0.3 全屏检测的
+            # 进程名管道；None apps → False）
+            if not video_apps:
+                return False
+            fs, name = sensor_win.foreground_fullscreen()
+            if not name:
+                return False
+            return name.upper() in {
+                str(a).upper() for a in video_apps
+            }
+
         # ---- v0.4：DS key 存 Windows 凭据管理器 / 危险确认 Qt 对话框 ----
         def get_ds_key(self) -> str | None:
             """凭据管理器（keyring）优先 → env DEEPSEEK_API_KEY 兜底 → None。

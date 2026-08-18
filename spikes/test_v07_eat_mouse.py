@@ -36,6 +36,12 @@ def check(name, cond):
 # =====================================================================
 
 def section_structural() -> None:
+    # 平台守卫（v0.7 win 适配）：A1-A5 mac 专属（Quartz/mouse_lock_mac），
+    # win 跳过本节——win 侧等价检查在 test_v07_eat_mouse_win.py
+    import sys as _sys
+    if _sys.platform != "darwin":
+        print("  ⏭ A1-A5 mac 专属，win 跳过（win 侧见 test_v07_eat_mouse_win.py）")
+        return
     import pet.mouse_lock_mac as m
 
     # A1 符号可用
