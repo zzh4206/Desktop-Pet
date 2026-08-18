@@ -153,9 +153,14 @@ def section_gates() -> None:
     store = s._store
     before = store.get().fullness
     s.eat_mouse(10)
+    # v0.7.3 两段式（win 主笔，mac 同步）：门禁过 → 发 approach 事件 +
+    # pending（未抑制）；FSM 奔到光标（eat_mouse_arrived）才抑制+回血
+    check("G2 全过 → 先发事件暂不抑制(pending)", evs == ["eat_mouse"]
+          and lock.starts == 0 and s._eat_pending is not None)
+    s.eat_mouse_arrived()
     after = store.get().fullness
-    check("G2 全过 → 抑制（starts=1, active）", lock.starts == 1 and lock.active)
-    check("G2 发 FSM eat_mouse 事件", evs == ["eat_mouse"])
+    check("G2 到达 → 抑制（starts=1, active）",
+          lock.starts == 1 and lock.active)
     check("G2 回血 +饱食", after - before == 7)
 
     # G3 DND → 不抑制（铁律4）

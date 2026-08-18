@@ -106,6 +106,90 @@ def main() -> int:
     time.sleep(0.8)
     check("D2 清理完成", lk4.active is False)
 
+    # ---- E 两段式：先直线奔向光标，到达才 EAT_MOUSE ----
+    from pet.behavior import BehaviorFSM, Sensors, ActionType
+    from pet.pet_state import PetState, PetStateStore
+    from pet.proactive import ProactiveScheduler
+
+    WA = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+    f = BehaviorFSM(dict(WA))
+    f._pos = (500.0, 1000.0)
+    f.handle_event("eat_mouse")
+    sen = Sensors(mouse_pos=(900, 300), work_area=dict(WA), windows=[])
+    moved = False
+    arrived = False
+    for _ in range(200):
+        a = f.step(PetState.default(), sen, 0.05)
+        if a.type == ActionType.MOVE_TO:
+            moved = True
+        if a.type == ActionType.EAT_MOUSE:
+            arrived = True
+            break
+    check("E1 直线奔向光标(有位移)", moved)
+    check("E2 到达后转 EAT_MOUSE", arrived and f.mode == "eat_mouse"
+          and abs(f.pos[0] - 900) <= 10 and abs(f.pos[1] - 300) <= 10)
+
+    # E3 追赶超时：光标持续移动远端 → 5s 放弃就地开吃
+    f2 = BehaviorFSM(dict(WA))
+    f2._pos = (100.0, 1000.0)
+    f2.handle_event("eat_mouse")
+    gave_up = False
+    import time as _t
+    for i in range(200):
+        far = Sensors(mouse_pos=(1800, 100 + i * 30),
+                      work_area=dict(WA), windows=[])
+        a = f2.step(PetState.default(), far, 0.05)
+        if a.type == ActionType.EAT_MOUSE:
+            gave_up = True
+            break
+        if i == 100:  # 快进无真实时间流逝 → 回拨 t0 模拟已追 5s
+            f2._eat_approach_t0 = _t.monotonic() - 6.0
+    check("E3 光标持续远移 5s 放弃就地开吃", gave_up)
+
+    # E4 两段式调度：门禁过 → pending 不抑制；arrived → 抑制+回血
+    bubbles = []
+    locked = {"v": False}
+
+    class FakeLock:
+        active = False
+
+        def start(self, d):
+            locked["v"] = True
+            self.active = True
+            return True
+
+        def force_spit(self):
+            self.active = False
+
+    st = PetStateStore(PetState.default())
+    full0 = st.get().fullness
+    ev = []
+    pr = ProactiveScheduler(
+        store=st, bubble_fn=bubbles.append, idle_fn=lambda: 999.0,
+        client=None, cfg={"sedentary_min": 0.01,
+                          "quiet_hours": [3, 3]},
+        mouse_lock=FakeLock(),
+        fsm_event_fn=ev.append,
+    )
+    pr.eat_mouse(5.0)
+    check("E4 门禁过→事件发出但未抑制(两段式)", ev == ["eat_mouse"]
+          and locked["v"] is False and pr._eat_pending is not None)
+    pr.eat_mouse_arrived()
+    check("E4 到达→抑制+回血", locked["v"] is True
+          and st.get().fullness > full0)
+    check("E4 热键文案(win)", "Ctrl+Alt+T" in bubbles[-1])
+
+    # E5 兜底：FSM 链路挂了 → 6s 后 tick 强制开吃
+    pr2 = ProactiveScheduler(
+        store=st, bubble_fn=bubbles.append, idle_fn=lambda: 999.0,
+        client=None, cfg={"sedentary_min": 0.01, "quiet_hours": [3, 3]},
+        mouse_lock=FakeLock(), fsm_event_fn=ev.append,
+    )
+    locked["v"] = False
+    pr2._eat_pending = (5.0, pr2._now() - 1)   # 已过期
+    pr2.eat_mouse_tick()
+    check("E5 approach 超时兜底开吃", locked["v"] is True)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

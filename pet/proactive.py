@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import sys
 import re
 import time
 from collections import deque
@@ -173,6 +174,13 @@ class ProactiveScheduler:
         )
 
         self._next_wake_at: float | None = None      # 链式唤醒时间戳
+        # v0.7.3 两段式吃鼠标：门禁过 → 发 approach 事件 + 记 pending；
+        # FSM 到达（EAT_MOUSE action→app 调 eat_mouse_arrived）或超时
+        # （eat_mouse_tick 兜底）才真正抑制+气泡+回血
+        self._eat_pending: tuple | None = None   # (duration_s, deadline_ts)
+        self._eat_hotkey = c.get("eat_mouse_hotkey_label") or (
+            "Ctrl+Alt+T" if sys.platform == "win32" else "⌘⌥T"
+        )
         self._wake_worker = None                     # 异步决策 worker（v0.6.2）
         self._wake_ctx_pending: dict | None = None   # 决策中的 ctx（worker 返回后用）
         self._followups: deque = deque()             # [(when, msg)]（保序，poll 取左端）
@@ -258,28 +266,60 @@ class ProactiveScheduler:
                         _log.warning("[吃鼠标] 引导辅助功能设置异常",
                                      exc_info=True)
                 return sess
-        # 全门禁通过 → 抑制 + FSM EAT_MOUSE + 回血
+        # 全门禁通过 → 两段式：先直线奔向光标（FSM EAT_APPROACH），
+        # 到达（eat_mouse_arrived）或 6s 兜底（eat_mouse_tick）才抑制
+        self._eat_pending = (duration_s, self._now() + 6.0)
+        if self._fsm_event_fn is not None:
+            try:
+                self._fsm_event_fn("eat_mouse")
+            except Exception:
+                _log.warning("[吃鼠标] approach 事件派发异常，直接抑制",
+                             exc_info=True)
+                self.eat_mouse_arrived()  # 无 FSM → 退化为立即抑制
+        else:
+            self.eat_mouse_arrived()
+
+    def eat_mouse_arrived(self) -> None:
+        """FSM 到达光标 → 真正抑制 + 气泡 + 回血（幂等：无 pending no-op）。"""
+        if self._eat_pending is None:
+            return
+        duration_s, _dl = self._eat_pending
+        self._eat_pending = None
+        sess = self._eat_session
         sess.start(duration_s)
         if sess.active:
             self._emit_bubble(
-                "帮你管住小鼠标休息一下～吐出按 ⌘⌥T 或点托盘", self._now()
+                "帮你管住小鼠标休息一下～吐出按 "
+                + self._eat_hotkey + " 或点托盘", self._now()
             )
-            # 养成回血（§七 +饱食/+心情）
             if self._eat_gain:
                 try:
                     self._store.update(**self._eat_gain)
                 except Exception:
                     _log.warning("[吃鼠标] 养成回血异常", exc_info=True)
         else:
-            # tap 创建失败（权限被拒/系统拒绝）→ 不抑制，提示
+            # tap 创建失败（权限被拒/UIPI 系统拒绝）→ 不抑制，提示
             self._emit_bubble("没管住鼠标（权限或系统拒绝），先气泡提醒～",
                               self._now())
-        return sess
 
     def force_spit(self) -> None:
         """强制吐出（托盘菜单调；热键/shutdown 经 mouse_lock/EatMouseSession
-        同样路径）。无 mouse_lock → 无操作。"""
+        同样路径）。无 mouse_lock → 无操作。含清 approach pending。"""
+        self._eat_pending = None  # 追赶中吐出：不再启动抑制
         self._eat_session.force_spit()
+
+    def eat_mouse_tick(self) -> None:
+        """app 每 tick 调（廉价）：approach 超时兜底 → 到点强制开吃。
+
+        用户持续移动光标致 FSM 5s 放弃，或 FSM 事件链路异常时，
+        pending 6s deadline 到 → eat_mouse_arrived（FSM 的 _EAT_MOUSE
+        态冻结在当前位置，视觉即"在光标处吃"）。
+        """
+        if self._eat_pending is None:
+            return
+        if self._now() >= self._eat_pending[1]:
+            _log.warning("[吃鼠标] approach 超时兜底，就地开吃")
+            self.eat_mouse_arrived()
 
     def _dnd_active(self) -> bool:
         """勿扰/专注模式是否生效（铁律4）。config ``proactive.dnd`` 手动

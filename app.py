@@ -75,7 +75,7 @@ from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
 
-APP_VERSION = "v0.7.1+win"
+APP_VERSION = "v0.7.3+win"
 
 _SAVE_DEBOUNCE_MS = 500       # 变更后 500ms 内多次只存一次
 _SAVE_PERIODIC_MS = 30_000    # 定时存档
@@ -563,6 +563,16 @@ class PetApp:
         action = self.fsm.step(self.store.get(), self.sensors, 0.05)
         if action.type == ActionType.ANIMATE and action.params.get("name"):
             self._play_animate(action.params["name"])
+        # v0.7.3 两段式吃鼠标：FSM 奔到光标（EAT_APPROACH→EAT_MOUSE 转换）
+        # 才真正启动抑制；eat_mouse_tick 处理追赶超时兜底
+        mode = self.fsm.mode
+        if mode == "eat_mouse" and getattr(self, "_fsm_last_mode", "")                 != "eat_mouse":
+            self._proactive.eat_mouse_arrived()
+        self._fsm_last_mode = mode
+        try:
+            self._proactive.eat_mouse_tick()
+        except Exception:
+            pass
         # 无条件按 FSM.pos 同步窗口位置：MOVE_TO/FALL 之外还有**静默位移**
         # （骑乘跟随移动窗口发生在 IDLE，step 返回 ANIMATE）——只听 action
         # 会漏掉这类位移，视觉上宠物悬空在旧高度。Qt 同坐标 move 是 no-op，

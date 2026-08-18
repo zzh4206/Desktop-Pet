@@ -71,6 +71,9 @@ _FALL = "fall"
 _THROWN = "thrown"
 _CLIMB = "climb"   # 抛掷撞窗口侧面 → 沿边攀爬到顶（v0.3.5）
 _EAT_MOUSE = "eat_mouse"  # v0.7 吃鼠标态：冻结（不出 WANDER/物理），咀嚼
+_EAT_APPROACH = "eat_approach"  # v0.7.3：先直线奔向光标，到达才开吃
+_EAT_APPROACH_TIMEOUT_S = 5.0   # 追赶兜底（用户持续移动光标时防无限追）
+_EAT_APPROACH_ARRIVE_PX = 10.0
 
 # 物理常量（进 config 可后续提取；v0.3 先合理默认）
 _GRAVITY = 3500.0          # px/s²（v0.3.22：2000 太飘，屏顶落底 1s+ 被感知为吸附）
@@ -117,6 +120,7 @@ class BehaviorFSM:
         self._vy = 0.0
         self._windows: list[dict] = []
         self._follow = False
+        self._eat_approach_t0 = 0.0
         self._suppressed = False   # 全屏：暂停 WANDER（不出新目标）
         self._anim_left = random.uniform(_ANIM_MIN_S, _ANIM_MAX_S)
         self._drag_hist: deque = deque()  # (t, x, y) release 初速度估算
@@ -336,12 +340,14 @@ class BehaviorFSM:
             # v0.7：进吃鼠标态——冻结（不出 WANDER/物理，咀嚼 emoji 占位），
             # 速度清零防残留惯性；不收敛位置（就地冻结吃鼠标）。
             # 全屏中吃鼠标罕见，但若发生也置 suppressed 保一致。
-            self._mode = _EAT_MOUSE
+            self._mode = _EAT_APPROACH
+            self._eat_approach_t0 = time.monotonic()
+            self._stand_win = None
             self._vx = self._vy = 0.0
             self._follow = False
         elif event == "eat_mouse_off":
             # 吐出/释放 → 回 idle（原 EAT_MOUSE 才有意义；非此态 no-op）
-            if self._mode == _EAT_MOUSE:
+            if self._mode in (_EAT_MOUSE, _EAT_APPROACH):
                 self._mode = _IDLE
                 self._idle_left = self._new_idle()
 
@@ -423,6 +429,7 @@ class BehaviorFSM:
         if sensors.work_area:
             self._work_area = sensors.work_area
         self._windows = sensors.windows or []
+        self._last_mouse_pos = sensors.mouse_pos or self._pos
         self._solid_at = sensors.solid_at
         self._alive_at = sensors.alive_at
         self._rect_at = sensors.rect_at
@@ -443,6 +450,9 @@ class BehaviorFSM:
         # v0.7 吃鼠标态：冻结——不出 WANDER/物理/攀爬，就地咀嚼。
         # 返回 EAT_MOUSE action（app 仅按 fsm.pos 同步窗位=不动；
         # 咀嚼动画为 v0.7 占位，留 provider/动画 v0.7.1+ 精修）
+        if self._mode == _EAT_APPROACH:
+            return self._step_eat_approach(dt)
+
         if self._mode == _EAT_MOUSE:
             return Action(ActionType.EAT_MOUSE, {"pos": self._pos})
 
@@ -636,6 +646,31 @@ class BehaviorFSM:
             if self._alive(w) and self._solid_point(x, w["y"] + 5, w):
                 return max(w["y"], self._work_area["y"])
         return floor
+
+    def _step_eat_approach(self, dt: float) -> Action:
+        """直线奔向光标（跟随速度，无视表面——追光标不必贴地）。
+
+        到达（<10px）或超时 5s（用户持续移动光标防无限追）→ 进 EAT_MOUSE，
+        返回 EAT_MOUSE action（app 据此才真正启动抑制——抑制始于到达，
+        而非事件瞬间）。
+        """
+        # 目标 = 最近一次 step 的 sensors.mouse_pos（每 tick 实时刷新）
+        mp = self._last_mouse_pos
+        if not mp:
+            mp = self._pos
+        dx, dy = mp[0] - self._pos[0], mp[1] - self._pos[1]
+        dist = (dx * dx + dy * dy) ** 0.5
+        timed_out = (time.monotonic() - self._eat_approach_t0
+                     >= _EAT_APPROACH_TIMEOUT_S)
+        if dist <= _EAT_APPROACH_ARRIVE_PX or timed_out:
+            self._mode = _EAT_MOUSE
+            return Action(ActionType.EAT_MOUSE, {"pos": self._pos})
+        step = min(dist, self._follow_speed * dt)
+        self._pos = (
+            self._pos[0] + dx / dist * step,
+            self._pos[1] + dy / dist * step,
+        )
+        return Action(ActionType.MOVE_TO, {"pos": self._pos})
 
     def _step_air(self, dt: float) -> Action:
         """FALL/THROWN 共用：重力积分 + 窗侧扫掠攀爬 + 落地弹跳 + 边界。"""
