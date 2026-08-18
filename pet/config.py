@@ -54,6 +54,11 @@ _SAFE_DEFAULTS: dict[str, dict] = {
         "quiet_hours": [23, 8],
         "sedentary_min": 45,
         "sedentary_cooldown_min": 30,
+        "idle_threshold_min": 5,
+        "eat_mouse_duration_s": 10,
+        "dnd": False,
+        "video_apps": [],
+        "eat_mouse_gain": {"fullness": 5, "mood": 3},
     },
 }
 
@@ -133,9 +138,31 @@ _SECTION_SCHEMAS: dict[str, dict] = {
                 "minItems": 2,
                 "maxItems": 2,
             },
-            "sedentary_min": {"type": "number", "minimum": 1, "maximum": 480},
-            "sedentary_cooldown_min": {"type": "number", "minimum": 1, "maximum": 480},
+            # 最小 0.01min(0.6s)：测试需亚分钟阈值；example 的 0.1 也合法
+            "sedentary_min": {"type": "number", "minimum": 0.01,
+                              "maximum": 480},
+            "sedentary_cooldown_min": {"type": "number", "minimum": 0.01,
+                                       "maximum": 480},
             "festivals": {"type": "object"},
+            # v0.7 键（此前 schema 漏配，additionalProperties:false 致整段
+            # 回退默认——久坐 45min 永不触发，吃鼠标测试无门）
+            "idle_threshold_min": {"type": "number", "minimum": 0.01,
+                                   "maximum": 480},
+            "eat_mouse_duration_s": {"type": "number", "minimum": 0.3,
+                                     "maximum": 15},
+            "dnd": {"type": "boolean"},
+            "video_apps": {"type": "array",
+                           "items": {"type": "string"}},
+            "eat_mouse_gain": {
+                "type": "object",
+                "properties": {
+                    "fullness": {"type": "number", "minimum": -100,
+                                 "maximum": 100},
+                    "mood": {"type": "number", "minimum": -100,
+                             "maximum": 100},
+                },
+                "additionalProperties": False,
+            },
         },
         "additionalProperties": False,
     },
