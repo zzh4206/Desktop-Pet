@@ -149,6 +149,11 @@ class PetApp:
         self.window.followToggleRequested.connect(
             lambda: self._fsm_event("follow_toggle")
         )
+        # v0.8 权限自检页：宠物右键"设置"唤出（win 运行时自检）
+        self.window.settingsRequested.connect(self._show_perm)
+        self._perm_window = None
+        self._perm_engine = None
+        self._perm_bridge = None
         # v0.3 气泡跟随宠物（§2.4 头顶 20px / 靠顶翻下）
         self.window.petMoved.connect(self._on_pet_moved)
 
@@ -356,6 +361,20 @@ class PetApp:
 
                 self._proactive.follow_up(msg, _t.time() + 30 * 60)
                 break
+
+    def _show_perm(self) -> None:
+        """v0.8 权限自检页（win：运行时能力自检；右键"设置"唤出）。"""
+        if self._perm_window is None:
+            from pet.ui.perm_bridge import load_perm_panel
+
+            self._perm_engine, self._perm_window, self._perm_bridge =                 load_perm_panel(self.adapter)
+        if self._perm_window is None:
+            self.bubble.show("权限页加载失败～", anchor=self._pet_anchor())
+            return
+        self._perm_bridge.refresh()   # 每次唤出即复检（§十二 聚焦刷新）
+        self._perm_window.show()
+        self._perm_window.raise_()
+        self._perm_window.requestActivate()
 
     def _show_chat(self) -> None:
         """托盘'聊天'唤出面板（v0.11 真全局热键占位）。
