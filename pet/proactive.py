@@ -252,6 +252,12 @@ class ProactiveScheduler:
             idle_s = 0.0
         if idle_s < self._eat_idle_min * 60.0:
             return sess
+        # 长时间挂机降级（v0.8.2，浸泡测试拍板）：空闲 ≥2h = 人已离开
+        # （下班/通宵），吃鼠标退化为纯气泡（久坐 topic 已发），不再抑制
+        # ——防夜间每 30min 循环咬鼠标的噪音。真久坐（5min~2h）照常吃。
+        if idle_s >= 2 * 3600.0:
+            _log.info("[吃鼠标] 空闲≥2h(挂机态)，降级为气泡不抑制")
+            return sess
         # 铁律4 DND：专注/勿扰 → 不吃；DND 期间若已在吃 → 吐出
         if self._dnd_active():
             sess.on_dnd_active()

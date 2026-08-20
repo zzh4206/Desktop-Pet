@@ -224,6 +224,18 @@ def main() -> int:
             break
     check("F3 释放后宠物正常坠落(不悬空)", fell)
 
+    # ---- G 挂机降级：空闲≥2h 只气泡不抑制（v0.8.2 浸泡拍板） ----
+    ev3 = []
+    pr4 = ProactiveScheduler(
+        store=st, bubble_fn=bubbles.append, idle_fn=lambda: 3 * 3600.0,
+        client=None, cfg={"sedentary_min": 0.01, "quiet_hours": [3, 3]},
+        mouse_lock=FakeLock(), fsm_event_fn=ev3.append,
+    )
+    pr4.eat_mouse(5.0)
+    check("G1 空闲3h 挂机态不抑制(无事件无pending)",
+          ev3 == [] and locked is not None and not FakeLockInstance.active
+          if False else (ev3 == [] and pr4._eat_pending is None))
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 
