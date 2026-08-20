@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Protocol
 
 import requests
 from PySide6.QtCore import QThread, Signal, Slot
@@ -73,13 +73,25 @@ def _tool_result_message(tool_call_id: str, content: str) -> dict:
     return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
 
 
-class DeepSeekClient:
-    """DS 客户端 + function calling + usage + 降级。
+class LLMClient(Protocol):
+    """LLM provider 抽象——各 provider（DeepSeek/Claude/OpenAI）实现此接口。
+    app/ChatWorker 只接 LLMClient，不知具体 provider。"""
 
-    ``run_stream``：单次 DS 调用（流式），返回 (text, tool_calls, usage)，
-    并逐 delta 回调。``chat_once``：跑一轮 agent loop（DS→tool→DS 续回复），
+    usage: "Usage"
+
+    def chat_once(self, history, ctx, on_delta=None) -> tuple:
+        """跑一轮 agent loop → (text, appended_turns)。各 provider 实现差异
+        封装在内部（endpoint/tool 格式/SSE 解析）。"""
+        ...
+
+
+class OpenAICompatibleClient(LLMClient):
+    """OpenAI 兼容格式客户端（/chat/completions + tools + SSE delta）。
+
+    DeepSeek / OpenAI / 中转站 都用此格式——只是 base_url/model 不同。
+    ``chat_once``：跑一轮 agent loop（LLM→tool→LLM 续回复），
     内部循环 ``_MAX_TOOL_ROUNDS`` 次封顶。
-    """
+    Claude 需单独 ClaudeClient（/messages 格式不同）。"""
 
     _MAX_TOOL_ROUNDS = 4
 
@@ -317,12 +329,21 @@ class DeepSeekClient:
         return text, appended
 
 
+class DeepSeekClient(OpenAICompatibleClient):
+    """兼容别名——v0.4.15 前叫 DeepSeekClient，现泛化为 OpenAICompatibleClient。
+    保留此类名兼容旧引用，实际逻辑在父类。"""
+
+    def __init__(self, api_key, registry, base_url=DS_BASE_URL, model=DS_MODEL, **kw):
+        super().__init__(api_key, registry, base_url, model, **kw)
+
+
 class ChatWorker(QThread):
-    """DS 请求后台线程——流式 delta 经信号回主线程，不阻塞 _tick。
+    """LLM 请求后台线程——流式 delta 经信号回主线程，不阻塞 _tick。
 
     信号：``delta``（增量文本）/``tool_started``(name)/``done``(完整回合追加
     轮次列表)/``offline``/``failed``(降级预设回复文本)。
     ``cancel()`` 中断流式（关面板调，见 T15）。
+    v0.4.15：接 LLMClient（不再硬编码 DeepSeekClient），支持多 provider。
     """
 
     delta = Signal(str)
@@ -333,7 +354,7 @@ class ChatWorker(QThread):
 
     def __init__(
         self,
-        client: DeepSeekClient,
+        client: LLMClient,
         history: list[ChatTurn],
         user_text: str,
         ctx,
@@ -392,3 +413,19 @@ class ChatWorker(QThread):
     def _emit_delta(self, text: str) -> None:
         if not self._cancelled:
             self.delta.emit(text)
+
+
+# ---- v0.4.15 多 provider 工厂 ----
+
+def create_client(provider: str, api_key: str, registry, cfg: dict) -> LLMClient:
+    """按 provider 名实例化 LLMClient。cfg 含 `llm.providers.{provider}` 段
+    （model/base_url/api_key_env）。OpenAI 兼容格式（DS/OpenAI/中转站）都走
+    OpenAICompatibleClient；Claude 走 ClaudeClient（待加）。"""
+    providers_cfg = cfg.get("llm", {}).get("providers", {})
+    pcfg = providers_cfg.get(provider, {})
+    base_url = pcfg.get("base_url", DS_BASE_URL)
+    model = pcfg.get("model", DS_MODEL)
+    if provider == "claude":
+        raise NotImplementedError("ClaudeClient 待加（/messages 格式，首批只 OpenAI 兼容）")
+    # deepseek / openai / 任何 OpenAI 兼容中转站 → 同一 Client
+    return OpenAICompatibleClient(api_key, registry, base_url=base_url, model=model)

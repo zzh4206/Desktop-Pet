@@ -69,7 +69,7 @@ from pet.behavior import ActionType, BehaviorFSM
 from pet.bubble import BubbleType, BubbleWidget
 from pet.config import load_config
 from pet.logging_setup import setup_logging
-from pet.llm import DeepSeekClient
+from pet.llm import create_client  # v0.4.15 工厂（不再硬编码 DeepSeekClient）
 from pet.pet_state import PetStateStore, Stage
 from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
@@ -256,25 +256,45 @@ class PetApp:
 
     # ---- v0.4 聊天 ----
     def _setup_chat(self) -> None:
-        """DS key 引导 + 客户端 + 工具注册表 + QML 面板。
+        """v0.4.15 多 provider：扫描已注入 key 的 provider → 弹选（多个时）
+        → create_client 工厂实例化 → 工具注册表 + QML 面板。
 
-        无 key → 气泡提示首次引导（QInputDialog）；仍无 key/env → 聊天禁用，
-        宠物仍跑（T8 离线/无 key 不阻塞）。ToolRegistry 只注册 open_app（v0.4），
-        confirm_fn 经 platform 注入（NSAlert，open_app 不危险不触发）。
-        """
-        api_key = self._ensure_ds_key()
-        if not api_key:
-            self.logger.warning("DS key 未设置，聊天禁用（宠物仍跑）")
-            QTimer.singleShot(
-                1500,
-                lambda: self.bubble.show(
-                    "还没设置 DS key，聊天暂时不可用～",
-                    anchor=self._pet_anchor(),
-                ),
-            )
-            return
+        无 key → 气泡提示首次引导（QInputDialog）；仍无 key → 聊天禁用，宠物仍跑。
+        目前只 deepseek（首批验证中间层）；后续加 claude/openai 只在 create_client
+        工厂加分支 + config providers 段加条目。"""
+        providers_cfg = self.cfg.get("llm", {}).get("providers", {})
+        # 扫描已注入 key 的 provider（Keychain + env）
+        available = []
+        for name, pcfg in providers_cfg.items():
+            env_var = pcfg.get("api_key_env", "")
+            key = self.adapter.get_llm_key(name, env_var)
+            if key:
+                available.append((name, key))
 
-        # 工具注册表：mac open_app（v0.4）；confirm 经 platform 注入（NSAlert）
+        if not available:
+            # 首次引导：默认 deepseek（config 里有的第一个）
+            default_name = next(iter(providers_cfg), "deepseek")
+            default_env = providers_cfg.get(default_name, {}).get("api_key_env", "DEEPSEEK_API_KEY")
+            key = self._ensure_llm_key(default_name, default_env)
+            if not key:
+                self.logger.warning("LLM key 未设置，聊天禁用（宠物仍跑）")
+                QTimer.singleShot(
+                    1500,
+                    lambda: self.bubble.show(
+                        "还没设置 API key，聊天暂时不可用～",
+                        anchor=self._pet_anchor(),
+                    ),
+                )
+                return
+            available = [(default_name, key)]
+
+        # 多 provider 时弹选（每次启动都弹）
+        if len(available) == 1:
+            selected, key = available[0]
+        else:
+            selected, key = self._select_provider(available)
+
+        # 工具注册表
         registry = ToolRegistry(confirm_fn=self.adapter.confirm_dangerous)
         if sys.platform == "darwin":
             from pet.tools_mac import build_mac_tools
@@ -287,26 +307,49 @@ class PetApp:
             for schema, handler in build_win_tools():
                 registry.register(schema, handler)
 
-        self._chat_client = DeepSeekClient(api_key, registry)
+        # v0.4.15 工厂实例化（不再硬编码 DeepSeekClient）
+        from pet.llm import create_client
+
+        self._chat_client = create_client(selected, key, registry, self.cfg)
+        self.logger.info("LLM provider: %s", selected)
         self._build_chat_panel(registry)
 
-    def _ensure_ds_key(self) -> str | None:
-        """首次启动 key 引导：platform.get_ds_key() 都无 → QInputDialog
-        输入 → platform.set_ds_key() 存 Keychain。仍无 → 返 None（聊天禁用）。"""
-        key = self.adapter.get_ds_key()
+    def _select_provider(self, available) -> tuple:
+        """QInputDialog 下拉选 provider（每次启动多个时弹）。返 (name, key)。"""
+        from PySide6.QtWidgets import QInputDialog
+
+        names = [n for n, _ in available]
+        choice, ok = QInputDialog.getItem(
+            None,
+            "选择 LLM Provider",
+            "选择本次使用的 AI 模型：",
+            names,
+            0,
+            False,
+        )
+        if ok and choice:
+            for n, k in available:
+                if n == choice:
+                    return (n, k)
+        return available[0]
+
+    def _ensure_llm_key(self, provider: str, env_var: str) -> str | None:
+        """首次启动 key 引导：platform.get_llm_key() 都无 → QInputDialog
+        输入 → platform.set_llm_key() 存 Keychain。仍无 → None。"""
+        key = self.adapter.get_llm_key(provider, env_var)
         if key:
             return key
         from PySide6.QtWidgets import QInputDialog
 
         text, ok = QInputDialog.getText(
             None,
-            "设置 DeepSeek API Key",
-            "请输入 DeepSeek API Key（存入系统密钥库，不写明文文件）：",
+            f"设置 {provider} API Key",
+            f"请输入 {provider} API Key（存入系统密钥库，不写明文文件）：",
         )
         text = (text or "").strip()
         if ok and text:
-            self.adapter.set_ds_key(text)
-            return self.adapter.get_ds_key() or text
+            self.adapter.set_llm_key(provider, text)
+            return self.adapter.get_llm_key(provider, env_var) or text
         return None
 
     def _build_chat_panel(self, registry) -> None:

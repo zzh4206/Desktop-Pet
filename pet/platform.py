@@ -103,12 +103,23 @@ class PlatformAdapter:
 
     # ---- v0.4 DS key + 危险确认（平台密钥库/原生对话框，经此注入） ----
     def get_ds_key(self) -> str | None:
-        """DS API key：平台密钥库优先，env ``DEEPSEEK_API_KEY`` 兜底。
+        """DS API key（v0.4 单 provider 遗留，兼容旧调用）。v0.4.15 起走
+        get_llm_key("deepseek", "DEEPSEEK_API_KEY")。"""
+        return self.get_llm_key("deepseek", "DEEPSEEK_API_KEY")
 
-        都无→返 None（app 触发首次引导）。**不入 config.json 明文**。
-        基类返回 env 兜底（无密钥库概念），mac/win 覆盖。
-        """
-        return os.environ.get("DEEPSEEK_API_KEY") or None
+    def set_ds_key(self, key: str) -> None:
+        """存 DS key（兼容旧调用）。v0.4.15 走 set_llm_key("deepseek", key)。"""
+        self.set_llm_key("deepseek", key)
+
+    # ---- v0.4.15 多 provider key（按 provider 名存取 Keychain） ----
+    def get_llm_key(self, provider: str, env_var: str) -> str | None:
+        """LLM API key：平台密钥库优先（按 provider 名），env 兜底 → None。
+        基类只 env 兜底（无密钥库）；mac/win 覆盖用 keyring。"""
+        return os.environ.get(env_var) or None
+
+    def set_llm_key(self, provider: str, key: str) -> None:
+        """存 provider key 到平台密钥库。基类 no-op（无密钥库）。"""
+        pass
 
     def set_ds_key(self, key: str) -> None:
         """存入平台密钥库。基类 no-op（无密钥库概念时调用方应自行降级）。"""
@@ -327,35 +338,40 @@ if sys.platform == "darwin":
 
         # ---- v0.4：DS key 存 Keychain / 危险确认 NSAlert ----
         def get_ds_key(self) -> str | None:
-            """Keychain（keyring）优先 → env ``DEEPSEEK_API_KEY`` 兜底 → None。
-
-            不入 config.json 明文。keyring 失败（Keychain 损坏/无授权）时
-            静默回退 env + 日志，不崩。
-            """
-            try:
-                import keyring
-
-                key = keyring.get_password("Desktop-Pet", "ds_api_key")
-                if key:
-                    return key
-            except Exception as exc:  # Keychain 未解锁/后端不可用
-                import logging
-
-                logging.getLogger("pet").warning(
-                    "Keychain 读取 DS key 失败，回退 env: %s", exc
-                )
-            return os.environ.get("DEEPSEEK_API_KEY") or None
+            return self.get_llm_key("deepseek", "DEEPSEEK_API_KEY")
 
         def set_ds_key(self, key: str) -> None:
-            """存 Keychain。失败不崩（调用方 next get_ds_key 取 env 兜底）。"""
+            self.set_llm_key("deepseek", key)
+
+        # ---- v0.4.15 多 provider key（Keychain 按 provider 名存取） ----
+        def get_llm_key(self, provider: str, env_var: str) -> str | None:
+            """Keychain 优先（按 provider 名）→ env 兜底 → None。"""
             try:
                 import keyring
 
-                keyring.set_password("Desktop-Pet", "ds_api_key", key)
+                key = keyring.get_password("Desktop-Pet", f"{provider}_api_key")
+                if key:
+                    return key
             except Exception as exc:
                 import logging
 
-                logging.getLogger("pet").warning("Keychain 存 DS key 失败: %s", exc)
+                logging.getLogger("pet").warning(
+                    "Keychain 读取 %s key 失败，回退 env: %s", provider, exc
+                )
+            return os.environ.get(env_var) or None
+
+        def set_llm_key(self, provider: str, key: str) -> None:
+            """存 Keychain。失败不崩（调用方 get_llm_key 取 env 兜底）。"""
+            try:
+                import keyring
+
+                keyring.set_password("Desktop-Pet", f"{provider}_api_key", key)
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("pet").warning(
+                    "Keychain 存 %s key 失败: %s", provider, exc
+                )
 
         def confirm_dangerous(
             self, title: str, command: str, risk: str
@@ -530,35 +546,39 @@ elif sys.platform == "win32":
 
         # ---- v0.4：DS key 存 Windows 凭据管理器 / 危险确认 Qt 对话框 ----
         def get_ds_key(self) -> str | None:
-            """凭据管理器（keyring）优先 → env DEEPSEEK_API_KEY 兜底 → None。
+            return self.get_llm_key("deepseek", "DEEPSEEK_API_KEY")
 
-            不入 config.json 明文。keyring 失败时静默回退 env + 日志，不崩
-            （与 mac Keychain 路径行为对齐）。"""
+        def set_ds_key(self, key: str) -> None:
+            self.set_llm_key("deepseek", key)
+
+        # ---- v0.4.15 多 provider key（凭据管理器按 provider 名存取） ----
+        def get_llm_key(self, provider: str, env_var: str) -> str | None:
+            """凭据管理器优先（按 provider 名）→ env 兜底 → None。"""
             try:
                 import keyring
 
-                key = keyring.get_password("Desktop-Pet", "ds_api_key")
+                key = keyring.get_password("Desktop-Pet", f"{provider}_api_key")
                 if key:
                     return key
             except Exception as exc:
                 import logging
 
                 logging.getLogger("pet").warning(
-                    "凭据管理器读取 DS key 失败，回退 env: %s", exc
+                    "凭据管理器读取 %s key 失败，回退 env: %s", provider, exc
                 )
-            return os.environ.get("DEEPSEEK_API_KEY") or None
+            return os.environ.get(env_var) or None
 
-        def set_ds_key(self, key: str) -> None:
-            """存凭据管理器。失败不崩（调用方 next get_ds_key 取 env 兜底）。"""
+        def set_llm_key(self, provider: str, key: str) -> None:
+            """存凭据管理器。失败不崩。"""
             try:
                 import keyring
 
-                keyring.set_password("Desktop-Pet", "ds_api_key", key)
+                keyring.set_password("Desktop-Pet", f"{provider}_api_key", key)
             except Exception as exc:
                 import logging
 
                 logging.getLogger("pet").warning(
-                    "凭据管理器存 DS key 失败: %s", exc
+                    "凭据管理器存 %s key 失败: %s", provider, exc
                 )
 
         def confirm_dangerous(self, title: str, command: str,

@@ -1,5 +1,15 @@
 {
   "config_version": 1,
+  "llm": {
+    "last_provider": "",
+    "providers": {
+      "deepseek": {
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com",
+        "api_key_env": "DEEPSEEK_API_KEY"
+      }
+    }
+  },
   "provider": "emoji",
   "age_speed_multiplier": 1,
   "evolve_threshold_days": {
