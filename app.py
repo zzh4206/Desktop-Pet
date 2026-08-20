@@ -363,11 +363,20 @@ class PetApp:
                 break
 
     def _show_perm(self) -> None:
-        """v0.8 权限自检页（win：运行时能力自检；右键"设置"唤出）。"""
+        """v0.8 权限自检页（mac 系统特权自检 / win 运行时能力自检；
+        右键"设置"唤出）。darwin 载 perm_bridge_mac，win 载 perm_bridge，
+        两者复用共享 perm.qml（经 note 属性注入平台头部文案）。"""
         if self._perm_window is None:
-            from pet.ui.perm_bridge import load_perm_panel
+            if sys.platform == "darwin":
+                from pet.ui.perm_bridge_mac import load_perm_panel
 
-            self._perm_engine, self._perm_window, self._perm_bridge =                 load_perm_panel(self.adapter)
+                self._perm_engine, self._perm_window, self._perm_bridge = \
+                    load_perm_panel(self.adapter)
+            else:
+                from pet.ui.perm_bridge import load_perm_panel
+
+                self._perm_engine, self._perm_window, self._perm_bridge = \
+                    load_perm_panel(self.adapter)
         if self._perm_window is None:
             self.bubble.show("权限页加载失败～", anchor=self._pet_anchor())
             return

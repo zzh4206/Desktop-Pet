@@ -1,13 +1,15 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import PetPerm 1.0
 
-// v0.8 win 权限自检页：win 无特权需求，运行时自检各能力可用性（§十二）
+// v0.8 权限自检页（mac/win 共用）：头部文案经 Perm.note 注入，
+// 项列表 model: Perm.items 通用；mac 有"打开系统设置"深链按钮。
 ApplicationWindow {
     id: root
     title: "桌宠 · 权限自检"
     width: 380
-    height: 420
+    height: 460
     visible: false
     color: "#f7f5f2"
 
@@ -20,7 +22,7 @@ ApplicationWindow {
 
         Text {
             Layout.fillWidth: true
-            text: "Windows 端无需系统授权；以下为运行时能力自检"
+            text: Perm.note
             font.pixelSize: 12
             color: "#9a948c"
             wrapMode: Text.Wrap
@@ -57,6 +59,12 @@ ApplicationWindow {
                     color: modelData.ok ? "#4a9e5f" : "#d9534f"
                 }
             }
+        }
+
+        Button {
+            Layout.fillWidth: true
+            text: "打开系统设置"
+            onClicked: Perm.open_settings()
         }
 
         Button {

@@ -19,16 +19,27 @@ class PermBridge(QObject):
     """QML 侧：Perm.items（list[dict{name,ok,detail}]）+ Perm.refresh()。"""
 
     itemsChanged = Signal()
+    noteChanged = Signal()
 
     def __init__(self, adapter, parent=None) -> None:
         super().__init__(parent)
         self._adapter = adapter
         self._items: list = []
+        self._note = "Windows 端无需系统授权；以下为运行时能力自检"
         self.refresh()
+
+    @Property("QString", notify=noteChanged)
+    def note(self) -> str:
+        return self._note
 
     @Property("QVariantList", notify=itemsChanged)
     def items(self):
         return self._items
+
+    @Slot()
+    def open_settings(self) -> None:
+        """win 无系统授权页；no-op（perm.qml 按钮双端共用，win 点了无效）。"""
+        pass
 
     @Slot()
     def refresh(self) -> None:
