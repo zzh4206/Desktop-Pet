@@ -63,6 +63,12 @@ class PlatformAdapter:
         """
         return False
 
+    # ---- v0.8 窗口 Space 管理（全屏时聊天面板移桌面 Space）----
+    def move_window_to_all_spaces(self, widget) -> bool:
+        """让窗口加入所有 Space（不跟全屏 app）——全屏时聊天面板可见。
+        mac 实装 NSWindow collectionBehavior；基类/win no-op 返 False。"""
+        return False
+
     def register_own_windows(self, *widgets) -> None:
         """登记宠物自身窗口（本体/气泡）——图层探针排除自身遮挡。
 
@@ -231,6 +237,32 @@ if sys.platform == "darwin":
 
         def create_pet_window(self, sprite):
             return window_mac.PetWindow(sprite)
+
+        # ---- v0.8 窗口 Space 管理（全屏时聊天面板移桌面 Space）----
+        def move_window_to_all_spaces(self, widget) -> bool:
+            """NSWindow collectionBehavior = CanJoinAllSpaces|Stationary
+            ——全屏 app 独占 Space 时聊天面板仍可见（像微信）。"""
+            try:
+                from ctypes import c_void_p
+
+                from AppKit import (
+                    NSWindowCollectionBehaviorCanJoinAllSpaces,
+                    NSWindowCollectionBehaviorStationary,
+                )
+                from objc import objc_object
+
+                wid = int(widget.winId())
+                view = objc_object(c_void_p=wid)
+                nswin = view.window() if view is not None else None
+                if nswin is None:
+                    return False
+                nswin.setCollectionBehavior_(
+                    NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | NSWindowCollectionBehaviorStationary
+                )
+                return True
+            except Exception:
+                return False
 
         # ---- v0.7 吃鼠标平台注入（补遗#7：经 adapter 注入，共享层不直
         # import mouse_lock_mac；CGEventTap/pyobjc 全封在 mouse_lock_mac） ----

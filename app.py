@@ -405,33 +405,13 @@ class PetApp:
         self._chat_window.requestActivate()
 
     def _move_chat_to_desktop_space(self) -> None:
-        """全屏时把聊天面板移到桌面 Space（非全屏 Space）。
-
-        mac 全屏 app 独占一个 Space；聊天面板默认跟 app 走（在全屏 Space），
-        会被全屏 app 盖住。改 NSWindow collectionBehavior 让它加入所有 Space
-        但不跟全屏——用户切到桌面 Space 即可看到。"""
-        try:
-            from ctypes import c_void_p
-
-            from objc import objc_object
-
-            wid = int(self._chat_window.winId())
-            view = objc_object(c_void_p=wid)
-            nswin = view.window() if view is not None else None
-            if nswin is None:
-                return
-            from AppKit import (
-                NSWindowCollectionBehaviorCanJoinAllSpaces,
-                NSWindowCollectionBehaviorStationary,
-            )
-
-            nswin.setCollectionBehavior_(
-                NSWindowCollectionBehaviorCanJoinAllSpaces
-                | NSWindowCollectionBehaviorStationary
-            )
+        """全屏时把聊天面板移到桌面 Space——委托 adapter.move_window_to_all_spaces
+        （mac NSWindow collectionBehavior；app.py 不直 import objc/AppKit）。"""
+        ok = self.adapter.move_window_to_all_spaces(self._chat_window)
+        if ok:
             self.logger.info("聊天面板移到桌面 Space（全屏模式下可见）")
-        except Exception as exc:
-            self.logger.warning("聊天面板移 Space 失败: %s", exc)
+        else:
+            self.logger.warning("聊天面板移 Space 失败（platform 返 False）")
 
     def _on_chat_offline(self) -> None:
         """断网/无 key：气泡提示，宠物仍 WANDER/交互/长大（T8）。"""
