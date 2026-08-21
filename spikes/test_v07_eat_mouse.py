@@ -147,7 +147,7 @@ def section_gates() -> None:
     # G2 idle≥阈值 + 全门禁过 → 抑制 + FSM eat_mouse + 回血
     lock = FakeMouseLock()
     evs = []
-    s, _ = _make(lock, idle_s=999 * 60, cfg={"idle_threshold_min": 5,
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5,
                                             "eat_mouse_gain": {"fullness": 7}},
                  accessibility_fn=lambda: True, fsm_events=evs)
     store = s._store
@@ -165,7 +165,7 @@ def section_gates() -> None:
 
     # G3 DND → 不抑制（铁律4）
     lock = FakeMouseLock()
-    s, _ = _make(lock, idle_s=999 * 60, cfg={"idle_threshold_min": 5,
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5,
                                            "dnd": True},
                  accessibility_fn=lambda: True)
     s.eat_mouse(10)
@@ -173,7 +173,7 @@ def section_gates() -> None:
 
     # G4 活跃内容 → 不抑制（T8）
     lock = FakeMouseLock()
-    s, _ = _make(lock, idle_s=999 * 60, cfg={"idle_threshold_min": 5},
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
                  active_content_fn=lambda: True,
                  accessibility_fn=lambda: True)
     s.eat_mouse(10)
@@ -182,7 +182,7 @@ def section_gates() -> None:
     # G5 accessibility 未开 → 不抑制 + 提示 + 深链（T9）
     lock = FakeMouseLock()
     prompted = []
-    s, bubbles = _make(lock, idle_s=999 * 60, cfg={"idle_threshold_min": 5},
+    s, bubbles = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
                        accessibility_fn=lambda: False,
                        prompt=lambda: prompted.append(1))
     s.eat_mouse(10)
@@ -192,7 +192,7 @@ def section_gates() -> None:
 
     # G6 tap 创建失败 → 不抑制 + 提示（fail-open 气泡）
     lock = FakeMouseLock(start_ok=False)
-    s, bubbles = _make(lock, idle_s=999 * 60, cfg={"idle_threshold_min": 5},
+    s, bubbles = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
                        accessibility_fn=lambda: True)
     s.eat_mouse(10)
     check("G6 tap 创建失败 不抑制（active False）", not lock.active)
@@ -201,7 +201,7 @@ def section_gates() -> None:
     # G7 force_spit → 吐出 + FSM eat_mouse_off 回 idle
     lock = FakeMouseLock()
     evs = []
-    s, _ = _make(lock, idle_s=999 * 60, cfg={"idle_threshold_min": 5},
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
                  accessibility_fn=lambda: True, fsm_events=evs)
     s.eat_mouse(10)        # evs=["eat_mouse"], lock.active=True
     s.force_spit()
@@ -232,7 +232,7 @@ def section_gates() -> None:
         received.append(d)
         return orig_start(d)
     lock.start = spy
-    s, _ = _make(lock, idle_s=999 * 60, cfg={"idle_threshold_min": 5},
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
                  accessibility_fn=lambda: True)
     s.eat_mouse(999)
     check("G9b eat_mouse 透传 duration 给 mouse_lock.start",

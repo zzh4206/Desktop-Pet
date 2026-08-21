@@ -35,15 +35,24 @@ _WORD = re.compile(r"[\w]+")
 
 
 def _tokenize(text: str) -> list:
-    """中文 2-gram + 英数词（无分词库依赖）。"""
+    """中文 2-gram + 单字兜底 + 英数词（无分词库依赖）。
+
+    单字兜底：纯 2-gram 在"我叫什么名字"↔"主人叫小明"间零重合
+    （叫字分属不同 bigram）——中文单字信息密度高，补入后 overlap
+    可命中共享字（叫/名）。英数词不加单字（噪声大）。
+    """
     out = []
     for chunk in _WORD.findall(text or ""):
         if len(chunk) <= 2:
             out.append(chunk.lower())
             continue
-        out.extend(chunk[i:i + 2].lower() for i in range(len(chunk) - 1))
-        if len(chunk) > 2 and chunk.isascii():
+        grams = [chunk[i:i + 2].lower() for i in range(len(chunk) - 1)]
+        out.extend(grams)
+        if chunk.isascii():
             out.append(chunk.lower())
+        else:
+            # 中文：补单字（2-gram 已含，单字提供跨词匹配）
+            out.extend(chunk[i].lower() for i in range(len(chunk)))
     return out
 
 
