@@ -69,6 +69,10 @@ class PlatformAdapter:
         mac 实装 NSWindow collectionBehavior；基类/win no-op 返 False。"""
         return False
 
+    def open_path(self, path: str) -> tuple:
+        """v0.9 打开本地文件/文件夹（拖放用）。返回 (ok, msg)。"""
+        raise NotImplementedError
+
     def register_own_windows(self, *widgets) -> None:
         """登记宠物自身窗口（本体/气泡）——图层探针排除自身遮挡。
 
@@ -301,6 +305,17 @@ if sys.platform == "darwin":
 
             return mouse_lock_mac.MouseLockMac.accessibility_trusted()
 
+        def open_path(self, path: str) -> tuple:
+            """``open`` 打开文件/文件夹（Finder 关联程序）。"""
+            import subprocess as _sp
+
+            try:
+                _sp.run(["open", path], check=True, capture_output=True,
+                        timeout=10)
+                return (True, f"已打开 {os.path.basename(path)}")
+            except Exception as e:
+                return (False, f"打开失败: {e}")
+
         def is_active_content(self, video_apps) -> bool:
             """前台视频播放器白名单命中（T8 活跃内容检测）。"""
             from . import mouse_lock_mac
@@ -531,6 +546,14 @@ elif sys.platform == "win32":
             # no-op（win 无辅助功能授权流程；UIPI 提升窗口降级已在
             # MouseLockWin.start 内处理为返回 False 走气泡路径）
             pass
+
+        def open_path(self, path: str) -> tuple:
+            """os.startfile 打开文件/文件夹/文档（关联程序）。"""
+            try:
+                os.startfile(path)
+                return (True, f"已打开 {os.path.basename(path)}")
+            except OSError as e:
+                return (False, f"打开失败: {e}")
 
         def is_active_content(self, video_apps) -> bool:
             # 活跃内容检测：前台进程名 ∈ 视频白名单（复用 v0.3 全屏检测的

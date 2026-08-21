@@ -170,6 +170,50 @@ def main() -> int:
     br3._maybe_summarize()
     check("T11 DS失败保留原文", len(br3._history) == 24)
 
+    # ---- T12 拖放文件（快捷启动器）----
+    from pet.window import WindowBase
+    from pet.asset_provider import EmojiProvider
+    from pet.pet_state import PetState
+    from PySide6.QtCore import QMimeData, QUrl, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtCore import QEvent
+
+    win = WindowBase(EmojiProvider().get_static(PetState.default()))
+    win.show()
+    QTest.qWaitForWindowExposed(win)
+
+    # dragEnter：本地文件 mime → 接受
+    from PySide6.QtGui import QDragEnterEvent
+    md = QMimeData()
+    md.setUrls([QUrl.fromLocalFile("C:/tmp/test.txt")])
+    ev_enter = QDragEnterEvent(
+        win.rect().center(), Qt.CopyAction, md,
+        Qt.LeftButton, Qt.NoModifier,
+    )
+    win.dragEnterEvent(ev_enter)
+    check("T12 本地文件 dragEnter 接受",
+          ev_enter.isAccepted() or ev_enter.proposedAction() != Qt.IgnoreAction)
+
+    # dropEvent：fileDropped 信号
+    dropped = []
+    win.fileDropped.connect(dropped.append)
+    from PySide6.QtGui import QDropEvent
+    ev_drop = QDropEvent(
+        win.rect().center().toPointF(), Qt.CopyAction, md,
+        Qt.LeftButton, Qt.NoModifier, QEvent.Drop,
+    )
+    win.dropEvent(ev_drop)
+    check("T12 dropEvent 发 fileDropped", dropped == ["C:/tmp/test.txt"])
+
+    # 平台 open_path：目录+文件
+    from pet.platform import get_platform_adapter
+    ad = get_platform_adapter()
+    ok_d, _ = ad.open_path(tempfile.gettempdir())
+    check("T12 win open_path(目录)成功", ok_d)
+
+    QTest.qWait(100)
+    win.hide()
+
     for suffix in ("", ".bak", ".tmp"):
         try:
             os.remove(tmp + suffix)

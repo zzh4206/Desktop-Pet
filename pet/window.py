@@ -38,6 +38,7 @@ class WindowBase(QWidget):
     petMoved = Signal(float, float, int)  # v0.3 (cx, bottom_y, height) 气泡跟随
     # v0.3 拖拽：参数为全局 bottom_center 坐标（抓取偏移已在窗内算好）
     dragStarted = Signal(float, float)
+    fileDropped = Signal(str)      # v0.9 拖拽文件/文件夹（快捷启动器）
     dragMoved = Signal(float, float)
     dragReleased = Signal(float, float)
 
@@ -72,6 +73,7 @@ class WindowBase(QWidget):
         self._single_shot.setSingleShot(True)
         self._single_shot.setInterval(400)  # <500ms 双击窗口
         self._single_shot.timeout.connect(self.patRequested.emit)
+        self.setAcceptDrops(True)   # v0.9 拖放文件给它打开
 
         # v0.3 帧动画：150ms/帧，播完回当前静帧
         self._static_sprite: SpriteRef = sprite
@@ -202,6 +204,27 @@ class WindowBase(QWidget):
         if self._dragging:
             g = event.globalPosition()
             self.dragMoved.emit(g.x() + self._grab_dx, g.y() + self._grab_dy)
+
+    # ---- v0.9 拖放文件（快捷启动器，§v0.9 win/mac 同手势） ----
+    def dragEnterEvent(self, event):
+        """接受本地文件/文件夹拖入。"""
+        from PySide6.QtCore import QUrl
+
+        urls = event.mimeData().urls() if event.mimeData() else []
+        if urls and all(u.isLocalFile() for u in urls):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """取第一个本地路径 → fileDropped 信号（app 接平台 open）。"""
+        from PySide6.QtCore import QUrl
+
+        urls = event.mimeData().urls() if event.mimeData() else []
+        if urls:
+            self.fileDropped.emit(urls[0].toLocalFile())
+            event.acceptProposedAction()
 
     def contextMenuEvent(self, event):
         # 右键菜单（§2.3）：喂食/洗澡/戳一戳/跟随鼠标 + 设置/退出

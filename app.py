@@ -151,6 +151,8 @@ class PetApp:
         )
         # v0.8 权限自检页：宠物右键"设置"唤出（win 运行时自检）
         self.window.settingsRequested.connect(self._show_perm)
+        # v0.9 拖放文件给它打开（快捷启动器）
+        self.window.fileDropped.connect(self._on_file_dropped)
         self._perm_window = None
         self._perm_engine = None
         self._perm_bridge = None
@@ -451,6 +453,18 @@ class PetApp:
             self.memory.save(self._memory_path)
         except Exception:
             self.logger.exception("记忆存档失败")
+
+    def _on_file_dropped(self, path: str) -> None:
+        """v0.9 拖放文件/文件夹 → 平台 open_path + 气泡反馈。"""
+        import os as _os
+
+        if not path or not _os.path.exists(path):
+            self.bubble.show("拖入的东西打不开～", anchor=self._pet_anchor())
+            return
+        ok, msg = self.adapter.open_path(path)
+        self.bubble.show(msg if ok else f"打不开: {msg}",
+                         anchor=self._pet_anchor())
+        self.logger.info("[拖放] %s -> %s", path, "OK" if ok else msg)
 
     def _show_perm(self) -> None:
         """v0.8 权限自检页（mac 系统特权自检 / win 运行时能力自检；
