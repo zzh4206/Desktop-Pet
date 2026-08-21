@@ -19,7 +19,9 @@ class TrayManager(QObject):
         self._on_chat = None
         self._on_reset = None
         self._on_spit = None
-        self._on_mem = None  # v0.7 强制吐出（吃鼠标时键盘热键外的备用出口）
+        self._on_mem = None
+        self._autostart_state = False
+        self._on_autostart = None  # v0.7 强制吐出（吃鼠标时键盘热键外的备用出口）
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
 
@@ -28,6 +30,10 @@ class TrayManager(QObject):
         act_chat.triggered.connect(self._emit_chat)
         act_reset = menu.addAction("重新开始")
         act_mem = menu.addAction("记忆管理")
+        act_auto = menu.addAction("开机自启")
+        act_auto.setCheckable(True)
+        act_auto.setChecked(self._autostart_state)
+        act_auto.toggled.connect(self._emit_autostart)
         act_reset.triggered.connect(self._emit_reset)
         act_mem.triggered.connect(self._emit_mem)
         # v0.7 强制吐出：吃鼠标期间鼠标被抑制点不到菜单，故此菜单主要服务于
@@ -46,6 +52,17 @@ class TrayManager(QObject):
         """v0.9 记忆管理菜单。"""
         if self._on_mem:
             self._on_mem()
+
+    def set_autostart_state(self, enabled: bool) -> None:
+        """v0.11：同步自启菜单勾选态（app 启动时调）。"""
+        self._autostart_state = enabled
+
+    def set_autostart_callback(self, cb) -> None:
+        self._on_autostart = cb
+
+    def _emit_autostart(self, checked: bool) -> None:
+        if self._on_autostart:
+            self._on_autostart(checked)
 
     def set_mem_callback(self, cb) -> None:
         self._on_mem = cb

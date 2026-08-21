@@ -209,6 +209,12 @@ class PetApp:
         )
         self._proactive_timer.start(30_000)
 
+        # v0.11 全局热键（Ctrl+Alt+P 唤聊天 / Ctrl+Alt+T 吐出）
+        self._setup_hotkeys()
+        # v0.11 托盘自启切换
+        self.tray.set_autostart_callback(self._toggle_autostart)
+        self.tray.set_autostart_state(self.adapter.is_autostart_enabled())
+
         # save：debounce（变更后 500ms）+ 定时 30s + shutdown
         self._save_timer = QTimer(self.app)
         self._save_timer.setSingleShot(True)
@@ -432,6 +438,44 @@ class PetApp:
 
                 self._proactive.follow_up(msg, _t.time() + 30 * 60)
                 break
+
+    def _setup_hotkeys(self) -> None:
+        """v0.11 全局热键注册 + 冲突气泡提示。"""
+        def on_conflict(name, key):
+            self.bubble.show(
+                f"热键 {key}（{name}）被占用，请在 config 中改键～",
+                kind=BubbleType.WARNING, anchor=self._pet_anchor(),
+            )
+
+        ok = self.adapter.start_hotkeys(
+            self.cfg,
+            on_chat=self._toggle_chat_panel,
+            on_spit=lambda: self._proactive.force_spit(),
+            on_conflict=on_conflict,
+        )
+        if not ok:
+            self.logger.warning("[热键] 全部注册失败")
+        else:
+            self.logger.info("[热键] 就绪（Ctrl+Alt+P 聊天 / Ctrl+Alt+T 吐出）")
+
+    def _toggle_chat_panel(self) -> None:
+        """Ctrl+Alt+P 唤出/隐藏聊天面板（v0.11 Must）。"""
+        if self._chat_window is None:
+            self._show_chat()
+            return
+        if self._chat_window.isVisible():
+            self._chat_window.hide()
+        else:
+            self._show_chat()
+
+    def _toggle_autostart(self, enabled: bool) -> None:
+        """v0.11 托盘自启切换。"""
+        ok = self.adapter.set_autostart(enabled)
+        self.bubble.show(
+            "开机自启已开启～" if ok and enabled else
+            "开机自启已关闭" if ok else "自启设置失败",
+            anchor=self._pet_anchor(),
+        )
 
     def _show_mem(self) -> None:
         """v0.9 记忆管理页（托盘'记忆管理'唤出；查看/删除/清空）。"""
@@ -726,8 +770,11 @@ class PetApp:
             except Exception:
                 self.logger.warning("shutdown 释放 EatMouseSession 异常",
                                     exc_info=True)
-        # ③ 全局热键 —— v0.11（v0.7 强制吐出热键由 mouse_lock_mac 键盘
-        # listen tap 承载，随 EatMouseSession 释放一并停止）
+        # ③ 注销全局热键（v0.11 持久热键线程）
+        try:
+            self.adapter.stop_hotkeys()
+        except Exception:
+            pass
         # ④ 保存 PetState+Memory
         if getattr(self, "memory", None) is not None:
             try:

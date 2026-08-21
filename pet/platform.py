@@ -69,6 +69,23 @@ class PlatformAdapter:
         mac 实装 NSWindow collectionBehavior；基类/win no-op 返 False。"""
         return False
 
+    def start_hotkeys(self, cfg: dict, on_chat, on_spit,
+                      on_conflict=None) -> bool:
+        """v0.11 全局热键注册。基类返 False（无实现）。"""
+        return False
+
+    def stop_hotkeys(self) -> None:
+        """v0.11 注销热键。基类 no-op。"""
+        pass
+
+    def set_autostart(self, enabled: bool) -> bool:
+        """v0.11 开机自启开关。基类返 False。"""
+        return False
+
+    def is_autostart_enabled(self) -> bool:
+        """v0.11 读自启状态。基类返 False。"""
+        return False
+
     def open_path(self, path: str) -> tuple:
         """v0.9 打开本地文件/文件夹（拖放用）。返回 (ok, msg)。"""
         raise NotImplementedError
@@ -546,6 +563,35 @@ elif sys.platform == "win32":
             # no-op（win 无辅助功能授权流程；UIPI 提升窗口降级已在
             # MouseLockWin.start 内处理为返回 False 走气泡路径）
             pass
+
+        def start_hotkeys(self, cfg: dict, on_chat, on_spit,
+                          on_conflict=None) -> bool:
+            """v0.11：HotkeyManager 注册 Ctrl+Alt+P/T + 冲突检测。"""
+            from . import hotkey_win
+
+            self._hotkey_mgr = hotkey_win.HotkeyManager()
+            hk_cfg = cfg.get("hotkeys", {})
+            return self._hotkey_mgr.start(
+                hk_cfg.get("chat", "ctrl+alt+p"),
+                hk_cfg.get("spit", "ctrl+alt+t"),
+                on_chat, on_spit, on_conflict,
+            )
+
+        def stop_hotkeys(self) -> None:
+            mgr = getattr(self, "_hotkey_mgr", None)
+            if mgr:
+                mgr.stop()
+
+        def set_autostart(self, enabled: bool) -> bool:
+            """v0.11：注册表 HKCU Run。"""
+            from . import hotkey_win
+
+            return hotkey_win.set_autostart(enabled)
+
+        def is_autostart_enabled(self) -> bool:
+            from . import hotkey_win
+
+            return hotkey_win.is_autostart_enabled()
 
         def open_path(self, path: str) -> tuple:
             """os.startfile 打开文件/文件夹/文档（关联程序）。"""
