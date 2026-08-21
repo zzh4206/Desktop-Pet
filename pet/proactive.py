@@ -303,6 +303,7 @@ class ProactiveScheduler:
                 self.eat_mouse_arrived()  # 无 FSM → 退化为立即抑制
         else:
             self.eat_mouse_arrived()
+        return sess  # M12 修：冻结签名 -> EatMouseSession（旧版隐式返 None）
 
     def eat_mouse_arrived(self) -> None:
         """FSM 到达光标 → 真正抑制 + 气泡 + 回血（幂等：无 pending no-op）。"""

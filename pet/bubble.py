@@ -89,6 +89,11 @@ class BubbleWidget(QWidget):
         super().hide()
         self._anchor = None
 
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        """M13 修：点击关闭（§2.4 WARNING'需点击关闭'语义补齐；INFO/CHAT
+        点关也符合直觉）。"""
+        self.hide()
+
     def follow(self, anchor: tuple) -> None:
         """宠物移动时跟随（窗口 moved signal → app 调用）；未显示则忽略。"""
         if not self.isVisible():

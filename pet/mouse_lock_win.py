@@ -36,6 +36,18 @@ _log = logging.getLogger("pet")
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
+# M6 修：TokenElevation UIPI 判定用
+_advapi32 = ctypes.WinDLL("advapi32")
+_advapi32.OpenProcessToken.argtypes = [
+    wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
+]
+_advapi32.OpenProcessToken.restype = wintypes.BOOL
+_advapi32.GetTokenInformation.argtypes = [
+    wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+    ctypes.POINTER(wintypes.DWORD),
+]
+_advapi32.GetTokenInformation.restype = wintypes.BOOL
+
 # ---- 常量 ----
 WH_MOUSE_LL = 14
 WM_QUIT = 0x0012
@@ -102,11 +114,11 @@ _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 def _foreground_elevated() -> bool:
-    """UIPI 判定：前台窗口属主进程 OpenProcess 被拒（管理员）→ True。
+    """UIPI 判定：前台进程令牌是否提升（TokenElevation）→ True。
 
-    管理员进程对非提升进程不可 OpenProcess（ERROR_ACCESS_DENIED）——
-    此时 WH_MOUSE_LL 虽仍收到事件，但对提升窗口的输入抑制不可靠，
-    按工作表降级策略：只气泡不吃。
+    M6 修：旧版 OpenProcess(LIMITED) 对管理员进程通常也成功，
+    err=5 几乎不命中→门禁形同虚设。改用 GetTokenInformation
+    (TokenElevation) 跨完整性级别可靠读取。
     """
     hwnd = _user32.GetForegroundWindow()
     if not hwnd:
@@ -118,10 +130,25 @@ def _foreground_elevated() -> bool:
     h = _kernel32.OpenProcess(
         _PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value
     )
-    if h:
+    if not h:
+        return False  # 打不开就当非提升（保守不拦）
+    try:
+        token = wintypes.HANDLE()
+        if not _advapi32.OpenProcessToken(
+            h, 0x0008, ctypes.byref(token)   # TOKEN_QUERY
+        ):
+            return False
+        try:
+            buf = wintypes.DWORD()
+            ret_len = wintypes.DWORD()
+            ok = _advapi32.GetTokenInformation(
+                token, 20, ctypes.byref(buf), 4, ctypes.byref(ret_len)
+            )
+            return bool(ok and buf.value != 0)
+        finally:
+            _kernel32.CloseHandle(token)
+    finally:
         _kernel32.CloseHandle(h)
-        return False
-    return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED
 
 
 class MouseLockWin:
@@ -247,24 +274,18 @@ class MouseLockWin:
             self._ready.set()
             return
         self._ready.set()
-        ok = _user32.RegisterHotKey(
-            None, _HOTKEY_ID, MOD_CONTROL | MOD_ALT, _VK_T
-        )
-        if not ok:
-            _log.warning("[吃鼠标] 热键 Ctrl+Alt+T 注册失败(被占用?) "
-                         "err=%s；托盘吐出仍可用", ctypes.get_last_error())
+        # M2 修：热键注册统一走 HotkeyManager（v0.11 持久线程），此处
+        # 不再自注册（双重注册必然冲突，旧版每次吃鼠标刷 warning）。
+        # 钩子线程只泵消息（LL 回调 + WM_QUIT + 测试注入 _WM_SPIT）。
         msg = wintypes.MSG()
         while _user32.GetMessageW(
             ctypes.byref(msg), None, 0, 0
         ) > 0:
-            if msg.message == WM_HOTKEY and msg.wParam == _HOTKEY_ID:
-                self.force_spit()
-            elif msg.message == _WM_SPIT:      # 测试注入
+            if msg.message == _WM_SPIT:      # 测试注入（热键经 HotkeyManager）
                 self.force_spit()
             elif msg.message == WM_QUIT:
                 break
         # 线程退出兜底清理
-        _user32.UnregisterHotKey(None, _HOTKEY_ID)
         if self._hook:
             _user32.UnhookWindowsHookEx(self._hook)
             self._hook = None

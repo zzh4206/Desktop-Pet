@@ -67,34 +67,57 @@ class PermBridge(QObject):
     # ---- 各项检测 ----
 
     def _check_ll_hook(self):
-        from pet.mouse_lock_win import MouseLockWin
-
-        lk = MouseLockWin()
-        ok = lk.start(0.3)   # 0.3s 最短锁定，看门狗即刻回收
-        if ok:
-            lk.force_spit()
-            return (True, "")
-        return (False, "钩子安装失败(UIPI/系统限制?)")
-
-    def _check_hotkey(self):
+        # M4 修：结构性检测——SetWindowsHookEx 后立即 Unhook（不进
+        # 消息循环、不吞事件、<10ms 无感；旧版真装 0.3s 冻结鼠标）
         import ctypes
+        import ctypes.wintypes as wintypes
 
         u = ctypes.WinDLL("user32")
-        # 独占注册探测：成功即注销（真实热键由吃鼠标期间注册）
-        ok = u.RegisterHotKey(None, 0xB08, 0x3, 0x54)  # Ctrl+Alt+T
-        if ok:
-            u.UnregisterHotKey(None, 0xB08)
+        WH_MOUSE_LL = 14
+        # 最小回调（不抑制，直透）
+        _CB = ctypes.WINFUNCTYPE(
+            ctypes.c_long, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p
+        )
+        cb_ref = _CB(lambda nc, wp, lp: u.CallNextHookEx(
+            None, nc, wp, lp))
+        hmod = ctypes.WinDLL("kernel32").GetModuleHandleW(None)
+        hook = u.SetWindowsHookExW(WH_MOUSE_LL, cb_ref, hmod, 0)
+        if hook:
+            u.UnhookWindowsHookEx(hook)
             return (True, "")
-        return (False, "热键被占用，建议在设置中改键")
+        return (False, f"LL 钩子安装失败 err={ctypes.get_last_error()}")
+
+    def _check_hotkey(self):
+        # M3 修：不真注册（v0.11 HotkeyManager 已持有 Ctrl+Alt+T，
+        # 再注册必失败恒假阴性）——改为查询 HotkeyManager 注册状态
+        try:
+            mgr = getattr(self._adapter, "_hotkey_mgr", None)
+            if mgr is not None and mgr.active:
+                # 查具体键的注册结果
+                reg_ok = getattr(mgr, "_reg_ok", {})
+                chat_ok = reg_ok.get(1, False)   # _ID_CHAT = 1
+                spit_ok = reg_ok.get(2, False)   # _ID_SPIT = 2
+                if chat_ok and spit_ok:
+                    return (True, "")
+                detail = []
+                if not chat_ok:
+                    detail.append("聊天键冲突")
+                if not spit_ok:
+                    detail.append("吐出键冲突")
+                return (False, "；".join(detail))
+            return (False, "热键管理器未运行")
+        except Exception:
+            return (False, "状态查询失败")
 
     def _check_clipboard(self):
+        # M4 修：只读探测（旧版写 "perm-check" 覆盖用户剪贴板数据）
         from pet.tools_win import ClipboardHandler
         from pet.tools_schema import ToolContext
 
         ctx = ToolContext(pet_state=None, user_name="u", config={},
                           window_info=None)
-        r = ClipboardHandler().execute(
-            {"action": "set", "text": "perm-check"}, ctx)
+        r = ClipboardHandler().execute({"action": "get"}, ctx)
+        # get 成功即读写通道健康（不修改内容）
         return (r.success, "" if r.success else r.message[:60])
 
     def _check_volume(self):

@@ -752,7 +752,7 @@ class PetApp:
         try:
             self._proactive.eat_mouse_tick()
         except Exception:
-            pass
+            self.logger.warning("eat_mouse_tick 异常", exc_info=True)
         # 无条件按 FSM.pos 同步窗口位置：MOVE_TO/FALL 之外还有**静默位移**
         # （骑乘跟随移动窗口发生在 IDLE，step 返回 ANIMATE）——只听 action
         # 会漏掉这类位移，视觉上宠物悬空在旧高度。Qt 同坐标 move 是 no-op，

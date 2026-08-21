@@ -30,7 +30,7 @@ class TrayManager(QObject):
         act_chat.triggered.connect(self._emit_chat)
         act_reset = menu.addAction("重新开始")
         act_mem = menu.addAction("记忆管理")
-        act_auto = menu.addAction("开机自启")
+        self._act_auto = act_auto = menu.addAction("开机自启")
         act_auto.setCheckable(True)
         act_auto.setChecked(self._autostart_state)
         act_auto.toggled.connect(self._emit_autostart)
@@ -54,8 +54,17 @@ class TrayManager(QObject):
             self._on_mem()
 
     def set_autostart_state(self, enabled: bool) -> None:
-        """v0.11：同步自启菜单勾选态（app 启动时调）。"""
+        """v0.11：同步自启菜单勾选态（app 启动时调）。
+
+        M9 修：旧版只写标志不动 QAction——已启用时重启 app 托盘仍显示
+        未勾选。blockSignals 防 setChecked 触发 toggled 回环调 setter。
+        """
         self._autostart_state = enabled
+        act = getattr(self, "_act_auto", None)
+        if act is not None:
+            act.blockSignals(True)
+            act.setChecked(enabled)
+            act.blockSignals(False)
 
     def set_autostart_callback(self, cb) -> None:
         self._on_autostart = cb

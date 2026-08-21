@@ -134,11 +134,15 @@ class WindowBase(QWidget):
 
         screens = QGuiApplication.screens()
         if screens:
-            geos = [s.geometry() for s in screens]
-            min_x = min(g.x() for g in geos)
-            min_y = min(g.y() for g in geos)
-            max_x = max(g.x() + g.width() for g in geos)
-            max_y = max(g.y() + g.height() for g in geos)
+            # M10 修：横向用 availableGeometry（排除任务栏，与 FSM _clamp_x
+            # 语义一致——旧版用 geometry 差一个任务栏宽度，任务栏停靠
+            # 左/右时宠物到不了工作区边缘）。纵向保留整屏范围。
+            avail = [s.availableGeometry() for s in screens]
+            full = [s.geometry() for s in screens]
+            min_x = min(g.x() for g in avail)
+            max_x = max(g.x() + g.width() for g in avail)
+            min_y = min(g.y() for g in full)
+            max_y = max(g.y() + g.height() for g in full)
             x = min(max(x, min_x + self.width() / 2), max_x - self.width() / 2)
             y = min(max(y, min_y + self.height()), max_y)
         tx = int(x - self.width() / 2)

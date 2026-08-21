@@ -85,7 +85,7 @@ def main() -> int:
     win.contextMenuEvent(ev)  # 走 menu.exec 模态循环，由 timer 关闭
     check("T-c2 右键菜单能弹出(v0.2.2 回归)", len(menu_actions) == 1)
     check(
-        "T-c2 菜单五项(喂食/洗澡/戳一戳/设置/退出)",
+        "T-c2 菜单六项(喂食/洗澡/戳一戳/设置/退出)",
         len(menu_actions) == 1
         and [t for t in menu_actions[0] if t]
         == ["喂食", "洗澡", "戳一戳", "跟随鼠标", "设置", "退出"],

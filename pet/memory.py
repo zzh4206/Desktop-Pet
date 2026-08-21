@@ -80,10 +80,20 @@ class MemoryStore:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data.get("memories"), list):
-                    store._mem = [
-                        m for m in data["memories"]
-                        if isinstance(m, dict) and m.get("fact")
-                    ]
+                    store._mem = []
+                    for m in data["memories"]:
+                        if not (isinstance(m, dict) and m.get("fact")):
+                            continue
+                        # L9 修：数值字段 try-float 兜底（损坏条目不炸 recall）
+                        try:
+                            m["importance"] = float(m.get("importance", 0.5))
+                            m["recall_count"] = int(m.get("recall_count", 0))
+                            m["created"] = float(m.get("created", time.time()))
+                            m["last_recalled"] = float(
+                                m.get("last_recalled", time.time()))
+                        except (TypeError, ValueError):
+                            continue
+                        store._mem.append(m)
                     _log.info("记忆载入 %d 条（%s）", len(store._mem), p)
                     return store
             except (OSError, json.JSONDecodeError):
@@ -143,7 +153,7 @@ class MemoryStore:
         if not q_tokens or not self._mem:
             return []
         now = time.time()
-        # 文档频率（IDF 分母）
+        # IDF（M11 修：旧版 df 构建后零消费是死代码——现按 IDF 加权）
         df = {}
         docs = []
         for m in self._mem:
@@ -152,17 +162,25 @@ class MemoryStore:
             for t in set(toks):
                 df[t] = df.get(t, 0) + 1
         n_docs = max(1, len(docs))
+        import math
 
+        def _idf(t):
+            return math.log(n_docs / max(1, df.get(t, 0)))
+
+        q_set = set(q_tokens)
         scored = []
         for m, toks in zip(self._mem, docs):
-            overlap = sum(
-                1 for t in set(q_tokens) if t in set(toks)
-            ) / max(1, len(set(q_tokens)))
+            t_set = set(toks)
+            common = q_set & t_set
+            if not common:
+                continue
+            # IDF 加权重合度：稀有词命中权重高，高频词（"主人""喜欢"）降权
+            overlap = (sum(_idf(t) for t in common)
+                       / max(0.001, sum(_idf(t) for t in q_set)))
             recency = max(0.0, 1.0 - (now - m["last_recalled"]) / 86400.0)
             score = (overlap * 0.5 + m["importance"] * 0.3
                      + recency * 0.2)
-            if overlap > 0:  # 只回词面相关的
-                scored.append((score, m))
+            scored.append((score, m))
         scored.sort(key=lambda x: -x[0])
         hits = []
         for score, m in scored[:k]:

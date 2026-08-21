@@ -108,7 +108,9 @@ class ChatBridge(QAbstractListModel):
 
     # ---- 流式占位 Property ----
     def streamingText(self) -> str:
-        return self._streaming
+        # M13 修：流式文本经 _md_to_html（与落定消息同一管道）——旧版直接
+        # 返回原始 DS 增量，RichText 下未转义的 <h1> 等构成 HTML 注入面
+        return _md_to_html(self._streaming) if self._streaming else ""
 
     streamingText = Property(str, fget=streamingText, notify=streamingChanged)
 

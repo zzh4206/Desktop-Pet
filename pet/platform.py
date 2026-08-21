@@ -128,9 +128,6 @@ class PlatformAdapter:
         get_llm_key("deepseek", "DEEPSEEK_API_KEY")。"""
         return self.get_llm_key("deepseek", "DEEPSEEK_API_KEY")
 
-    def set_ds_key(self, key: str) -> None:
-        """存 DS key（兼容旧调用）。v0.4.15 走 set_llm_key("deepseek", key)。"""
-        self.set_llm_key("deepseek", key)
 
     # ---- v0.4.15 多 provider key（按 provider 名存取 Keychain） ----
     def get_llm_key(self, provider: str, env_var: str) -> str | None:
@@ -607,7 +604,8 @@ elif sys.platform == "win32":
             # 进程名管道；None apps → False）
             if not video_apps:
                 return False
-            fs, name = sensor_win.foreground_fullscreen()
+            # M8 修：不依赖全屏（旧版窗口化播放视频漏检白名单豁免）
+            name = sensor_win.foreground_process_name()
             if not name:
                 return False
             return name.upper() in {

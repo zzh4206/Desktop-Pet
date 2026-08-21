@@ -174,7 +174,7 @@ def visible_windows(refresh: bool = False) -> list[dict]:
     """
     global _windows_cache, _windows_cache_at
     now = _tick_count_ms() / 1000.0
-    if not refresh and _windows_cache is not None and now - _windows_cache_at < _WINDOWS_TTL_S:
+    if not refresh and now - _windows_cache_at < _WINDOWS_TTL_S:
         return _windows_cache
 
     found: list[dict] = []
@@ -316,6 +316,18 @@ _user32.GetClassNameW.argtypes = [
     wintypes.HWND, wintypes.LPWSTR, ctypes.c_int,
 ]
 _user32.GetClassNameW.restype = ctypes.c_int
+
+
+def foreground_process_name() -> str:
+    """前台进程名（不要求全屏）——M8 修：活跃内容检测用。
+
+    foreground_fullscreen 只在全屏时返回进程名（窗口化播放视频漏检），
+    此函数无条件返回（GetForegroundWindow→pid→QueryFullProcessImageName）。
+    """
+    hwnd = _user32.GetForegroundWindow()
+    if not hwnd:
+        return ""
+    return _process_name(_window_pid(hwnd))
 
 
 def foreground_fullscreen() -> tuple[bool, str]:
