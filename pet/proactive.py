@@ -30,7 +30,7 @@ import sys
 import re
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import QThread, Signal, Slot
 
@@ -477,7 +477,7 @@ class ProactiveScheduler:
         # 今天的 end 点；若已过则次日
         end_today = d.replace(hour=end_h, minute=0, second=0, microsecond=0)
         if end_today.timestamp() <= now:
-            end_today = end_today.replace(day=d.day + 1)  # 次日（datetime 自动进位）
+            end_today = end_today + timedelta(days=1)  # M5 修：replace 不进位，月末/年末 ValueError
         return end_today.timestamp()
 
     # ---- 唤醒决策（LLM 隔离上下文 / 本地罐头兜底） ----

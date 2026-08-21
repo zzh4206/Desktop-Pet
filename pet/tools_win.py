@@ -163,8 +163,8 @@ FILE_SEARCH_SCHEMA = ToolSchema(
     dangerous=False,
 )
 
-_PATTERN_BAD = set('<>|:$"')
-_SCOPE_BAD = set('<>|:$"/\\') | {".."}
+_PATTERN_BAD = set("<>|:$'\"")
+_SCOPE_BAD = set("<>|:$'\"/\\") | {".."}
 
 
 class FileSearchHandler:

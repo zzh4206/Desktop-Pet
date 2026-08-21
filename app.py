@@ -106,6 +106,7 @@ class PetApp:
         adapter.hide_dock_icon()  # mac 特定 / win no-op
 
         paths = adapter.get_paths()
+        self._paths = paths   # v0.9.2(H1 修)：_setup_chat 等方法可引用
         self.cfg = load_config(paths["config_path"])
         # config log_level 校准 logger 级别（main 里 setup_logging 用默认 INFO）
         if not verbose and self.cfg.get("log_level"):
@@ -173,7 +174,11 @@ class PetApp:
         self._chat_bridge = None
         self._chat_window = None
         self._chat_client = None
-        self._setup_chat()
+        try:
+            self._setup_chat()
+        except Exception:
+            self.logger.exception(
+                "聊天初始化失败（key/tool/QML），宠物本体继续运行")
 
         # v0.6 主动关怀（win 主笔）+ v0.7 吃鼠标（mac）：
         # 30s 轮询；气泡锚宠物；idle 用传感器；有 DS key 时链式唤醒走 LLM
@@ -323,7 +328,7 @@ class PetApp:
         from pet.memory import MemoryStore
         from pet.memory_tools import build_memory_tools
 
-        self._memory_path = os.path.join(paths["data_dir"],
+        self._memory_path = os.path.join(self._paths["data_dir"],
                                          "memory.json")
         self.memory = MemoryStore.load(self._memory_path)
         for schema, handler in build_memory_tools(self.memory):
@@ -447,16 +452,35 @@ class PetApp:
                 kind=BubbleType.WARNING, anchor=self._pet_anchor(),
             )
 
+        # M7 修：热键线程回调经 Qt Signal 转主线程（跨线程 GUI 是 UB）
+        from PySide6.QtCore import QTimer
+
+        hotkey_bridge = None
+        try:
+            from pet.hotkey_win import _HotkeySignalBridge
+            hotkey_bridge = _HotkeySignalBridge()
+            hotkey_bridge.fired.connect(self._on_hotkey_fired)
+        except ImportError:
+            pass  # 非 win 平台
+
         ok = self.adapter.start_hotkeys(
             self.cfg,
-            on_chat=self._toggle_chat_panel,
+            on_chat=self._toggle_chat_panel,     # bridge 为 None 时直调
             on_spit=lambda: self._proactive.force_spit(),
             on_conflict=on_conflict,
+            bridge=hotkey_bridge,
         )
         if not ok:
             self.logger.warning("[热键] 全部注册失败")
         else:
             self.logger.info("[热键] 就绪（Ctrl+Alt+P 聊天 / Ctrl+Alt+T 吐出）")
+
+    def _on_hotkey_fired(self, hid: int) -> None:
+        """M7：热键信号主线程分发（hid=1 聊天 / hid=2 吐出）。"""
+        if hid == 1:
+            self._toggle_chat_panel()
+        elif hid == 2:
+            self._proactive.force_spit()
 
     def _toggle_chat_panel(self) -> None:
         """Ctrl+Alt+P 唤出/隐藏聊天面板（v0.11 Must）。"""

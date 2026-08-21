@@ -354,8 +354,10 @@ def get_idle_seconds() -> float:
     if not _user32.GetLastInputInfo(ctypes.byref(info)):
         # 查询失败视为"活动中"，宁可不吃鼠标（安全铁律保守侧）
         return 0.0
-    now = _tick_count_ms()
-    return max(0.0, (now - info.dwTime) / 1000.0)
+    # M1 修：统一 32 位域防 uptime>49.7 天回绕（64bit GetTickCount64 减
+    # 32bit dwTime 差值恒偏大）——两侧 &0xFFFFFFFF 后减法回绕天然正确
+    now32 = _tick_count_ms() & 0xFFFFFFFF
+    return ((now32 - info.dwTime) & 0xFFFFFFFF) / 1000.0
 
 
 def mouse_pos() -> tuple:

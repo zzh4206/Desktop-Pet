@@ -70,7 +70,7 @@ class PlatformAdapter:
         return False
 
     def start_hotkeys(self, cfg: dict, on_chat, on_spit,
-                      on_conflict=None) -> bool:
+                      on_conflict=None, bridge=None) -> bool:
         """v0.11 全局热键注册。基类返 False（无实现）。"""
         return False
 
@@ -565,7 +565,7 @@ elif sys.platform == "win32":
             pass
 
         def start_hotkeys(self, cfg: dict, on_chat, on_spit,
-                          on_conflict=None) -> bool:
+                          on_conflict=None, bridge=None) -> bool:
             """v0.11：HotkeyManager 注册 Ctrl+Alt+P/T + 冲突检测。"""
             from . import hotkey_win
 
@@ -575,6 +575,7 @@ elif sys.platform == "win32":
                 hk_cfg.get("chat", "ctrl+alt+p"),
                 hk_cfg.get("spit", "ctrl+alt+t"),
                 on_chat, on_spit, on_conflict,
+                bridge=bridge,
             )
 
         def stop_hotkeys(self) -> None:

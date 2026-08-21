@@ -80,6 +80,26 @@ def parse_hotkey(s: str) -> tuple:
     return (mods, vk) if vk else (0, 0)
 
 
+class _HotkeySignalBridge:
+    """M7 修：热键线程回调经 Qt 信号转发主线程（跨线程 GUI 是 UB）。
+
+    HotkeyManager 保持纯 Python（无 Qt 依赖，测试友好）；app 在 start()
+    后用 bridge 的信号 connect 到实际 handler。
+    """
+
+    def __init__(self) -> None:
+        from PySide6.QtCore import QObject, Signal
+
+        class _Sig(QObject):
+            fired = Signal(int)       # hotkey id
+
+        self._obj = _Sig()
+
+    @property
+    def fired(self):
+        return self._obj.fired
+
+
 class HotkeyManager:
     """持久全局热键线程（chat/spit）；注册失败检测+回调通知。"""
 
@@ -89,13 +109,14 @@ class HotkeyManager:
         self._callbacks = {}    # id → callable
         self._active = False
         self._lock = threading.Lock()
+        self._bridge = None  # M7: Qt Signal 桥（app 注入后回调走信号）
 
     @property
     def active(self) -> bool:
         return self._active
 
     def start(self, chat_key: str, spit_key: str,
-              on_chat, on_spit, on_conflict=None) -> bool:
+              on_chat, on_spit, on_conflict=None, bridge=None) -> bool:
         """注册热键并启动消息循环。
 
         chat_key/spit_key 形如 "ctrl+alt+p"；on_conflict(name, key) 在
@@ -113,6 +134,7 @@ class HotkeyManager:
                 _ID_SPIT: parse_hotkey(spit_key),
             }
             self._on_conflict = on_conflict
+            self._bridge = bridge
             self._thread = threading.Thread(
                 target=self._loop, daemon=True, name="global-hotkey",
             )
@@ -168,12 +190,15 @@ class HotkeyManager:
         while _user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             if msg.message == WM_HOTKEY:
                 hid = int(msg.wParam)
-                cb = self._callbacks.get(hid)
-                if cb:
-                    try:
-                        cb()
-                    except Exception:
-                        _log.warning("[热键] 回调异常", exc_info=True)
+                if self._bridge is not None:
+                    self._bridge.fired.emit(hid)   # M7: 经信号转主线程
+                else:
+                    cb = self._callbacks.get(hid)
+                    if cb:
+                        try:
+                            cb()
+                        except Exception:
+                            _log.warning("[热键] 回调异常", exc_info=True)
             elif msg.message == WM_QUIT:
                 break
 

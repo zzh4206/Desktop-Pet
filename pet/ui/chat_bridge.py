@@ -149,15 +149,29 @@ class ChatBridge(QAbstractListModel):
     def _maybe_summarize(self) -> None:
         """v0.9 滚屏摘要：history > 20 轮 → DS 压缩最老 10 轮为一段摘要。
 
-        摘要以 user turn 形式插回历史头部（ChatTurn 结构不变），旧轮
-        物理移除——长对话不丢关键信息且 token 有界。DS 失败保留原文
-        （下次再试），不阻塞发送。
+        v0.9.3(H4 修)：切片边界按**完整轮次**对齐——从 _SUMMARIZE_BATCH
+        向后扫描，切点前若是 assistant(tool_calls) 或紧邻的 tool 结果则
+        推迟一位（保证配对不切断；切断致 DS 收非法序列永久 400）。
+        DS 失败保留原文（下次再试），不阻塞发送。
         """
         if (self._client is None
                 or len(self._history) <= self._SUMMARIZE_THRESHOLD):
             return
+        # 安全切点：从 batch 开始，跳过 tool 配对边界
+        cut = self._SUMMARIZE_BATCH
+        while cut < len(self._history):
+            t = self._history[cut - 1]
+            if t.role == "assistant" and t.tool_calls:
+                cut += 1  # 切点前是带调用的 assistant → 推迟
+                continue
+            if t.role == "tool" and cut >= 2:
+                prev = self._history[cut - 2]
+                if prev.role == "assistant" and prev.tool_calls:
+                    cut += 1  # 切点前是配对尾部 → 推迟
+                    continue
+            break
         try:
-            old_turns = self._history[: self._SUMMARIZE_BATCH]
+            old_turns = self._history[:cut]
             transcript = "\n".join(
                 f"{t.role}: {t.content[:200]}" for t in old_turns
                 if t.role in ("user", "assistant")
@@ -176,11 +190,11 @@ class ChatBridge(QAbstractListModel):
                 return
             self._history = (
                 [ChatTurn("user", f"[此前对话摘要]\n{summary}")]
-                + self._history[self._SUMMARIZE_BATCH:]
+                + self._history[cut:]
             )
-            self._messages = self._messages[self._SUMMARIZE_BATCH * 2:]
-            log.info("[记忆] 滚屏摘要: %d轮→摘要%.0f字",
-                     len(old_turns), len(summary))
+            self._messages = self._messages[cut * 2:]
+            log.info("[记忆] 滚屏摘要: %d轮(cut=%d)→摘要%.0f字",
+                     len(old_turns), cut, len(summary))
         except Exception:
             log.warning("[记忆] 滚屏摘要失败(保留原文)", exc_info=True)
 
