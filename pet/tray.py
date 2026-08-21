@@ -18,7 +18,8 @@ class TrayManager(QObject):
         self._on_quit = on_quit
         self._on_chat = None
         self._on_reset = None
-        self._on_spit = None  # v0.7 强制吐出（吃鼠标时键盘热键外的备用出口）
+        self._on_spit = None
+        self._on_mem = None  # v0.7 强制吐出（吃鼠标时键盘热键外的备用出口）
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
 
@@ -26,7 +27,9 @@ class TrayManager(QObject):
         act_chat = menu.addAction("聊天")
         act_chat.triggered.connect(self._emit_chat)
         act_reset = menu.addAction("重新开始")
+        act_mem = menu.addAction("记忆管理")
         act_reset.triggered.connect(self._emit_reset)
+        act_mem.triggered.connect(self._emit_mem)
         # v0.7 强制吐出：吃鼠标期间鼠标被抑制点不到菜单，故此菜单主要服务于
         # 非锁定态的残留释放 + 键盘可达用户（Tab/方向键导航菜单）。主逃生口
         # 仍是热键 Cmd+Option+T + 看门狗。
@@ -38,6 +41,14 @@ class TrayManager(QObject):
         self._tray.setContextMenu(menu)
         self._menu = menu  # 保留引用，remove() 时 deleteLater 释放
         self._tray.show()
+
+    def _emit_mem(self) -> None:
+        """v0.9 记忆管理菜单。"""
+        if self._on_mem:
+            self._on_mem()
+
+    def set_mem_callback(self, cb) -> None:
+        self._on_mem = cb
 
     def set_chat_callback(self, cb) -> None:
         """v0.4：托盘'聊天'唤出聊天面板（v0.11 真全局热键占位）。"""

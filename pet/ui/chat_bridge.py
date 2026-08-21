@@ -125,6 +125,7 @@ class ChatBridge(QAbstractListModel):
             return
 
         self._append_message("user", text)
+        self._maybe_summarize()   # v0.9 滚屏摘要（发送前检查历史长度）
         if self.on_user_message is not None:
             try:
                 self.on_user_message(text)  # v0.6 follow-up 启发式（不阻塞聊天）
@@ -141,6 +142,47 @@ class ChatBridge(QAbstractListModel):
         self._worker.offline.connect(self._on_offline)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
+
+    _SUMMARIZE_THRESHOLD = 20   # 超过触发
+    _SUMMARIZE_BATCH = 10       # 压缩最老 N 轮
+
+    def _maybe_summarize(self) -> None:
+        """v0.9 滚屏摘要：history > 20 轮 → DS 压缩最老 10 轮为一段摘要。
+
+        摘要以 user turn 形式插回历史头部（ChatTurn 结构不变），旧轮
+        物理移除——长对话不丢关键信息且 token 有界。DS 失败保留原文
+        （下次再试），不阻塞发送。
+        """
+        if (self._client is None
+                or len(self._history) <= self._SUMMARIZE_THRESHOLD):
+            return
+        try:
+            old_turns = self._history[: self._SUMMARIZE_BATCH]
+            transcript = "\n".join(
+                f"{t.role}: {t.content[:200]}" for t in old_turns
+                if t.role in ("user", "assistant")
+            )
+            prompt = (
+                "把以下对话压缩成一段不超过150字的要点摘要"
+                "（保留人名/偏好/约定/结论），只输出摘要：\n\n" + transcript
+            )
+            from ..llm import ChatTurn
+
+            summary, _ = self._client.chat_once(
+                [ChatTurn("user", prompt)], None,
+            )
+            summary = (summary or "").strip()
+            if not summary:
+                return
+            self._history = (
+                [ChatTurn("user", f"[此前对话摘要]\n{summary}")]
+                + self._history[self._SUMMARIZE_BATCH:]
+            )
+            self._messages = self._messages[self._SUMMARIZE_BATCH * 2:]
+            log.info("[记忆] 滚屏摘要: %d轮→摘要%.0f字",
+                     len(old_turns), len(summary))
+        except Exception:
+            log.warning("[记忆] 滚屏摘要失败(保留原文)", exc_info=True)
 
     @Slot()
     def cancel(self) -> None:

@@ -108,7 +108,17 @@ class OpenAICompatibleClient(LLMClient):
         self._registry = registry
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self._base_system = system_prompt
         self._system = {"role": "system", "content": system_prompt}
+
+    def set_memory_context(self, segment: str) -> None:
+        """v0.9：注入长期记忆段（app 每次发消息前刷新；空串清除）。
+
+        策略：替换而非追加——每次 recall 结果不同，重复追加会无限膨胀。
+        _base_system 存原始人设。
+        """
+        content = self._base_system + segment
+        self._system = {"role": "system", "content": content}
         self._timeout = timeout
         self._resp = None  # 流式响应引用（cancel() 调 close 真中断用）
         self.usage = Usage()

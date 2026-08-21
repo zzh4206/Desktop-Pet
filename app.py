@@ -154,6 +154,9 @@ class PetApp:
         self._perm_window = None
         self._perm_engine = None
         self._perm_bridge = None
+        self._mem_window = None
+        self._mem_engine = None
+        self._mem_bridge = None
         # v0.3 气泡跟随宠物（§2.4 头顶 20px / 靠顶翻下）
         self.window.petMoved.connect(self._on_pet_moved)
 
@@ -196,6 +199,8 @@ class PetApp:
         )
         # v0.7 托盘「强制吐出」→ EatMouseSession.force_spit（停 CGEventTap + 回 idle）
         self.tray.set_spit_callback(self._proactive.force_spit)
+        # v0.9 记忆管理页唤出
+        self.tray.set_mem_callback(self._show_mem)
         self._proactive_timer = QTimer(self.app)
         self._proactive_timer.timeout.connect(
             lambda: self._proactive.poll()
@@ -306,6 +311,15 @@ class PetApp:
 
             for schema, handler in build_win_tools():
                 registry.register(schema, handler)
+        # v0.9 长期记忆工具（共享，与平台工具并列；加工具不改 llm.py）
+        from pet.memory import MemoryStore
+        from pet.memory_tools import build_memory_tools
+
+        self._memory_path = os.path.join(paths["data_dir"],
+                                         "memory.json")
+        self.memory = MemoryStore.load(self._memory_path)
+        for schema, handler in build_memory_tools(self.memory):
+            registry.register(schema, handler)
 
         # v0.4.15 工厂实例化（不再硬编码 DeepSeekClient）
         from pet.llm import create_client
@@ -379,7 +393,7 @@ class PetApp:
             self.logger.warning("QML 聊天面板载入失败，托盘聊天走气泡兜底: %s", exc)
         # v0.6 follow-up：用户消息含"去吃饭"等 → 30min 后回访（启发式）
         if self._chat_bridge is not None:
-            self._chat_bridge.on_user_message = self._maybe_followup
+            self._chat_bridge.on_user_message = self._on_user_message
 
     def _make_tool_context(self) -> ToolContext:
         """按需取当前 state 作为工具上下文（v0.4 工具不真用 state）。"""
@@ -396,6 +410,18 @@ class PetApp:
         (("睡一觉", "去睡觉", "去午睡"), "睡醒了吗？精神好点没～"),
     )
 
+    def _on_user_message(self, text: str) -> None:
+        """发消息前钩子：v0.9 记忆注入 + v0.6 follow-up 启发式。"""
+        # 记忆注入：recall 按当前消息 → 刷 system prompt 记忆段
+        try:
+            from pet.memory_tools import memory_context
+
+            seg = memory_context(self.memory, text)
+            self._chat_client.set_memory_context(seg)
+        except Exception:
+            self.logger.warning("记忆注入异常", exc_info=True)
+        self._maybe_followup(text)
+
     def _maybe_followup(self, text: str) -> None:
         """v0.6：聊天消息启发式排 follow-up（30min 后回访气泡）。"""
         for keys, msg in self._FOLLOWUP_RULES:
@@ -404,6 +430,27 @@ class PetApp:
 
                 self._proactive.follow_up(msg, _t.time() + 30 * 60)
                 break
+
+    def _show_mem(self) -> None:
+        """v0.9 记忆管理页（托盘'记忆管理'唤出；查看/删除/清空）。"""
+        if self._mem_window is None:
+            from pet.ui.mem_bridge import load_mem_panel
+
+            self._mem_engine, self._mem_window, self._mem_bridge =                 load_mem_panel(self.memory, self._save_memory)
+        if self._mem_window is None:
+            self.bubble.show("记忆页加载失败～", anchor=self._pet_anchor())
+            return
+        self._mem_bridge.refresh()
+        self._mem_window.show()
+        self._mem_window.raise_()
+        self._mem_window.requestActivate()
+
+    def _save_memory(self) -> None:
+        """UI 删除/清空后即时落盘。"""
+        try:
+            self.memory.save(self._memory_path)
+        except Exception:
+            self.logger.exception("记忆存档失败")
 
     def _show_perm(self) -> None:
         """v0.8 权限自检页（mac 系统特权自检 / win 运行时能力自检；
@@ -668,6 +715,12 @@ class PetApp:
         # ③ 全局热键 —— v0.11（v0.7 强制吐出热键由 mouse_lock_mac 键盘
         # listen tap 承载，随 EatMouseSession 释放一并停止）
         # ④ 保存 PetState+Memory
+        if getattr(self, "memory", None) is not None:
+            try:
+                self.memory.forget_expired()
+                self.memory.save(self._memory_path)
+            except Exception:
+                self.logger.exception("记忆存档失败")
         self._save_now()
         # ⑤ 关 QML engine（v0.4 聊天面板）+ 中断流式 worker（防线程泄漏）
         if self._chat_bridge is not None:
