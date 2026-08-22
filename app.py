@@ -334,6 +334,26 @@ class PetApp:
         for schema, handler in build_memory_tools(self.memory):
             registry.register(schema, handler)
 
+        # v0.9/v0.8 面板 singleton 预注册：必须在 _build_chat_panel 创建首个
+        # QQmlApplicationEngine 前注册，否则 PySide6 6.10 下后注册的 singleton
+        # 不被后续 engine 解析 → perm/mem.qml 报 "Cannot assign QQuickText
+        # to list property data"。bridge 实例留存，_show_mem/_show_perm 复用。
+        from pet.ui.mem_bridge import MemBridge, register_mem_singleton
+        self._mem_bridge = MemBridge(self.memory, self._save_memory)
+        register_mem_singleton(self._mem_bridge)
+        if sys.platform == "darwin":
+            from pet.ui.perm_bridge_mac import (
+                PermBridgeMac, register_perm_singleton,
+            )
+            self._perm_bridge = PermBridgeMac(self.adapter)
+            register_perm_singleton(self._perm_bridge)
+        else:
+            from pet.ui.perm_bridge import (
+                PermBridge, register_perm_singleton,
+            )
+            self._perm_bridge = PermBridge(self.adapter)
+            register_perm_singleton(self._perm_bridge)
+
         # v0.4.15 工厂实例化（不再硬编码 DeepSeekClient）
         from pet.llm import create_client
 
@@ -507,11 +527,14 @@ class PetApp:
         )
 
     def _show_mem(self) -> None:
-        """v0.9 记忆管理页（托盘'记忆管理'唤出；查看/删除/清空）。"""
-        if self._mem_window is None:
-            from pet.ui.mem_bridge import load_mem_panel
+        """v0.9 记忆管理页（托盘'记忆管理'唤出；查看/删除/清空）。
 
-            self._mem_engine, self._mem_window, self._mem_bridge =                 load_mem_panel(self.memory, self._save_memory)
+        bridge + PetMem singleton 已在 __init__ 预注册（首个 engine 前），
+        此处只建 engine + 载入 QML，复用 self._mem_bridge。"""
+        if self._mem_window is None:
+            from pet.ui.mem_bridge import load_mem_qml
+
+            self._mem_engine, self._mem_window = load_mem_qml()
         if self._mem_window is None:
             self.bubble.show("记忆页加载失败～", anchor=self._pet_anchor())
             return
@@ -542,18 +565,16 @@ class PetApp:
     def _show_perm(self) -> None:
         """v0.8 权限自检页（mac 系统特权自检 / win 运行时能力自检；
         右键"设置"唤出）。darwin 载 perm_bridge_mac，win 载 perm_bridge，
-        两者复用共享 perm.qml（经 note 属性注入平台头部文案）。"""
+        两者复用共享 perm.qml（经 note 属性注入平台头部文案）。
+
+        bridge + PetPerm singleton 已在 __init__ 预注册（首个 engine 前），
+        此处只建 engine + 载入 QML，复用 self._perm_bridge。"""
         if self._perm_window is None:
             if sys.platform == "darwin":
-                from pet.ui.perm_bridge_mac import load_perm_panel
-
-                self._perm_engine, self._perm_window, self._perm_bridge = \
-                    load_perm_panel(self.adapter)
+                from pet.ui.perm_bridge_mac import load_perm_qml
             else:
-                from pet.ui.perm_bridge import load_perm_panel
-
-                self._perm_engine, self._perm_window, self._perm_bridge = \
-                    load_perm_panel(self.adapter)
+                from pet.ui.perm_bridge import load_perm_qml
+            self._perm_engine, self._perm_window = load_perm_qml()
         if self._perm_window is None:
             self.bubble.show("权限页加载失败～", anchor=self._pet_anchor())
             return

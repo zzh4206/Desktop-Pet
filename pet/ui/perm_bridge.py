@@ -145,18 +145,44 @@ class PermBridge(QObject):
         return (bool(key), "已设置" if key else "未设置（聊天不可用）")
 
 
-def load_perm_panel(adapter) -> tuple:
-    """载入权限自检 QML。返回 (engine, window|None)。"""
-    from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
+_SINGLETON_REGISTERED = False
+
+
+def register_perm_singleton(bridge: "PermBridge") -> None:
+    """注册 ``PetPerm 1.0`` singleton（注入 bridge 实例）。
+
+    必须在任何 ``QQmlApplicationEngine`` 创建前调用（PySide6 6.10 后注册
+    的 singleton 不被后续 engine 解析）。idempotent：重复调用 no-op。"""
+    global _SINGLETON_REGISTERED
+    if _SINGLETON_REGISTERED:
+        return
+    from PySide6.QtQml import qmlRegisterSingletonInstance
+
+    qmlRegisterSingletonInstance(PermBridge, "PetPerm", 1, 0, "Perm", bridge)
+    _SINGLETON_REGISTERED = True
+
+
+def load_perm_qml() -> tuple:
+    """载入权限自检 QML（singleton 需已注册）。返回 (engine, window|None)。"""
+    from PySide6.QtQml import QQmlApplicationEngine
 
     qml_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "perm.qml"
     )
-    bridge = PermBridge(adapter)
-    qmlRegisterSingletonInstance(PermBridge, "PetPerm", 1, 0, "Perm", bridge)
     engine = QQmlApplicationEngine()
     engine.load(qml_path)
     if not engine.rootObjects():
         _log.error("QML 权限页载入失败: %s", qml_path)
-        return (engine, None, bridge)
-    return (engine, engine.rootObjects()[0], bridge)
+        return (engine, None)
+    return (engine, engine.rootObjects()[0])
+
+
+def load_perm_panel(adapter) -> tuple:
+    """载入权限自检 QML。返回 (engine, window|None, bridge)。
+
+    兼容一次性载入；app 主路径已预注册时 register_perm_singleton no-op，
+    主路径用 register_perm_singleton + load_perm_qml 复用同一 bridge。"""
+    bridge = PermBridge(adapter)
+    register_perm_singleton(bridge)
+    engine, win = load_perm_qml()
+    return (engine, win, bridge)

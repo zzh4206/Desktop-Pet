@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import PetMem 1.0
 
 // v0.9 记忆管理页：查看/删除/清空（§2.2 接口 + 版本规划 v0.9 Must）

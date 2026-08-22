@@ -60,18 +60,48 @@ class MemBridge(QObject):
         self.refresh()
 
 
-def load_mem_panel(store, save_fn) -> tuple:
-    """载入记忆管理 QML。返回 (engine, window|None, bridge)。"""
-    from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
+_SINGLETON_REGISTERED = False
+
+
+def register_mem_singleton(bridge: "MemBridge") -> None:
+    """注册 ``PetMem 1.0`` singleton（注入 bridge 实例）。
+
+    必须在任何 ``QQmlApplicationEngine`` 创建前调用——PySide6 6.10 下
+    engine 创建后再注册的新 singleton 不会被后续 engine 解析，表现为
+    mem.qml 里 ``Text`` 无法挂进 ``ColumnLayout.data``（报
+    "Cannot assign QQuickText to list property data; expected QObject"）。
+    idempotent：重复调用 no-op（防 lazy 路径二次注册）。"""
+    global _SINGLETON_REGISTERED
+    if _SINGLETON_REGISTERED:
+        return
+    from PySide6.QtQml import qmlRegisterSingletonInstance
+
+    qmlRegisterSingletonInstance(MemBridge, "PetMem", 1, 0, "Mem", bridge)
+    _SINGLETON_REGISTERED = True
+
+
+def load_mem_qml() -> tuple:
+    """载入记忆管理 QML（singleton 需已注册）。返回 (engine, window|None)。"""
+    from PySide6.QtQml import QQmlApplicationEngine
 
     qml_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "mem.qml"
     )
-    bridge = MemBridge(store, save_fn)
-    qmlRegisterSingletonInstance(MemBridge, "PetMem", 1, 0, "Mem", bridge)
     engine = QQmlApplicationEngine()
     engine.load(qml_path)
     if not engine.rootObjects():
         _log.error("QML 记忆页载入失败: %s", qml_path)
-        return (engine, None, bridge)
-    return (engine, engine.rootObjects()[0], bridge)
+        return (engine, None)
+    return (engine, engine.rootObjects()[0])
+
+
+def load_mem_panel(store, save_fn) -> tuple:
+    """载入记忆管理 QML。返回 (engine, window|None, bridge)。
+
+    兼容一次性载入（建 bridge + 注册 singleton + 载入）。app 主路径已
+    预注册时 register_mem_singleton no-op——故主路径应直接用
+    register_mem_singleton + load_mem_qml 复用同一 bridge，不走本函数。"""
+    bridge = MemBridge(store, save_fn)
+    register_mem_singleton(bridge)
+    engine, win = load_mem_qml()
+    return (engine, win, bridge)

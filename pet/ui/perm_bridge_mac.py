@@ -131,24 +131,50 @@ class PermBridgeMac(QObject):
         return (bool(key), "已设置" if key else "未设置（聊天不可用）")
 
 
-def load_perm_panel(adapter) -> tuple:
-    """载入 mac 权限自检 QML。返回 (engine, window|None, bridge)。
+_SINGLETON_REGISTERED = False
 
-    复用共享 ``perm.qml``（经 ``note`` 属性注入平台头部文案）；注册
-    ``PetPerm 1.0`` singleton 注入 bridge 实例。
-    """
-    from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
+
+def register_perm_singleton(bridge: "PermBridgeMac") -> None:
+    """注册 ``PetPerm 1.0`` singleton（注入 bridge 实例）。
+
+    必须在任何 ``QQmlApplicationEngine`` 创建前调用——PySide6 6.10 下
+    engine 创建后再注册的新 singleton 不被后续 engine 解析，perm.qml
+    报 "Cannot assign QQuickText to list property data; expected QObject"。
+    idempotent：重复调用 no-op。"""
+    global _SINGLETON_REGISTERED
+    if _SINGLETON_REGISTERED:
+        return
+    from PySide6.QtQml import qmlRegisterSingletonInstance
+
+    qmlRegisterSingletonInstance(PermBridgeMac, "PetPerm", 1, 0, "Perm", bridge)
+    _SINGLETON_REGISTERED = True
+
+
+def load_perm_qml() -> tuple:
+    """载入 mac 权限自检 QML（singleton 需已注册）。返回 (engine, window|None)。"""
+    from PySide6.QtQml import QQmlApplicationEngine
 
     qml_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "perm.qml"
     )
-    bridge = PermBridgeMac(adapter)
-    qmlRegisterSingletonInstance(PermBridgeMac, "PetPerm", 1, 0, "Perm", bridge)
     engine = QQmlApplicationEngine()
     engine.load(qml_path)
     if not engine.rootObjects():
         _log.error("QML 权限页载入失败: %s", qml_path)
+        return (engine, None)
+    return (engine, engine.rootObjects()[0])
+
+
+def load_perm_panel(adapter) -> tuple:
+    """载入 mac 权限自检 QML。返回 (engine, window|None, bridge)。
+
+    兼容一次性载入（建 bridge + 注册 + 载入）。app 主路径已预注册时
+    register_perm_singleton no-op——主路径用 register_perm_singleton +
+    load_perm_qml 复用同一 bridge。"""
+    bridge = PermBridgeMac(adapter)
+    register_perm_singleton(bridge)
+    engine, win = load_perm_qml()
+    if win is None:
         return (engine, None, bridge)
-    win = engine.rootObjects()[0]
     # 深链按钮接 bridge.open_settings（perm.qml 按钮 onClicked: Perm.open_settings）
     return (engine, win, bridge)
