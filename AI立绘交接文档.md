@@ -89,9 +89,12 @@ cd /d/AI/ComfyUI && nohup ./venv/Scripts/python.exe main.py --port 8188 > /d/AI/
 pet_v2_postprocess.py：remove(session=u2net) → 连通背景白填充(轮1边界白+轮2邻透明白块)
 → MinFilter(3) alpha 腐蚀(1px 防白边) → alpha bbox 裁切 → 长边 LANCZOS 缩到 64/96/128
 → 方形画布底对齐粘贴 → assets/ai/
-pet_v2_gap_fix.py（成品级，必须先于入仓跑）：腿间缝隙残留白色净化——
-窗口规则 = bbox 下部30%×水平20-80%带内【完整包含】的白色连通块(min≥246&alpha>128)置透明；
-实测灰度分层：缝隙冷白≥246 / 袜子阴影暗色≤200 / 裙白在腰腹(窗口外)，袜子鞋裙安好
+pet_v2_gap_fix.py（成品级，必须先于入仓跑）：腿间/袜间灰白残留净化——
+目标 = bbox 下部35%×水平28-72%带内【完整包含】的低饱和灰白连通组件(min≥210
+&色差≤20&alpha>128)置透明。阈值依据（实测分层）：缝隙/阴影灰白 210-255 低饱和、
+鞋/描线 ≤160、袜子 165-200(min<210 不命中)、肤色暖色(色差>20)、
+裙摆褶边白与裙体同组件(尺寸超窗不命中)；裙白在腰腹。早期 v1(纯白246)会漏掉
+215-245 灰档（用户反馈"灰色仍在"），**勿降级回 v1 规则**
 ```
 - venv **已装** rembg 2.0.81 + onnxruntime + scipy（本版无 isnet_anime，用 u2net 足够）
 
