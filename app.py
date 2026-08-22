@@ -457,11 +457,16 @@ class PetApp:
 
         hotkey_bridge = None
         try:
-            from pet.hotkey_win import _HotkeySignalBridge
+            if sys.platform == "darwin":
+                from pet.hotkey_mac import _HotkeySignalBridge
+                _hk_hint = "Cmd+Option+P 聊天 / Cmd+Option+T 吐出"
+            else:
+                from pet.hotkey_win import _HotkeySignalBridge
+                _hk_hint = "Ctrl+Alt+P 聊天 / Ctrl+Alt+T 吐出"
             hotkey_bridge = _HotkeySignalBridge()
             hotkey_bridge.fired.connect(self._on_hotkey_fired)
         except ImportError:
-            pass  # 非 win 平台
+            pass  # 平台热键模块不可用 → bridge=None，回调直调
 
         ok = self.adapter.start_hotkeys(
             self.cfg,
@@ -473,7 +478,7 @@ class PetApp:
         if not ok:
             self.logger.warning("[热键] 全部注册失败")
         else:
-            self.logger.info("[热键] 就绪（Ctrl+Alt+P 聊天 / Ctrl+Alt+T 吐出）")
+            self.logger.info("[热键] 就绪（%s）", _hk_hint)
 
     def _on_hotkey_fired(self, hid: int) -> None:
         """M7：热键信号主线程分发（hid=1 聊天 / hid=2 吐出）。"""

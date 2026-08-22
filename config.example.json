@@ -33,6 +33,10 @@
     "climb_min_depth_px": 30,
     "pet_height_px": 64
   },
+  "hotkeys": {
+    "chat": "cmd+option+p",
+    "spit": "cmd+option+t"
+  },
   "proactive": {
     "quiet_hours": [
       23,

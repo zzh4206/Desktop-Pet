@@ -344,6 +344,42 @@ if sys.platform == "darwin":
 
             mouse_lock_mac.open_accessibility_settings()
 
+        # ---- v0.11 全局热键 + 开机自启（hotkey_mac Carbon RegisterEventHotKey
+        # + LaunchAgents plist；与 WinPlatformAdapter 接口对齐） ----
+        def start_hotkeys(self, cfg: dict, on_chat, on_spit,
+                          on_conflict=None, bridge=None) -> bool:
+            """v0.11：HotkeyManager 注册 Cmd+Option+P/T + 冲突检测。
+
+            默认 "cmd+option+p"/"cmd+option+t"；config ``hotkeys.chat/spit``
+            可自定义（字符串，修饰键 cmd/option/shift/ctrl + 单键）。
+            """
+            from . import hotkey_mac
+
+            self._hotkey_mgr = hotkey_mac.HotkeyManager()
+            hk_cfg = cfg.get("hotkeys", {})
+            return self._hotkey_mgr.start(
+                hk_cfg.get("chat", "cmd+option+p"),
+                hk_cfg.get("spit", "cmd+option+t"),
+                on_chat, on_spit, on_conflict,
+                bridge=bridge,
+            )
+
+        def stop_hotkeys(self) -> None:
+            mgr = getattr(self, "_hotkey_mgr", None)
+            if mgr:
+                mgr.stop()
+
+        def set_autostart(self, enabled: bool) -> bool:
+            """v0.11：写/删 ~/Library/LaunchAgents/com.zzh4206.desktop-pet.plist。"""
+            from . import hotkey_mac
+
+            return hotkey_mac.set_autostart(enabled)
+
+        def is_autostart_enabled(self) -> bool:
+            from . import hotkey_mac
+
+            return hotkey_mac.is_autostart_enabled()
+
         # ---- v0.3.13 mac 适配：图层探针排除自身（win register_own_windows 同类）----
         def register_own_windows(self, *widgets) -> None:
             """登记宠物自身窗口（本体/气泡）——solid_at 探针被自身遮挡时放行。

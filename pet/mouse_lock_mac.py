@@ -1,17 +1,19 @@
 """mac 鼠标抑制（吃鼠标平台层）—— 设计思路.md §七 / 平台适配与分工 §五。
 
-平台 API 全部封装于此（CGEventTap / AXIsProcessTrusted / 前台 app 查询 /
-强制吐出热键）；共享 ``EatMouseSession`` / ``ProactiveScheduler`` 经
+平台 API 全部封装于此（CGEventTap / AXIsProcessTrusted / 前台 app 查询）；
+共享 ``EatMouseSession`` / ``ProactiveScheduler`` 经
 ``platform.MacPlatformAdapter`` 注入本模块，**不直 import**（平台隔离，
-设计思路.md §2.1 注入点例外）。
+设计思路.md §2.1 注入点例外）。强制吐出热键 ``Cmd+Option+T`` 不再在本
+模块监听——v0.11 起统一由 ``hotkey_mac`` 的 ``RegisterEventHotKey`` 注册
+（不需 Accessibility，见 hotkey_mac 文档），``force_spit`` 经 app 注入的
+``on_spit`` 回调触发。
 
 安全设计（铁律不可妥协，设计思路.md §七）：
 
-1. **只锁鼠标不碰键盘**——鼠标 tap 用 ``kCGEventTapOptionDefault`` 回调
-   ``return None`` 抑制；键盘 tap 用 ``kCGEventTapOptionListenOnly``
-   **物理上无法抑制**（listen-only 回调返回值被系统忽略），只用来监听
-   强制吐出热键 ``Cmd+Option+T``。两 tap 分离 = 即便回调有 bug 也不会
-   吞键盘，defense-in-depth。
+1. **只锁鼠标不碰键盘**——仅创建**鼠标** tap（``kCGEventTapOptionDefault``，
+   回调 ``return None`` 抑制），**无任何键盘 tap**——鼠标抑制回调的 mask
+   不含键盘事件，键盘事件永不进回调。v0.7 原键盘 listen-tap 已移除（热键
+   统一走 ``hotkey_mac``），defense-in-depth 更强：本模块物理上无法碰键盘。
 
 2. **单次锁定 ≤15s**——``start`` 时 duration 钳制 ``[0.3, 15.0]``。
 
@@ -28,7 +30,7 @@
 
 6. **tap 创建失败（权限被拒 / 系统异常）→ 返 ``False``，不锁死**。
 
-CGEventTap 回调只在 run loop 服务其 source 时触发。本模块把两个 source
+CGEventTap 回调只在 run loop 服务其 source 时触发。本模块把鼠标 source
 加到 ``CFRunLoopGetMain()``（``kCFRunLoopCommonModes``）——Qt 的 mac 事件
 循环即主 CFRunLoop，common-modes source 在默认/模态运行期都会被服务。
 ``release`` 关键动作是 ``CGEventTapEnable(tap, False)``（mach-port 级标志，
@@ -66,12 +68,9 @@ try:
         CGEventTapEnable,
         CGEventTapIsEnabled,
         CGEventMaskBit,
-        CGEventGetFlags,
-        CGEventGetIntegerValueField,
         kCGSessionEventTap,
         kCGHeadInsertEventTap,
         kCGEventTapOptionDefault,
-        kCGEventTapOptionListenOnly,
         kCGEventMouseMoved,
         kCGEventLeftMouseDown,
         kCGEventLeftMouseUp,
@@ -79,10 +78,6 @@ try:
         kCGEventRightMouseUp,
         kCGEventLeftMouseDragged,
         kCGEventRightMouseDragged,
-        kCGEventKeyDown,
-        kCGKeyboardEventKeycode,
-        kCGEventFlagMaskCommand,
-        kCGEventFlagMaskAlternate,
     )
 
     _HAS_QUARTZ = True
@@ -127,14 +122,8 @@ def _ax_trusted() -> bool:
         return False
 
 
-# 强制吐出热键 Cmd+Option+T（T=吐；决策点 v0.0.12：原 Cmd+Option+Shift+P
-# 4 键难按 → 3 键；与 win Ctrl+Alt+T 对应；v0.11 统一热键管理时整合）
-_SPIT_KEYCODE = 17        # kVK_ANSI_T
-_SPIT_FLAGS = (          # 必须同时按下的修饰键
-    kCGEventFlagMaskCommand | kCGEventFlagMaskAlternate
-) if _HAS_QUARTZ else 0
-
-# 鼠标 mask（**不含任何键盘 mask**——铁律1：键盘不进鼠标抑制回调）
+# 鼠标 mask（**不含任何键盘 mask**——铁律1：键盘不进鼠标抑制回调；
+# 且本模块不再创建键盘 tap，热键统一走 hotkey_mac）
 _MOUSE_MASK = (
     CGEventMaskBit(kCGEventMouseMoved)
     | CGEventMaskBit(kCGEventLeftMouseDown)
@@ -144,9 +133,6 @@ _MOUSE_MASK = (
     | CGEventMaskBit(kCGEventLeftMouseDragged)
     | CGEventMaskBit(kCGEventRightMouseDragged)
 ) if _HAS_QUARTZ else 0
-
-# 键盘 mask（仅 KeyDown；listen-only tap，永不抑制）
-_KEY_MASK = CGEventMaskBit(kCGEventKeyDown) if _HAS_QUARTZ else 0
 
 
 def open_accessibility_settings() -> None:
@@ -197,12 +183,13 @@ def frontmost_app_name() -> str:
 
 
 class MouseLockMac:
-    """mac 鼠标抑制 + 强制吐出热键 + 看门狗。
+    """mac 鼠标抑制 + 看门狗（热键 v0.11 起统一走 ``hotkey_mac``）。
 
     生命周期：
-    - ``start(duration)`` → 看门狗先起 → 创建鼠标/键盘两 tap（加主 run loop）
+    - ``start(duration)`` → 看门狗先起 → 创建鼠标 tap（加主 run loop）
       → 抑制开始。返 True=已抑制。
-    - ``force_spit()`` → ``_release()``（热键/托盘/shutdown 调，幂等）。
+    - ``force_spit()`` → ``_release()``（hotkey_mac 的吐出热键/托盘/shutdown
+      调，幂等）。
     - 看门狗 → deadline 到自动 ``_release()``（主逻辑崩溃也释放）。
     """
 
@@ -215,15 +202,12 @@ class MouseLockMac:
     def __init__(self) -> None:
         self._tap = None            # 鼠标 CFMachPort（default 模式，抑制）
         self._src = None            # 鼠标 run loop source
-        self._ktap = None           # 键盘 CFMachPort（listen-only，热键）
-        self._ksrc = None           # 键盘 run loop source
         self._active = False
         self._lock = threading.Lock()
         self._watchdog: threading.Thread | None = None
         self._deadline = 0.0
         # 保留回调引用防 GC（CGEventTap 不全权持有 Python 回调）
         self._mouse_cb = self._on_mouse
-        self._key_cb = self._on_key
 
     # ---- 公开查询 ----
 
@@ -251,23 +235,6 @@ class MouseLockMac:
         # 鼠标 tap（default 模式）：return None 抑制事件（不传下游）。
         # 键盘事件永不进此回调（mask 只含鼠标）——铁律1。
         return None
-
-    def _on_key(self, proxy, event_type, event, refcon):
-        # 键盘 tap（listen-only）：return 值被系统忽略，事件照传下游——
-        # 物理上无法吞键盘（铁律1 defense-in-depth）。只检测热键。
-        try:
-            if event is not None:
-                flags = CGEventGetFlags(event)
-                if (flags & _SPIT_FLAGS) == _SPIT_FLAGS:
-                    code = CGEventGetIntegerValueField(
-                        event, kCGKeyboardEventKeycode
-                    )
-                    if code == _SPIT_KEYCODE:
-                        log.info("强制吐出热键 Cmd+Option+T 触发")
-                        self.force_spit()
-        except Exception:
-            log.warning("热键回调异常", exc_info=True)
-        return event
 
     # ---- 启动 / 释放 ----
 
@@ -316,7 +283,7 @@ class MouseLockMac:
         return True
 
     def _create_taps(self) -> bool:
-        """创建鼠标 + 键盘两 tap 并加主 run loop。返 False=创建失败。"""
+        """创建鼠标 tap 并加主 run loop。返 False=创建失败。"""
         with self._lock:
             if not self._active:
                 return False  # force_spit 已抢先释放
@@ -336,23 +303,6 @@ class MouseLockMac:
                 log.warning("CGEventTapCreate(鼠标) 返回 NULL（权限被拒/系统拒绝）")
                 return False
             try:
-                ktap = CGEventTapCreate(
-                    kCGSessionEventTap,
-                    kCGHeadInsertEventTap,
-                    kCGEventTapOptionListenOnly,
-                    _KEY_MASK,
-                    self._key_cb,
-                    None,
-                )
-            except Exception:
-                log.warning("CGEventTapCreate(键盘) 异常", exc_info=True)
-                ktap = None
-            if ktap is None:
-                # 键盘 tap 失败不致命：鼠标抑制仍生效，只是热键退化为
-                # 托盘+看门狗（托盘在非锁定时可点；看门狗兜底）。记日志。
-                log.warning("键盘 listen tap 创建失败，热键退托盘+看门狗")
-
-            try:
                 msrc = CFMachPortCreateRunLoopSource(None, mtap, None)
                 CFRunLoopAddSource(
                     CFRunLoopGetMain(), msrc, kCFRunLoopCommonModes
@@ -364,22 +314,8 @@ class MouseLockMac:
                 except Exception:
                     pass
                 return False
-            ksrc = None
-            if ktap is not None:
-                try:
-                    ksrc = CFMachPortCreateRunLoopSource(None, ktap, None)
-                    CFRunLoopAddSource(
-                        CFRunLoopGetMain(), ksrc, kCFRunLoopCommonModes
-                    )
-                except Exception:
-                    log.warning("键盘 tap 接 run loop 失败（热键退化）",
-                                exc_info=True)
-                    ksrc = None
-                    ktap = None
             self._tap = mtap
             self._src = msrc
-            self._ktap = ktap
-            self._ksrc = ksrc
             return True
 
     def _watchdog_loop(self) -> None:
@@ -409,23 +345,20 @@ class MouseLockMac:
                 return
             self._active = False
             mtap, msrc = self._tap, self._src
-            ktap, ksrc = self._ktap, self._ksrc
-            self._tap = self._src = self._ktap = self._ksrc = None
+            self._tap = self._src = None
 
         # 关键释放：CGEventTapEnable(False) 是 mach-port 级使能标志，跨线程
         # 调用安全，立即让事件放行（鼠标恢复）。看门狗线程与主线程都调它。
-        for tap in (mtap, ktap):
-            if tap is not None:
-                try:
-                    CGEventTapEnable(tap, False)
-                except Exception:
-                    log.warning("CGEventTapEnable(False) 异常", exc_info=True)
+        if mtap is not None:
+            try:
+                CGEventTapEnable(mtap, False)
+            except Exception:
+                log.warning("CGEventTapEnable(False) 异常", exc_info=True)
         # source 移除（hygiene；跨线程调用，best-effort）
-        rl = CFRunLoopGetMain()
-        for src in (msrc, ksrc):
-            if src is not None:
-                try:
-                    CFRunLoopRemoveSource(rl, src, kCFRunLoopCommonModes)
-                except Exception:
-                    pass
+        if msrc is not None:
+            try:
+                rl = CFRunLoopGetMain()
+                CFRunLoopRemoveSource(rl, msrc, kCFRunLoopCommonModes)
+            except Exception:
+                pass
         log.info("鼠标释放(%s)", reason)
