@@ -229,5 +229,11 @@ class AIArtProvider:
     def get_frames(
         self, state: PetState, action: "ActionType", skin: str = "default"
     ) -> list[SpriteRef]:
-        """AI 立绘帧降级 emoji 帧（§六：AI 仅 get_static，动画走占位）。"""
-        return self._fallback.get_frames(state, action, skin)
+        """AI 立绘动画帧（v0.10.1：返回当前静帧，不降级 emoji）。
+
+        §六约定"AI 仅静态"——但降级 emoji 会导致随机小动作动画期间
+        AI 立绘→emoji→AI 立绘的闪烁（用户反馈）。改返回 AI 静帧单帧：
+        play_frames 播同一张图（len≤1 不启 timer），视觉无变化。
+        真实动画帧入 assets/frames/ 后替换此实现。
+        """
+        return [self.get_static(state, skin)]
