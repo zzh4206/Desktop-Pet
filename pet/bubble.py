@@ -69,8 +69,8 @@ class BubbleWidget(QWidget):
         """anchor=(cx, 宠物bottom_y, 宠物height)：气泡挂宠物头顶 20px，
         靠屏幕顶自动翻到宠物下方（§2.4）。None 时回退工作区顶部居中。
 
-        WARNING 不启自动隐藏定时器——需调用方在合适时机显式 hide()
-        （如拖拽开始 / 全屏 / 重置完成）；INFO/CHAT 到点自动隐藏。"""
+        到点自动隐藏；WARNING 用更长 duration（8s）但不永久停留——仍可点击
+        提前关闭。INFO/CHAT 用传入 duration（默认 5s）。"""
         self._kind = kind
         self._label.setText(text)
         # B4：WARNING 用黄底/边框样式区分，其余（INFO/CHAT）用默认深底样式
@@ -82,8 +82,8 @@ class BubbleWidget(QWidget):
         self._reposition()
         super().show()
         self.raise_()
-        if kind != BubbleType.WARNING:
-            self._timer.start(duration_ms)
+        # WARNING 不再永久停留：8s 兜底自动隐藏（点击仍可提前关）。
+        self._timer.start(8000 if kind == BubbleType.WARNING else duration_ms)
 
     def hide(self) -> None:
         super().hide()
