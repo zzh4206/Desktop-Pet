@@ -86,10 +86,14 @@ cd /d/AI/ComfyUI && nohup ./venv/Scripts/python.exe main.py --port 8188 > /d/AI/
 
 ## 四、后处理管线
 ```
-pet_v2_postprocess.py：remove(session=u2net) → MinFilter(3) alpha 腐蚀(1px 防白边)
-→ alpha bbox 裁切 → 长边 LANCZOS 缩到 64/96/128 → 方形画布底对齐粘贴 → assets/ai/
+pet_v2_postprocess.py：remove(session=u2net) → 连通背景白填充(轮1边界白+轮2邻透明白块)
+→ MinFilter(3) alpha 腐蚀(1px 防白边) → alpha bbox 裁切 → 长边 LANCZOS 缩到 64/96/128
+→ 方形画布底对齐粘贴 → assets/ai/
+pet_v2_gap_fix.py（成品级，必须先于入仓跑）：腿间缝隙残留白色净化——
+窗口规则 = bbox 下部30%×水平20-80%带内【完整包含】的白色连通块(min≥246&alpha>128)置透明；
+实测灰度分层：缝隙冷白≥246 / 袜子阴影暗色≤200 / 裙白在腰腹(窗口外)，袜子鞋裙安好
 ```
-- venv **已装** rembg 2.0.81 + onnxruntime（本版无 isnet_anime，用 u2net 足够）
+- venv **已装** rembg 2.0.81 + onnxruntime + scipy（本版无 isnet_anime，用 u2net 足够）
 
 ---
 
@@ -121,7 +125,7 @@ pet_v2_postprocess.py：remove(session=u2net) → MinFilter(3) alpha 腐蚀(1px 
 1. ~~neglected 表情不够丧~~（已按灰调+脏污区分，可接受；要更强需独立丧脸锚定或 ControlNet）
 2. **情绪可读性**：0.44 版本特写可读（腮红/泪/张嘴/垂眼），64px 幼年形态会更模糊——如用户反馈辨不清，单情绪升 denoise 至 0.5 局部重出
 3. **文件名踩坑**：SaveImage 自动加 `_00001_`/`_00002_` 序号；glob `*_happy_*_00002_` 会失配（happy 与序号共用一个下划线），用 `*_0000X_` 且取最新编号即可；确认新轮次编号：neutral _00003_、其余情绪 _00004_
-4. **rembg 白边**：白裙边缘偶有 1px 残留，MinFilter 已腐蚀；若发现彩边改 u2netp 或加大腐蚀
+4. **rembg 白边/腿间缝**：白裙边缘偶有 1px 残留，MinFilter 已腐蚀；**腿间白色背景 rembg 判为前景**（u2net 轮廓完整性），已用成品级窗口净化清透（见 §四）；若重新生成，后处理完必须跑 `pet_v2_gap_fix.py` 再入仓
 5. **本版 ComfyUI 的 inpaint 不可用**：`VAEEncodeForInpaint`/`InpaintModelConditioning` 在本机 ComfyUI 0.33.0 都会整图重生成（noise_mask 语义问题），**改图勿用 inpaint**，用 PIL 合成移植（见 §三 方法②）或整图 txt2img 重出
 6. **驱动环境**（换会话可能失效）：nvlddmkm 蓝屏旧因、610.88 已修；bash 里 `Start-Process -Verb RunAs` 必须 `-Wait` 保活否则 UAC 被父 shell 退出取消；NVIDIA 下载防盗链 curl 要带 UA+Referer（详见记忆 `nv-driver-bsod-61088`）
 7. **测试环境**：win 端依赖只装在 CPython 3.12 绝对路径；跑测试加 `-u`（UTF-8 输出）
