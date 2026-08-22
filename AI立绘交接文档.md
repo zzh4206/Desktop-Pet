@@ -31,8 +31,9 @@ D:\Desktop-Pet\assets\ai\{stage}_{branch}_{mood}.png     # 30 张
 D:\Desktop-Pet\assets\frames\.gitkeep                     # 空目录占位
 ```
 - 命名：stage ∈ young/adult/final；branch ∈ healthy/neglected；mood ∈ neutral/happy/sad/sleepy/hungry
-- 尺寸按阶段：young **64×64** / adult **96×96** / final **128×128**（对齐 `asset_provider.py::_STAGE_SIZE`）
-- 透明 PNG（rembg 去背 + 1px 白边腐蚀），脚底贴画布下沿、水平居中（bottom_center 锚点语义）
+- 尺寸按阶段：young **96×96** / adult **128×128** / final **160×160**（v0.10.5 由 64/96/128 调大，对齐 `asset_provider.py::_STAGE_SIZE`）
+- 透明 PNG（rembg 去背 + 1px 白边腐蚀 + 腿间灰白净化），脚底贴画布下沿、水平居中（bottom_center 锚点语义）
+- **发色已统一加深**（v0.10.5：HSV 映射 V×0.62/S×1.6/H+0.025，与 0.34 深藏青参考一致；脸/裙/尾鳍几何保护）
 - final 有 1px 底边间隙（缩略不可见，可接受）
 - **尚未 git 提交**（仓库此前无 assets/，`.gitignore` 不排除 assets/）
 
@@ -78,8 +79,9 @@ cd /d/AI/ComfyUI && nohup ./venv/Scripts/python.exe main.py --port 8188 > /d/AI/
 |---|---|
 | 模型/采样 | animagine-xl-3.1 / euler_ancestral / steps 30 / cfg 6.0 / clip skip 2 |
 | 尺寸 | 832×1216 |
-| 情绪词风格 | **直白 danbooru 标签**（smile, open mouth, blush, tears, half closed eyes, drool, star eyes）优于修饰性英文 |
-| Base 正向 | `masterpiece, best quality, chibi, 1girl, solo, deep blue hair, ... whale fin shaped hair ... white frilled maid headdress ... whale embroidery on apron, whale tail ... white background, full body, standing, front view`（完整串在 pet_v2_gen.py::BASE_POSITIVE） |
+| 发色校正 | 成品源图 `pet_v2_deepen_hair.py`：HSV 映射（H+0.025/V×0.62/S×1.6+0.05，域=蓝区 H0.42-0.70 & V≥0.6 & S≥0.03）+ 几何保护（脸 x300-460/y240-560、围裙腰腹、尾鳍 y>770、仅发顶 y≤280 与两侧带 x≤290/x≥470 至 y≤770）；0.44 版发区 V0.99 过曝 → 映射后对齐 0.34 深藏青参考（V0.55/S0.36/H195°） |
+| 情绪词风格 | **直白 danbooru 标签**（smile, open mouth, blush, tears, half closed eyes, drool, star eyes）优于修饰性英文；denoise 0.44 表情可读但发色漂浅（0.34 发色好表情淡）→ 取舍：**0.44 出表情 + 源图发色映射** |
+| Base 正向 | 完整串在 pet_v2_gen.py::BASE_POSITIVE（含 whale fin shaped hair/embroidery/whale tail） |
 | 负向 | pet_v2_gen.py::BASE_NEGATIVE（bad anatomy/hands、realistic、watermark、multiple girls…） |
 
 ---
