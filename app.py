@@ -117,10 +117,11 @@ class PetApp:
 
         # 养成 store：启动 load（无存档→default）；重启数值一致靠此
         self.store = PetStateStore.load(self._state_path)
-        self.provider = EmojiProvider()
         self._gains = dict(self.cfg.get("interaction_gain", {}))
 
         self.sensors = adapter.get_sensors()  # 注入式，不直 import sensor_mac
+        # v0.10 provider 挂 idle_fn：idle 超时 → SLEEPY 立绘（_mood_from_state）
+        self.provider = self._make_provider()
         wa = self.sensors.work_area
         self.fsm = BehaviorFSM(dict(wa), self.cfg.get("behavior", {}))
 
@@ -463,6 +464,22 @@ class PetApp:
 
                 self._proactive.follow_up(msg, _t.time() + 30 * 60)
                 break
+
+    def _make_provider(self):
+        """v0.10：config provider 切 emoji/ai/commission（§六三级）。
+
+        EmojiProvider 的 idle_fn 注入保留（SLEEPY 判定两种 provider 均用）；
+        AIArtProvider 构造透传 idle/sleepy + 降级内嵌 EmojiProvider。
+        commission 走同 AIArtProvider 路径（读 assets/ 同命名约定）。
+        """
+        kind = self.cfg.get("provider", "emoji")
+        idle_fn = lambda: self.sensors.idle_time
+        sleepy_s = self.cfg.get("sleepy_idle_minutes", 10) * 60
+        if kind in ("ai", "commission"):
+            from pet.asset_provider import AIArtProvider
+
+            return AIArtProvider(idle_fn=idle_fn, sleepy_idle_s=sleepy_s)
+        return EmojiProvider(idle_fn=idle_fn, sleepy_idle_s=sleepy_s)
 
     def _setup_hotkeys(self) -> None:
         """v0.11 全局热键注册 + 冲突气泡提示。"""

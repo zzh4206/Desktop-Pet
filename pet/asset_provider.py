@@ -8,6 +8,8 @@ v0.10+ 才是文件路径）。签名不动，语义这样用。
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -25,6 +27,10 @@ _STAGE_SIZE: dict[Stage, tuple[int, int]] = {
     Stage.ADULT: (96, 96),
     Stage.FINAL: (128, 128),
 }
+
+# SLEEPY 门限：系统空闲超过此时长（秒）→ mood 显示 SLEEPY（v0.10 决策②：
+# 枚举早有 SLEEPY，但 _mood_from_state 从不产出；idle 高时让立绘睡觉）
+_SLEEPY_IDLE_S_DEFAULT = 600.0
 
 
 @dataclass
@@ -50,6 +56,7 @@ _EMOJI_BY_MOOD: dict[Mood, str] = {
     Mood.NEUTRAL: "🐱",
     Mood.SAD: "😿",
     Mood.HUNGRY: "🙀",
+    Mood.SLEEPY: "😪",
 }
 
 # v0.5：按 (stage, branch, mood) 出 emoji——stage 决定"成长形态"
@@ -62,16 +69,19 @@ _HEALTHY_BY_STAGE_MOOD: dict[tuple[Stage, Mood], str] = {
     (Stage.YOUNG, Mood.NEUTRAL): "🐱",
     (Stage.YOUNG, Mood.SAD): "😿",
     (Stage.YOUNG, Mood.HUNGRY): "🙀",
+    (Stage.YOUNG, Mood.SLEEPY): "😪",
     # ADULT：成猫系（emoji 明显比幼大一档）
     (Stage.ADULT, Mood.HAPPY): "😸",
     (Stage.ADULT, Mood.NEUTRAL): "🐈",
     (Stage.ADULT, Mood.SAD): "😾",
     (Stage.ADULT, Mood.HUNGRY): "😹",
+    (Stage.ADULT, Mood.SLEEPY): "😪",
     # FINAL：黑猫终态系
     (Stage.FINAL, Mood.HAPPY): "😻",
     (Stage.FINAL, Mood.NEUTRAL): "🐈‍⬛",
     (Stage.FINAL, Mood.SAD): "😿",
     (Stage.FINAL, Mood.HUNGRY): "🙀",
+    (Stage.FINAL, Mood.SLEEPY): "😴",
 }
 
 # NEGLECTED：落寞系，随 stage 略变（仍可与其他 stage 区分），不随 mood 雀跃
@@ -92,10 +102,16 @@ _WALK_FRAME2: dict[Mood, str] = {
 _ACT_FRAME = "😽"  # 伸懒腰/打滚峰值占位帧
 
 
-def _mood_from_state(state: PetState) -> Mood:
-    """v0.2：饱食<20 优先 HUNGRY；mood >=50 HAPPY、>=20 NEUTRAL、余 SAD。"""
+def _mood_from_state(state: PetState, idle_s: float | None = None) -> Mood:
+    """v0.2：饱食<20 优先 HUNGRY；mood >=50 HAPPY、>=20 NEUTRAL、余 SAD。
+
+    v0.10：idle_s（系统空闲秒，None=不启用）≥ 门限 → SLEEPY（优先级在
+    HUNGRY 之下、mood 之上——饿醒比困重要）。
+    """
     if state.fullness < 20:
         return Mood.HUNGRY
+    if idle_s is not None and idle_s >= _SLEEPY_IDLE_S_DEFAULT:
+        return Mood.SLEEPY
     if state.mood >= 50:
         return Mood.HAPPY
     if state.mood >= 20:
@@ -104,10 +120,28 @@ def _mood_from_state(state: PetState) -> Mood:
 
 
 class EmojiProvider:
-    """按 state.stage/mood/branch 返回 emoji。v0.5 起按 (stage, branch, mood)。"""
+    """按 state.stage/mood/branch 返回 emoji。v0.5 起按 (stage, branch, mood)。
+
+    v0.10：可选 idle_fn（无参 callable 返回系统空闲秒）→ 门限判定 SLEEPY。
+    """
+
+    def __init__(self, idle_fn=None, sleepy_idle_s: float | None = None):
+        self._idle_fn = idle_fn
+        self._sleepy_idle_s = (
+            float(sleepy_idle_s) if sleepy_idle_s is not None
+            else _SLEEPY_IDLE_S_DEFAULT
+        )
+
+    def _idle_s(self) -> float | None:
+        if self._idle_fn is None:
+            return None
+        try:
+            return float(self._idle_fn())
+        except Exception:
+            return None
 
     def get_static(self, state: PetState, skin: str = "default") -> SpriteRef:
-        mood = _mood_from_state(state)
+        mood = _mood_from_state(state, self._idle_s())
         width, height = _STAGE_SIZE[state.stage]
         if state.branch == Branch.NEGLECTED:
             emoji = _NEGLECTED_BY_STAGE.get(state.stage, "😿")
@@ -132,7 +166,7 @@ class EmojiProvider:
         from .behavior import ActionType
 
         base = self.get_static(state, skin)
-        mood = _mood_from_state(state)
+        mood = _mood_from_state(state, self._idle_s())
 
         def _ref(path: str) -> SpriteRef:
             return SpriteRef(
@@ -141,7 +175,59 @@ class EmojiProvider:
             )
 
         if action == ActionType.MOVE_TO:
-            return [base, _ref(_WALK_FRAME2[mood])]
+            # SLEEPY 行走帧缺失（emoji 表仅 4 mood）→ 降级本体，防 KeyError
+            return [base, _ref(_WALK_FRAME2.get(mood) or base.path)]
         if action == ActionType.ANIMATE:
             return [base, _ref(_ACT_FRAME), base]
         return [base]
+
+# ================= v0.10 AIArtProvider =================
+
+
+class AIArtProvider:
+    """AI 立绘 provider（§六三级第 2 级）。
+
+    ``get_static`` 读 ``assets/ai/{stage}_{branch}_{mood}.png``（skin 非
+    default 加 ``_{skin}`` 后缀）；缺文件/IO 异常 → **降级 EmojiProvider**
+    （不崩，§六"失败降级 emoji"）。``get_frames`` 降级返回 emoji 帧
+    （AI 仅静态，动画帧 v0.10 后补——§六约定）。
+
+    与 EmojiProvider 同签名（v0.1 冻结）；构造参数透传 idle_fn/sleepy。
+    """
+
+    def __init__(self, idle_fn=None, sleepy_idle_s: float | None = None,
+                 assets_dir: str = ""):
+        self._fallback = EmojiProvider(idle_fn, sleepy_idle_s)
+        if not assets_dir:
+            import os
+
+            assets_dir = os.path.normpath(os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "assets", "ai",
+            ))
+        self._dir = assets_dir
+        self._miss_cache: set = set()   # 已知缺失文件（防每 tick 重复 stat）
+
+    def get_static(self, state: PetState, skin: str = "default") -> SpriteRef:
+        mood = _mood_from_state(state, self._fallback._idle_s())
+        suffix = "" if skin == "default" else f"_{skin}"
+        filename = f"{state.stage.value}_{state.branch.value}"                    f"_{mood.value}{suffix}.png"
+        path = os.path.join(self._dir, filename)  # noqa: F821
+
+        if filename not in self._miss_cache:
+            if os.path.isfile(path):  # noqa: F821
+                width, height = _STAGE_SIZE[state.stage]
+                return SpriteRef(
+                    path=path, width=width, height=height,
+                    anchor="bottom_center",
+                )
+            self._miss_cache.add(filename)
+
+        # 降级：emoji（不区分 miss 原因——缺文件/目录不存在/权限均可）
+        return self._fallback.get_static(state, skin)
+
+    def get_frames(
+        self, state: PetState, action: "ActionType", skin: str = "default"
+    ) -> list[SpriteRef]:
+        """AI 立绘帧降级 emoji 帧（§六：AI 仅 get_static，动画走占位）。"""
+        return self._fallback.get_frames(state, action, skin)

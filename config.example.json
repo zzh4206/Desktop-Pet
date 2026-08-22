@@ -10,7 +10,8 @@
       }
     }
   },
-  "provider": "emoji",
+  "provider": "ai",
+  "sleepy_idle_minutes": 10,
   "age_speed_multiplier": 1,
   "evolve_threshold_days": {
     "young": 7,

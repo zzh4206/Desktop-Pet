@@ -66,7 +66,10 @@ class WindowBase(QWidget):
         font = QFont()
         font.setPointSizeF(sprite.width * 0.62)
         self._label.setFont(font)
-        self._label.setText(sprite.path)  # emoji 字符串
+        self.set_sprite(sprite)
+        # v0.10：构造期走统一 set_sprite（图片/emoji 分支）
+        # （font 在 set_sprite 之后的 emoji 分支里调 → 需先设 label 再调）
+        self._label.setText("")  # 占位（set_sprite 会覆盖）
 
         # 单击消歧：release 后延迟触发，期间来了双击则取消
         self._single_shot = QTimer(self)
@@ -85,8 +88,27 @@ class WindowBase(QWidget):
 
     # ---- 渲染 ----
     def set_sprite(self, sprite: SpriteRef) -> None:
+        """v0.10：path 为文件路径（os.path.exists）→ QPixmap 图片渲染；
+        否则 emoji 文本（降级路径，v0.1 起行为不变）。"""
+        import os
+
         self._sprite = sprite
-        self._label.setText(sprite.path)
+        if os.path.isfile(sprite.path):
+            from PySide6.QtGui import QPixmap
+
+            pm = QPixmap(sprite.path)
+            if not pm.isNull():
+                # 按 sprite 尺寸等比缩放（保持宽高比，多余透明填充）
+                from PySide6.QtCore import Qt
+
+                scaled = pm.scaled(
+                    sprite.width, sprite.height,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation,
+                )
+                self._label.setPixmap(scaled)
+            # 加载失败 → 清 pixmap 退文本（下一 tick 走 emoji 降级）
+        else:
+            self._label.setText(sprite.path)
         if (sprite.width, sprite.height) != (self.width(), self.height()):
             self.resize(sprite.width, sprite.height)
             self._label.resize(sprite.width, sprite.height)
