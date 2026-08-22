@@ -2,8 +2,8 @@
 
 > 交接日期：2026-08-22
 > 关联：`桌宠立绘生图指南.md`（需求源，74 张清单）/ `设计思路.md` §六（provider 三级）/ `版本规划.md` v0.10
-> 本会话已完成：驱动修复 + 全新 v2 全套 30 张静态立绘生成与入库 + SLEEPY 显示规则代码
-> **下一步工作对话的入口**：本文档 + `D:\Desktop-Pet\pet\asset_provider.py` + `D:\AI\ComfyUI\pet_v2_gen.py`
+> 本会话已完成：驱动修复 + 全新 v2 全套 30 张静态立绘生成与入库（含鲸尾灰鳍缺陷修复与全套重派生）+ SLEEPY 显示规则 + AIArtProvider 接入后验证
+> **工作入口**：本文档 + `D:\Desktop-Pet\pet\asset_provider.py` + `D:\AI\ComfyUI\pet_v2_gen.py`
 
 ---
 
@@ -14,11 +14,12 @@
 | 显卡驱动 nvlddmkm 蓝屏修复 | ✅ 592.01 → **610.88 WHQL**（WMI 版本 32.0.16.1088），升级后生图正常 |
 | 旧 v1 立绘（pet_sprites_final 44 张/旧 47 组） | ⛔ **作废**（用户判定风格不一致），勿再引用 |
 | v2 全新一套静态立绘 | ✅ **30 张齐**（3 阶段×2 分支×5 情绪），画风严格一致 |
+| 鲸尾灰鳍缺陷（用户反馈） | ✅ 已修：主锚定合成移植大鲸尾，30 张全套重新派生入仓（v0.10.2） |
 | 后处理（去背/裁剪/缩放/底对齐） | ✅ 全部完成，已入仓库 `assets/ai/` |
 | 动画帧 | ⏸ 按用户决策先留空（`assets/frames/` 只有 `.gitkeep`） |
 | SLEEPY 显示规则 | ✅ 已实现（代码+config+测试，见 §六） |
-| NEGLECTED 不压制 | ✅ 30 张按全情绪生成齐；AIArtProvider 接入时按 (stage,branch,mood) 全量取图即可 |
-| AIArtProvider 接入（v0.10 核心） | ⬜ 未做，见 §八 |
+| NEGLECTED 不压制 | ✅ 30 张按全情绪生成齐；AIArtProvider 按 (stage,branch,mood) 全量取图未压制 |
+| AIArtProvider 接入（v0.10 核心） | ✅ 已完成并提交（v0.10.0 provider/渲染/工厂 + v0.10.1 get_frames 单帧防闪烁 + v0.10.2 启动空屏修复与资产更新）；`config provider: ai` 已生效，冒烟无异常 |
 
 ---
 
@@ -38,9 +39,11 @@ D:\Desktop-Pet\assets\frames\.gitkeep                     # 空目录占位
 ### 生成原始图（832×1216 白底 RGB，评审用）
 ```
 D:\AI\ComfyUI\output\pet_v2\                         # v2 全部原始图 + 评审图
-  masterB_seed555_00001_.png                         # ★ 主锚定图（一切图的本源）
-  {stage}_{branch}_{mood}.png / _00001_/00002_ 编号  # 逐张原图（_00002_ 为情绪 0.44 版）
-  _sheet_master.png _sheet_bases_v3.png _sheet_{stage}.png _final_check.png  # 评审图
+  masterB_555_tailled_final.png                      # ★ 主锚定图（一切图的本源）
+  masterB_seed555_00001_.png                         # 前版主锚定（含灰色鳍缺陷，仅存史）
+  masterC_seed271828_00001_.png                      # 尾巴移植源（大鲸尾画得最好的候选）
+  {stage}_{branch}_{mood}.png / _0000X_ 编号         # 逐张原图（新轮次：neutral _00003_/其余 _00004_）
+  _sheet2_{stage}.png _final_check_v3.png _tail_verify2.png _tailled_final_check2.png  # 评审图
 D:\AI\ComfyUI\output\pet_sprites{,\_final}\ + pet_sprites\emotions\    # 旧 v1，作废勿用
 ```
 
@@ -64,10 +67,11 @@ cd /d/AI/ComfyUI && nohup ./venv/Scripts/python.exe main.py --port 8188 > /d/AI/
 ```
 
 ### 核心方法：主锚定层级派生（画风一致的根）
-1. **txt2img 主锚定**：`adult_healthy_neutral`，4 候选目检挑最佳 → 定稿 `masterB_seed555_00001_.png`（深蓝→亮青渐变发、鲸鱼鳍耳、腿后鲸尾可见、正面站姿、白底）
-2. **形态底图**（5 张）：主锚定 img2img 派生，denoise 0.44（healthy）/ 0.58 方向·实选 v3（neglected，灰调+脏污），全程 **DERIVE_SEED=777**
-3. **情绪**（24 张）：各形态底图 img2img 派生，**denoise 0.44**（0.34 版表情太淡已弃），seed = 777+i，只动脸部词
-4. 所有图与主锚定派生距离 ≤2 步 → 发色/线稿/上色习惯强统一
+1. **txt2img 主锚定**：`adult_healthy_neutral`，多候选目检挑最佳 → 定稿 masterB_seed555_00001_.png（深蓝→亮青渐变发、鲸鱼鳍耳、正面站姿、白底）
+2. **灰鳍缺陷修复（2026-08-22 用户反馈）**：555 稿裙摆右下灰色尖鳍是全图派生源缺陷 → 与 271828 候选（大鲸尾画得最好）做 **PIL 合成移植**：仅擦除右侧灰色刃 (492,848,682,985)，粘贴 271828 大鲸尾裁剪 (545,800)-(800,1085)（带其裙边衔接+13px 羽化），近白清理去阴影晕；**左侧蓝白鳍片为正常鲸尾鳍，勿擦**（曾误擦成浮空残片）。合成版 = `masterB_555_tailled_final.png` 定稿为最终主锚定
+3. **形态底图**（5 张）：主锚定 img2img 派生，denoise 0.44（healthy）/ 0.58（neglected，v3 强词），全程 **DERIVE_SEED=777**
+4. **情绪**（24 张）：各形态底图 img2img 派生，**denoise 0.44**（0.34 版表情太淡已弃），seed = 777+i，只动脸部词
+5. 所有图与主锚定派生距离 ≤2 步 → 发色/线稿/上色习惯强统一
 
 ### 关键参数（与旧管线不同处）
 | 项 | 值 |
@@ -114,25 +118,26 @@ pet_v2_postprocess.py：remove(session=u2net) → MinFilter(3) alpha 腐蚀(1px 
 
 ## 七、已知限制与坑
 
-1. **neglected 表情不够丧**：img2img 从主锚定笑脸派生，denoise ≤0.58 脸不易变丧；3 轮调参后接受"灰调+脏污围裙"区分（v3 选稿）。若用户仍不满意：可做独立"丧脸"主锚定或上 ControlNet
+1. ~~neglected 表情不够丧~~（已按灰调+脏污区分，可接受；要更强需独立丧脸锚定或 ControlNet）
 2. **情绪可读性**：0.44 版本特写可读（腮红/泪/张嘴/垂眼），64px 幼年形态会更模糊——如用户反馈辨不清，单情绪升 denoise 至 0.5 局部重出
-3. **文件名踩坑**：SaveImage 自动加 `_00001_`/`_00002_` 序号；glob `*_happy_*_00002_` 会失配（happy 与序号共用一个下划线），用 `*_00002_.png` 即可
+3. **文件名踩坑**：SaveImage 自动加 `_00001_`/`_00002_` 序号；glob `*_happy_*_00002_` 会失配（happy 与序号共用一个下划线），用 `*_0000X_` 且取最新编号即可；确认新轮次编号：neutral _00003_、其余情绪 _00004_
 4. **rembg 白边**：白裙边缘偶有 1px 残留，MinFilter 已腐蚀；若发现彩边改 u2netp 或加大腐蚀
-5. **驱动环境**（换会话可能失效）：nvlddmkm 蓝屏旧因、610.88 已修；bash 里 `Start-Process -Verb RunAs` 必须 `-Wait` 保活否则 UAC 被父 shell 退出取消；NVIDIA 下载防盗链 curl 要带 UA+Referer（详见记忆 `nv-driver-bsod-61088`）
-6. **测试环境**：win 端依赖只装在 CPython 3.12 绝对路径；跑测试加 `-u`（UTF-8 输出）
+5. **本版 ComfyUI 的 inpaint 不可用**：`VAEEncodeForInpaint`/`InpaintModelConditioning` 在本机 ComfyUI 0.33.0 都会整图重生成（noise_mask 语义问题），**改图勿用 inpaint**，用 PIL 合成移植（见 §三 方法②）或整图 txt2img 重出
+6. **驱动环境**（换会话可能失效）：nvlddmkm 蓝屏旧因、610.88 已修；bash 里 `Start-Process -Verb RunAs` 必须 `-Wait` 保活否则 UAC 被父 shell 退出取消；NVIDIA 下载防盗链 curl 要带 UA+Referer（详见记忆 `nv-driver-bsod-61088`）
+7. **测试环境**：win 端依赖只装在 CPython 3.12 绝对路径；跑测试加 `-u`（UTF-8 输出）
+8. **755 号左翼注意**：主锚定左下蓝白鳍片是角色正常鲸尾鳍（非缺陷），任何合成/擦除勿动它
 
 ---
 
-## 八、下一步（主要工作对话从这开始）
+## 八、已完成与后续路线（v0.10 已交付）
 
-**v0.10 接入 AIArtProvider**（按 `设计思路.md` §六 与 版本规划 v0.10 Must）：
-1. `asset_provider.py` 新增 `AIArtProvider`：`get_static` 读 `assets/ai/{stage}_{branch}_{mood}.png`（skin 非 default 加 `_{skin}` 后缀再找），缺文件/IO 异常 → 降级 EmojiProvider
-2. `window.py::set_sprite` 加图片渲染分支：`SpriteRef.path` 为文件路径（os.path.exists）→ QPixmap 加载+按 label 尺寸缩放显示；emoji 文本分支保留（降级用）
-3. `app.py`：`self.provider = _make_provider(self.cfg.get("provider", "emoji"), ...)`（emoji/ai/commission）——注意 EmojiProvider 的 idle_fn 注入方式要保留
-4. `config.example.json` 的 `"provider": "emoji"` 切 `"ai"` 实测：不同 (stage,branch,mood) 出不同图；删图模拟降级不崩；切回 emoji 养成/物理零改动（git diff 验证）
-5. 动画帧（后续）：`get_frames` 目前约定降级 emoji；接帧播放需 window/app 侧接线（MOVE_TO 交替/FALL/CLIMB/EAT_MOUSE 咀嚼循环等，指南批三为素材源）
+**已完成并提交**：AIArtProvider 读取 assets/ai 静态图（缺文件降级 emoji 不崩）、window QPixmap 渲染分支（file→位图/emoji→文本）、app `_make_provider` 工厂（config provider=emoji/ai/commission）、get_frames 返回 AI 静帧单帧（防 emoji 闪烁）→ v0.10.0/v0.10.1/v0.10.2；`spikes/test_v10_ai_provider.py` 11/11 + 回归 v02/v03/v05 绿。
 
-**补图工具**（若用户要求）：改 `pet_v2_gen.py` 的 EMOTIONS/BASES 后 `bases`/`emotions` 命令重跑，再跑 `pet_v2_postprocess.py` 入仓。
+**剩余项**：
+1. **动画帧（v0.10 后）**：`assets/frames/` 空目录待生成（指南批三 32 帧为素材源，但按用户决策"动画帧先留空"）；接帧播放需 window/app 侧接线（MOVE_TO 交替/FALL/CLIMB/EAT_MOUSE 咀嚼循环等），当前 get_frames 只回单帧
+2. **约稿 provider**：config `provider: commission` 暂走 AIArtProvider 同路径（读 assets/ 同命名约定，§六第 3 级留接口）
+
+**补图工具**（若用户要求）：改 `pet_v2_gen.py` 的 EMOTIONS/BASES 后 `bases`/`emotions` 命令重跑，再跑 `pet_v2_postprocess.py` 入仓；注意新轮次文件编号递增（取最新 `_0000X_`）。
 
 ---
 

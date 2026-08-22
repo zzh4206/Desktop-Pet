@@ -67,9 +67,8 @@ class WindowBase(QWidget):
         font.setPointSizeF(sprite.width * 0.62)
         self._label.setFont(font)
         self.set_sprite(sprite)
-        # v0.10：构造期走统一 set_sprite（图片/emoji 分支）
-        # （font 在 set_sprite 之后的 emoji 分支里调 → 需先设 label 再调）
-        self._label.setText("")  # 占位（set_sprite 会覆盖）
+        # v0.10：构造期走统一 set_sprite（图片/emoji 分支），
+        # 此后不得再 setText("")——会清掉刚显示的表情/位图（启动空屏回归）
 
         # 单击消歧：release 后延迟触发，期间来了双击则取消
         self._single_shot = QTimer(self)
