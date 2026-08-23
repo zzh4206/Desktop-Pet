@@ -39,12 +39,12 @@ D:\Desktop-Pet\assets\frames\.gitkeep                     # 空目录占位
 
 ### 生成原始图（832×1216 白底 RGB，评审用）
 ```
-D:\AI\ComfyUI\output\pet_v2\                         # v2 全部原始图 + 评审图
-  masterB_555_tailled_final.png                      # ★ 主锚定图（一切图的本源）
-  masterB_seed555_00001_.png                         # 前版主锚定（含灰色鳍缺陷，仅存史）
-  masterC_seed271828_00001_.png                      # 尾巴移植源（大鲸尾画得最好的候选）
-  {stage}_{branch}_{mood}.png / _0000X_ 编号         # 逐张原图（新轮次：neutral _00003_/其余 _00004_）
-  _sheet2_{stage}.png _final_check_v3.png _tail_verify2.png _tailled_final_check2.png  # 评审图
+D:\AI\ComfyUI\output\pet_v2\                         # 工作目录：仅 30 张正式源 + 主锚定 masterB_555_tailled_final
+D:\AI\ComfyUI\output\pet_v2\_archive\                # 历史/草稿归档（master 候选、旧 img2img 轮次编号、试验图、评审图 285 张）
+D:\AI\ComfyUI\output\pet_v2_final\                   # ★ 最终版图库（交付目录，与中间产物完全隔离）
+  source\   30 张 832×1216 渲染源（{stage}_{branch}_{mood}.png）
+  asset\    30 张透明成品（96/128/160，与仓库 assets/ai 同内容）
+  refs\     3 张参考图（ref_young/adult/final.jpg）
 D:\AI\ComfyUI\output\pet_sprites{,\_final}\ + pet_sprites\emotions\    # 旧 v1，作废勿用
 ```
 
