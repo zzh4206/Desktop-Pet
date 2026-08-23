@@ -91,6 +91,19 @@ def main() -> int:
     check("T5 跟随光标抵达(距光标 x ≤10)", abs(1700 - pos[0]) <= 10)
     check("T5 跟随站立在地板", pos[1] == WA["y"] + WA["height"])
 
+    # T5b 三种移动模式：自由动默认、跟随鼠标、固定且吸附最近屏幕边。
+    fsm = BehaviorFSM(dict(WA))
+    check("T5b 默认是自由动", fsm.motion_mode == "free")
+    fsm.handle_event("motion_mode:follow")
+    check("T5b 可切换跟随鼠标", fsm.motion_mode == "follow")
+    fsm._pos = (10.0, 500.0)
+    fsm.handle_event("motion_mode:edge")
+    fsm.step(PetState.default(), sensors(), DT)
+    check("T5b 边缘模式吸附最近左边", fsm.pos[0] == WA["x"] + 1.0)
+    locked = fsm.pos
+    run(fsm, 10, mouse=(1700, 300))
+    check("T5b 边缘模式不跟随也不游走", fsm.pos == locked)
+
     # T6 随机小动作：模拟 120s 至少一次具名 ANIMATE
     fsm = BehaviorFSM(dict(WA))
     actions, _ = run(fsm, 120)

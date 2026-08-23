@@ -144,13 +144,11 @@ class PetApp:
         self.window.cleanRequested.connect(lambda: self._interact("clean"))
         self.window.pokeRequested.connect(lambda: self._interact("poke"))
         self.window.quitRequested.connect(self.shutdown)
-        # v0.3 拖拽（拖动直接挪窗保跟手，FSM 记录位置/速度）+ 跟随开关
+        # v0.3 拖拽（拖动直接挪窗保跟手）+ 移动模式
         self.window.dragStarted.connect(self._on_drag_started)
         self.window.dragMoved.connect(self._on_drag_moved)
         self.window.dragReleased.connect(self._on_drag_released)
-        self.window.followToggleRequested.connect(
-            lambda: self._fsm_event("follow_toggle")
-        )
+        self.window.motionModeRequested.connect(self._set_motion_mode)
         # v0.8 权限自检页：宠物右键"设置"唤出（win 运行时自检）
         self.window.settingsRequested.connect(self._show_perm)
         # v0.9 拖放文件给它打开（快捷启动器）
@@ -773,6 +771,10 @@ class PetApp:
 
     def _fsm_event(self, event: str) -> None:
         self.fsm.handle_event(event)
+
+    def _set_motion_mode(self, mode: str) -> None:
+        self.fsm.handle_event(f"motion_mode:{mode}")
+        self.window.set_motion_mode(self.fsm.motion_mode)
 
     def _tick(self) -> None:
         # 可见性看门狗：非全屏被隐藏（异常/竞态）→ 立即恢复并留痕
