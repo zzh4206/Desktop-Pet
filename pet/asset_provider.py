@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 
 
 # 默认显示尺寸（逻辑像素，HiDPI 由 Qt 处理），bottom_center 为锚点
-# v0.10.5 用户反馈"图片过小嘴看不到/颜色分界模糊"→ 64/96/128 升为 96/128/160
+# v0.10.5 用户反馈"图片过小"→ 96/128/160；v0.10.8 "清晰度太低" → 128/160/192
 _STAGE_SIZE: dict[Stage, tuple[int, int]] = {
-    Stage.YOUNG: (96, 96),
-    Stage.ADULT: (128, 128),
-    Stage.FINAL: (160, 160),
+    Stage.YOUNG: (128, 128),
+    Stage.ADULT: (160, 160),
+    Stage.FINAL: (192, 192),
 }
 
 # SLEEPY 门限：系统空闲超过此时长（秒）→ mood 显示 SLEEPY（v0.10 决策②：

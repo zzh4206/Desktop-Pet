@@ -25,7 +25,7 @@ from pet.window import WindowBase
 ASSETS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "ai"
 )
-SIZE = {"young": 96, "adult": 128, "final": 160}
+SIZE = {"young": 128, "adult": 160, "final": 192}
 
 passed = 0
 
