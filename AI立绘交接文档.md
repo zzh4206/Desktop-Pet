@@ -57,11 +57,26 @@ C:\Users\lenovo\Desktop\桌宠立绘生图指南.md   # 需求清单（总数 74
 
 ## 三、生成管线（重出/补图必须用它）
 
-### 脚本
+### 主线：IP-Adapter（v0.10.7 起，外观=三张参考图 + 姿势自由）
 ```
-D:\AI\ComfyUI\pet_v2_gen.py          # 生成：candidates / bases / emotions 三阶段
-D:\AI\ComfyUI\pet_v2_postprocess.py  # 后处理：rembg→裁切→缩放→底对齐→assets/ai
+D:\AI\ComfyUI\pet_v2_ipadapter_gen.py    # 单张工作流（Checkpoint→IPAdapterUnifiedLoader(PLUS)→IPAdapterAdvanced→KSampler）
+D:\AI\ComfyUI\pet_v2_ipadapter_batch.py  # 30 张批量（含"跳过已有"断点续跑）
 ```
+- **环境**：custom_nodes/ComfyUI_IPAdapter_plus（cubiq 仓库）；模型 models/clip_vision/CLIP-ViT-H-14-s32B-b79K.safetensors（vit-H 2.35GB）+ models/ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors（808MB）
+  ⚠️ **坑**：h94 仓库 `sdxl_models/image_encoder` 是 vit-bigG（1664 维度），vit-H 版在 `models/image_encoder`；用错了报 `size mismatch proj_in 1280 vs 1664`；preset 匹配文件名需 `ViT.H.14.*s32B.b79K` 形态
+- **参考图**：input/ref_young.jpg（幼年 Q版）/ref_adult.jpg（成年挥手）/ref_final.jpg（最终提裙）
+- **姿势词表**：neutral=站、happy=jumping arms raised、sad=sitting knees drawn up、sleepy=leaning drowsy、hungry=squatting with bowl；neglected 追加灰调丧感词
+- **关键调参**：IP 权重 neutral **0.90**（保参考外观）/ 情绪 **0.73**（0.85 会锁死站姿）；**基础描述不得含 standing/front view/arms at sides**（与姿势词打架）；坐蹲类须加 "on the ground"
+- seed=1000+i 固定；832×1216 / euler_ancestral / steps 30 / cfg 6.0 / clip skip 2
+
+### 二线：img2img 层级派生（v0.10.6 前主链，留作微调参考）
+```
+pet_v2_gen.py（masterB_555_tailled_final 主锚定）+ pet_v2_deepen_hair.py（发色映射）
+```
+
+### 后处理（两线共用，必须按序）
+```
+pet_v2_postprocess.py → pet_v2_gap_fix.py（详见 §四）
 ComfyUI 服务：**当前正在运行**（127.0.0.1:8188，D:\AI\ComfyUI，venv python 启动）。启动命令：
 ```bash
 cd /d/AI/ComfyUI && nohup ./venv/Scripts/python.exe main.py --port 8188 > /d/AI/comfyui_server.log 2>&1 &
