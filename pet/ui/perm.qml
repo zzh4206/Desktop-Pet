@@ -38,25 +38,41 @@ ApplicationWindow {
 
             delegate: Rectangle {
                 width: list.width
-                height: 44
+                // Keep the capability name and its result in separate layout
+                // columns.  Absolute left/right anchors let the two Text items
+                // paint over one another when a localized name is long.
+                implicitHeight: Math.max(44, row.implicitHeight + 16)
+                height: implicitHeight
                 radius: 10
                 color: "#ffffff"
 
-                Text {
-                    anchors.left: parent.left
+                RowLayout {
+                    id: row
+                    anchors.fill: parent
                     anchors.leftMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.name
-                    font.pixelSize: 13
-                    color: "#33302c"
-                }
-                Text {
-                    anchors.right: parent.right
                     anchors.rightMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.ok ? "✓ 可用" : "✗ " + modelData.detail
-                    font.pixelSize: 12
-                    color: modelData.ok ? "#4a9e5f" : "#d9534f"
+                    anchors.topMargin: 8
+                    anchors.bottomMargin: 8
+                    spacing: 12
+
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignVCenter
+                        text: modelData.name
+                        font.pixelSize: 13
+                        color: "#33302c"
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        Layout.maximumWidth: 150
+                        Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                        text: modelData.ok ? "✓ 可用" : "✗ " + modelData.detail
+                        font.pixelSize: 12
+                        color: modelData.ok ? "#4a9e5f" : "#d9534f"
+                        horizontalAlignment: Text.AlignRight
+                        wrapMode: Text.Wrap
+                    }
                 }
             }
         }
