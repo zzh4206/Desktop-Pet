@@ -120,6 +120,7 @@ class BehaviorFSM:
         self._vy = 0.0
         self._windows: list[dict] = []
         self._follow = False
+        self._motion_mode = "free"  # free（默认）/ follow / edge
         self._eat_approach_t0 = 0.0
         self._suppressed = False   # 全屏：暂停 WANDER（不出新目标）
         self._anim_left = random.uniform(_ANIM_MIN_S, _ANIM_MAX_S)
@@ -232,6 +233,19 @@ class BehaviorFSM:
         """不穿屏：x 限制在工作区横向范围内。"""
         return max(self._left() + 1.0, min(self._right() - 1.0, x))
 
+    def _snap_to_nearest_edge(self) -> None:
+        """把宠物脚部中心吸附到当前工作区最近的一条边。"""
+        x, y = self._pos
+        left, right = self._left() + 1.0, self._right() - 1.0
+        top, bottom = self._work_area["y"] + self._pet_height, self._bottom()
+        candidates = (
+            (abs(x - left), (left, y)),
+            (abs(right - x), (right, y)),
+            (abs(y - top), (x, top)),
+            (abs(bottom - y), (x, bottom)),
+        )
+        self._pos = min(candidates, key=lambda item: item[0])[1]
+
     # ---- WANDER ----
 
     def _new_target(self) -> tuple[float, float]:
@@ -317,7 +331,7 @@ class BehaviorFSM:
 
     def handle_event(self, event: str) -> None:
         """v0.3：fullscreen_on/off（暂停/恢复 WANDER，空中/攀爬传送回底边中央）、
-        follow_toggle。v0.7：eat_mouse/eat_mouse_off（切/退吃鼠标冻结态）。"""
+        follow_toggle、motion_mode:<free|follow|edge>。v0.7：eat_mouse/eat_mouse_off。"""
         if event == "fullscreen_on":
             self._suppressed = True
             # 全屏中不可见：空中/攀爬态收敛到地面（维持"不往顶上走"）；
@@ -336,6 +350,19 @@ class BehaviorFSM:
             self._suppressed = False
         elif event == "follow_toggle":
             self._follow = not self._follow
+            self._motion_mode = "follow" if self._follow else "free"
+        elif event.startswith("motion_mode:"):
+            mode = event.split(":", 1)[1]
+            if mode not in {"free", "follow", "edge"}:
+                _log.warning("忽略未知移动模式: %s", mode)
+                return
+            self._motion_mode = mode
+            self._follow = mode == "follow"
+            if mode == "edge":
+                self._mode = _IDLE
+                self._vx = self._vy = 0.0
+                self._stand_win = None
+                self._snap_to_nearest_edge()
         elif event == "eat_mouse":
             # v0.7：进吃鼠标态——冻结（不出 WANDER/物理，咀嚼 emoji 占位），
             # 速度清零防残留惯性；不收敛位置（就地冻结吃鼠标）。
@@ -354,6 +381,10 @@ class BehaviorFSM:
     @property
     def mode(self) -> str:
         return self._mode
+
+    @property
+    def motion_mode(self) -> str:
+        return self._motion_mode
 
     @property
     def pos(self) -> tuple:
@@ -455,6 +486,14 @@ class BehaviorFSM:
 
         if self._mode == _EAT_MOUSE:
             return Action(ActionType.EAT_MOUSE, {"pos": self._pos})
+
+        # 边缘模式不再游走/跟随/受重力影响；屏幕工作区变化时仍重新吸附最近边。
+        # 拖拽可临时移动，松手后在下一 tick 回到边缘。
+        if self._motion_mode == "edge" and self._mode != _DRAG:
+            self._mode = _IDLE
+            self._vx = self._vy = 0.0
+            self._snap_to_nearest_edge()
+            return Action(ActionType.MOVE_TO, {"pos": self._pos})
 
         # 支撑校验（IDLE/WALK）：骑乘跟随 + 关闭/最小化/拖走坠落
         if self._mode in (_IDLE, _WALK):

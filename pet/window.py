@@ -13,7 +13,7 @@ signal 交互入口（``patRequested``/``feedRequested``/``cleanRequested``/
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QActionGroup, QFont
 from PySide6.QtWidgets import QLabel, QMenu, QWidget
 
 from .asset_provider import SpriteRef
@@ -34,7 +34,7 @@ class WindowBase(QWidget):
     pokeRequested = Signal()   # 右键菜单"戳一戳"
     settingsRequested = Signal()
     quitRequested = Signal()
-    followToggleRequested = Signal()  # v0.3 右键菜单"跟随鼠标"开关
+    motionModeRequested = Signal(str)  # "follow" / "free" / "edge"
     petMoved = Signal(float, float, int)  # v0.3 (cx, bottom_y, height) 气泡跟随
     # v0.3 拖拽：参数为全局 bottom_center 坐标（抓取偏移已在窗内算好）
     dragStarted = Signal(float, float)
@@ -49,6 +49,7 @@ class WindowBase(QWidget):
         self._provider = None                 # 注入 AssetProvider（on_state_change 切 emoji）
         self._press_start: tuple | None = None
         self._dragging = False
+        self._motion_mode = "free"
         self._grab_dx = 0.0                   # 按下点 → 宠物 bottom_center 偏移
         self._grab_dy = 0.0
 
@@ -252,15 +253,34 @@ class WindowBase(QWidget):
             event.acceptProposedAction()
 
     def contextMenuEvent(self, event):
-        # 右键菜单（§2.3）：喂食/洗澡/戳一戳/跟随鼠标 + 设置/退出
+        # 右键菜单：互动 + 三种互斥移动模式 + 设置/退出
         menu = QMenu(self)
         menu.addAction("喂食", self.feedRequested.emit)
         menu.addAction("洗澡", self.cleanRequested.emit)
         menu.addAction("戳一戳", self.pokeRequested.emit)
-        menu.addAction("跟随鼠标", self.followToggleRequested.emit)
+        modes = menu.addMenu("移动状态")
+        group = QActionGroup(modes)
+        group.setExclusive(True)
+        for key, label in (
+            ("follow", "跟随鼠标"),
+            ("free", "自由动（默认）"),
+            ("edge", "边缘吸附静止"),
+        ):
+            action = modes.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(key == self._motion_mode)
+            group.addAction(action)
+            action.triggered.connect(
+                lambda checked=False, mode=key: self.motionModeRequested.emit(mode)
+            )
         menu.addSeparator()
         menu.addAction("设置", self.settingsRequested.emit)
         menu.addAction("退出", self.quitRequested.emit)
         # QContextMenuEvent 非 QSinglePointEvent 子类，无 globalPosition()
         # （v0.2.2 勘误回归修复：该调用 AttributeError 被 Qt 吞→菜单不弹）
         menu.exec(event.globalPos())
+
+    def set_motion_mode(self, mode: str) -> None:
+        """同步菜单选中状态；FSM 仍是移动行为的唯一状态源。"""
+        if mode in {"follow", "free", "edge"}:
+            self._motion_mode = mode
