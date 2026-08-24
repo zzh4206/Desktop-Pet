@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 
 
 # 默认显示尺寸（逻辑像素，HiDPI 由 Qt 处理），bottom_center 为锚点
-# v0.10.9 win：GPT 产线成品 128/160/192（用户多轮反馈小尺寸发糊后定档）
+# v0.10.12：192/256/320（用户两轮反馈小尺寸发糊；1:1 显示无损）
 _STAGE_SIZE: dict[Stage, tuple[int, int]] = {
-    Stage.YOUNG: (128, 128),
-    Stage.ADULT: (160, 160),
-    Stage.FINAL: (192, 192),
+    Stage.YOUNG: (192, 192),
+    Stage.ADULT: (256, 256),
+    Stage.FINAL: (320, 320),
 }
 
 # SLEEPY 门限：系统空闲超过此时长（秒）→ mood 显示 SLEEPY（v0.10 决策②：
