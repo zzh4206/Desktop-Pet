@@ -68,6 +68,7 @@ class WindowBase(QWidget):
         font.setPointSizeF(sprite.width * 0.62)
         self._label.setFont(font)
         self._pix_cache: dict = {}  # path→QPixmap（set_sprite 使用，须先于构造调用）
+        self._facing = 1  # v0.10.16 朝向（1=右/-1=左，帧素材面朝右）
         self.set_sprite(sprite)
         # v0.10：构造期走统一 set_sprite（图片/emoji 分支），
         # 此后不得再 setText("")——会清掉刚显示的表情/位图（启动空屏回归）
@@ -99,11 +100,17 @@ class WindowBase(QWidget):
         if os.path.isfile(sprite.path):
             from PySide6.QtGui import QPixmap
 
-            pm = self._pix_cache.get(sprite.path)
+            key = (sprite.path, self._facing)
+            pm = self._pix_cache.get(key)
             if pm is None:
                 pm = QPixmap(sprite.path)
                 if not pm.isNull():
-                    self._pix_cache[sprite.path] = pm
+                    if self._facing < 0:
+                        from PySide6.QtGui import QTransform
+
+                        pm = pm.transformed(
+                            QTransform().scale(-1, 1))
+                    self._pix_cache[key] = pm
                     if len(self._pix_cache) > 64:
                         self._pix_cache.pop(next(iter(self._pix_cache)))
             if not pm.isNull():
@@ -130,6 +137,17 @@ class WindowBase(QWidget):
     def set_sprite_provider(self, provider) -> None:
         """注入 AssetProvider；on_state_change 据此换 sprite。"""
         self._provider = provider
+
+    def set_facing(self, d: int) -> None:
+        """v0.10.16 移动朝向：d=-1 左、1 右（0/未知忽略）；变化即镜像重绘。
+        （帧素材统一面朝右，向左移动时水平翻转显示，行走方向与朝向一致）"""
+        import os
+
+        if d not in (-1, 1) or d == getattr(self, "_facing", 1):
+            return
+        self._facing = d
+        if self._provider is not None or os.path.isfile(self._sprite.path):
+            self.set_sprite(self._sprite)
 
     def play_frames(self, frames: list, loop: bool = False,
                     interval_ms: int = 150) -> None:

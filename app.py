@@ -805,6 +805,13 @@ class PetApp:
         # 会漏掉这类位移，视觉上宠物悬空在旧高度。Qt 同坐标 move 是 no-op，
         # 每 tick 调用无代价。
         self.window.move_bottom_center(*self.fsm.pos)
+        # v0.10.16 行走朝向：按位移方向翻转显示（帧素材统一面朝右）
+        last = getattr(self, "_last_facing_x", None)
+        if last is not None:
+            dx = self.fsm.pos[0] - last
+            if abs(dx) > 0.4:
+                self.window.set_facing(1 if dx > 0 else -1)
+        self._last_facing_x = self.fsm.pos[0]
 
     # ---- v0.3 动画 ----
     def _play_animate(self, name: str) -> None:
