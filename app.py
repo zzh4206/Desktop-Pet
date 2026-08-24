@@ -64,7 +64,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
-from pet.asset_provider import EmojiProvider
+from pet.asset_provider import AIArtProvider, EmojiProvider
 from pet.behavior import ActionType, BehaviorFSM
 from pet.bubble import BubbleType, BubbleWidget
 from pet.config import load_config
@@ -793,6 +793,8 @@ class PetApp:
         mode = self.fsm.mode
         if mode == "eat_mouse" and getattr(self, "_fsm_last_mode", "")                 != "eat_mouse":
             self._proactive.eat_mouse_arrived()
+        # v0.10.15 状态驱动帧动画（行走交替/下落/落地瞬帧/咀嚼循环）
+        self._frame_tick(action, mode, getattr(self, "_fsm_last_mode", ""))
         self._fsm_last_mode = mode
         try:
             self._proactive.eat_mouse_tick()
@@ -806,10 +808,71 @@ class PetApp:
 
     # ---- v0.3 动画 ----
     def _play_animate(self, name: str) -> None:
-        """随机小动作：get_frames 3 帧循环一轮（emoji 占位，~450ms）后回静帧。"""
-        state = self.store.get()
-        frames = self.provider.get_frames(state, ActionType.ANIMATE)
+        """随机小动作（v0.10.15 帧动画）：stretch/blink 播帧序列，
+        roll 单帧定格；缺帧回退 get_frames（静帧）。"""
+        key = {"stretch": "stretch", "blink": "blink", "roll": "roll"}.get(name)
+        if key is None:
+            return
+        if isinstance(self.provider, AIArtProvider):
+            frames = self.provider.frames_for(self.store.get().stage.value, key)
+            if frames:
+                self._play_key(key, frames, loop=(key == "blink"),
+                               interval=self.provider.frame_interval(key))
+                return
+        frames = self.provider.get_frames(self.store.get(), ActionType.ANIMATE)
         self.window.play_frames(frames)
+
+    # ---- v0.10.15 状态驱动帧播放 ----
+    def _play_key(self, key: str, frames: list, loop: bool = False,
+                  interval: int = 150) -> None:
+        """播放并记录当前 key（同 key 重入不重启计时器）。"""
+        if getattr(self, "_anim_key", None) == key and self.window._frames:
+            return
+        self._anim_key = key
+        for f in frames:
+            f.width = self.window.width()
+            f.height = self.window.height()
+        self.window.play_frames(frames, loop=loop, interval_ms=interval)
+
+    def _stop_anim(self) -> None:
+        if getattr(self, "_anim_key", None) is not None:
+            self._anim_key = None
+            self.window.stop_frames()
+
+    def _frame_tick(self, action, mode: str, prev_mode: str) -> None:
+        """FSM 模式 → 帧：walk 交替 / fall 空中 / 落地瞬帧 / 吃鼠标咀嚼循环。"""
+        provider = self.provider
+        if not isinstance(provider, AIArtProvider):
+            return
+        stage = self.store.get().stage.value
+        if prev_mode in ("fall", "thrown") and mode not in ("fall", "thrown"):
+            land = provider.frames_for(stage, "fall")
+            if len(land) > 1:
+                self._anim_key = None  # 允许覆盖 air 循环
+                self._play_key("land", [land[-1]], loop=False,
+                               interval=provider.frame_interval("fall"))
+                return
+            self._stop_anim()
+            return
+        if mode in ("fall", "thrown"):
+            air = provider.frames_for(stage, "fall")
+            if air:
+                self._play_key("fall_air", [air[0], air[0]], loop=True)
+            return
+        if mode == "eat_mouse":
+            seq = provider.frames_for(stage, "chew")
+            if seq:
+                self._play_key("eat_mouse_chew", seq, loop=True,
+                               interval=provider.frame_interval("chew"))
+            return
+        if mode == "walk" or (mode == "idle" and getattr(self, "_follow", False)):
+            walk = provider.frames_for(stage, "walk")
+            if walk:
+                self._play_key("walk", walk, loop=True,
+                               interval=provider.frame_interval("walk"))
+            return
+        if getattr(self, "_anim_key", None) not in (None, "land"):
+            self._stop_anim()
 
     def shutdown(self) -> None:
         """七步序（§2.5）；v0.2 起 ④保存 PetState 有实体。

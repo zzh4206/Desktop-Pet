@@ -227,14 +227,72 @@ class AIArtProvider:
         # 降级：emoji（不区分 miss 原因——缺文件/目录不存在/权限均可）
         return self._fallback.get_static(state, skin)
 
+    # 动作 → 帧名模板（assets/frames/{stage}_{action}.png）与帧间隔
+    _FRAME_SPECS: dict = {
+        "walk":   (("walk_0", "walk_1"), 200),
+        "stretch": (("stretch_0", "stretch_1", "stretch_2"), 260),
+        "roll":   (("roll",), 260),
+        "blink":  (("idle_blink_0", "idle_blink_1"), 300),
+        "fall":   (("fall_air", "fall_land"), 200),
+        "eat_mouse": (("eat_mouse_0", "eat_mouse_1", "eat_mouse_2", "eat_mouse_3"), 320),
+        "chew":   (("chew_0", "chew_1"), 280),
+    }
+
+    def _frames_dir(self) -> str:
+        import os
+
+        return os.path.normpath(os.path.join(self._dir, "..", "frames"))
+
     def get_frames(
         self, state: PetState, action: "ActionType", skin: str = "default"
     ) -> list[SpriteRef]:
-        """AI 立绘动画帧（v0.10.1：返回当前静帧，不降级 emoji）。
+        """v0.10.15：按动作读 assets/frames 帧序列（原生透明 1024 图）。
 
-        §六约定"AI 仅静态"——但降级 emoji 会导致随机小动作动画期间
-        AI 立绘→emoji→AI 立绘的闪烁（用户反馈）。改返回 AI 静帧单帧：
-        play_frames 播同一张图（len≤1 不启 timer），视觉无变化。
-        真实动画帧入 assets/frames/ 后替换此实现。
+        帧文件存在 → 返回 SpriteRef 序列（width/height 用 _STAGE_SIZE 显示档，
+        窗口 KeepAspect 缩放底对齐）；缺帧回退 [get_static]（单帧不闪）。
         """
-        return [self.get_static(state, skin)]
+        from .behavior import ActionType
+
+        stage = state.stage.value
+        action_name = action.value if isinstance(action, ActionType) else str(action)
+        # ACTION 名 → 帧规格键
+        key = {
+            "move_to": "walk", "animate": None, "fall": "fall",
+            "eat_mouse": "eat_mouse", "speak": None,
+            "follow_cursor": "walk",
+        }.get(action_name, None)
+        # animate 的 name 参数（app 传 ActionType.ANIMATE + params 里 name；
+        # 这里无 params，由 app 走 get_frames(state, ANIMATE) 通用序或由
+        # _play_animate 传帧名——保留 ANIMATE 返回拉伸序查表）
+        if key is None:
+            return [self.get_static(state, skin)]
+
+        names = [f"{stage}_{n}" for n in self._FRAME_SPECS[key][0]]
+        refs = []
+        for n in names:
+            p = os.path.join(self._frames_dir(), n + ".png")
+            if os.path.isfile(p):
+                refs.append(SpriteRef(
+                    path=p, width=_STAGE_SIZE[state.stage][0],
+                    height=_STAGE_SIZE[state.stage][1], anchor="bottom_center",
+                ))
+        if not refs:
+            return [self.get_static(state, skin)]
+        return refs
+
+    def frames_for(self, stage: str, action_key: str) -> list[SpriteRef]:
+        """按 (stage, action_key) 返回帧序列（无帧 → []，app 走静帧兜底）。"""
+        spec = self._FRAME_SPECS.get(action_key)
+        if spec is None:
+            return []
+        refs = []
+        for n in spec[0]:
+            p = os.path.join(self._frames_dir(), f"{stage}_{n}.png")
+            if os.path.isfile(p):
+                refs.append(SpriteRef(
+                    path=p, width=1, height=1, anchor="bottom_center",
+                ))
+        return refs
+
+    def frame_interval(self, action_name: str) -> int:
+        return int(self._FRAME_SPECS.get(action_name, ("x", 150))[1])

@@ -67,6 +67,7 @@ class WindowBase(QWidget):
         font = QFont()
         font.setPointSizeF(sprite.width * 0.62)
         self._label.setFont(font)
+        self._pix_cache: dict = {}  # path→QPixmap（set_sprite 使用，须先于构造调用）
         self.set_sprite(sprite)
         # v0.10：构造期走统一 set_sprite（图片/emoji 分支），
         # 此后不得再 setText("")——会清掉刚显示的表情/位图（启动空屏回归）
@@ -82,6 +83,7 @@ class WindowBase(QWidget):
         self._static_sprite: SpriteRef = sprite
         self._frames: list = []
         self._frame_idx = 0
+        self._frame_loop = False
         self._frame_timer = QTimer(self)
         self._frame_timer.setInterval(150)
         self._frame_timer.timeout.connect(self._advance_frame)
@@ -89,14 +91,21 @@ class WindowBase(QWidget):
     # ---- 渲染 ----
     def set_sprite(self, sprite: SpriteRef) -> None:
         """v0.10：path 为文件路径（os.path.exists）→ QPixmap 图片渲染；
-        否则 emoji 文本（降级路径，v0.1 起行为不变）。"""
+        否则 emoji 文本（降级路径，v0.1 起行为不变）。v0.10.15 加 pix 缓存：
+        1024 帧图每 tick 重载代价高（LRU 64）。"""
         import os
 
         self._sprite = sprite
         if os.path.isfile(sprite.path):
             from PySide6.QtGui import QPixmap
 
-            pm = QPixmap(sprite.path)
+            pm = self._pix_cache.get(sprite.path)
+            if pm is None:
+                pm = QPixmap(sprite.path)
+                if not pm.isNull():
+                    self._pix_cache[sprite.path] = pm
+                    if len(self._pix_cache) > 64:
+                        self._pix_cache.pop(next(iter(self._pix_cache)))
             if not pm.isNull():
                 # 按 sprite 尺寸等比缩放（保持宽高比，多余透明填充）
                 from PySide6.QtCore import Qt
@@ -122,24 +131,41 @@ class WindowBase(QWidget):
         """注入 AssetProvider；on_state_change 据此换 sprite。"""
         self._provider = provider
 
-    def play_frames(self, frames: list) -> None:
-        """v0.3 播一段帧序列（AssetProvider.get_frames），播完回静帧。"""
+    def play_frames(self, frames: list, loop: bool = False,
+                    interval_ms: int = 150) -> None:
+        """v0.3 播一段帧序列（AssetProvider.get_frames），播完回静帧。
+
+        v0.10.15：loop=True 循环播放（咀嚼/行走等），stop_frames() 或
+        set_sprite 打断；interval_ms 帧间隔。
+        """
         if not frames:
             return
-        self._static_sprite = self._sprite  # 播完恢复
+        self._static_sprite = self._sprite  # 播完/打断恢复
         self._frames = list(frames)
         self._frame_idx = 0
+        self._frame_loop = bool(loop)
+        self._frame_timer.setInterval(interval_ms)
         self.set_sprite(self._frames[0])
         if len(self._frames) > 1:
             self._frame_timer.start()
 
+    def stop_frames(self) -> None:
+        """打断帧序列，恢复进入播放前的静帧。"""
+        if self._frames:
+            self._frames = []
+            self._frame_timer.stop()
+            self.set_sprite(getattr(self, "_static_sprite", self._sprite))
+
     def _advance_frame(self) -> None:
         self._frame_idx += 1
         if self._frame_idx >= len(self._frames):
-            self._frame_timer.stop()
-            self._frames = []
-            self.set_sprite(getattr(self, "_static_sprite", self._sprite))
-            return
+            if getattr(self, "_frame_loop", False):
+                self._frame_idx = 0
+            else:
+                self._frame_timer.stop()
+                self._frames = []
+                self.set_sprite(getattr(self, "_static_sprite", self._sprite))
+                return
         self.set_sprite(self._frames[self._frame_idx])
 
     def on_state_change(self, state) -> None:
