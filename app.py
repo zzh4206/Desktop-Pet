@@ -357,6 +357,10 @@ class PetApp:
         from pet.llm import create_client
 
         self._chat_client = create_client(selected, key, registry, self.cfg)
+        # H4/M5 修（REVIEW-2026-08-25）：滚屏摘要走独立客户端实例——共享
+        # 实例的 _resp/usage 跨线程互踩（摘要与在飞聊天流并发时 cancel
+        # 可能误关对方的流）。配置同源，仅多一个实例。
+        self._sum_client = create_client(selected, key, registry, self.cfg)
         self.logger.info("LLM provider: %s", selected)
         self._build_chat_panel(registry)
 
@@ -414,7 +418,8 @@ class PetApp:
             os.path.dirname(os.path.abspath(__file__)), "pet", "ui", "main.qml"
         )
         self._chat_bridge = ChatBridge(
-            self._chat_client, registry, self._make_tool_context
+            self._chat_client, registry, self._make_tool_context,
+            sum_client=getattr(self, "_sum_client", None),
         )
         self._chat_bridge.offlineRequested.connect(self._on_chat_offline)
         try:
@@ -814,6 +819,11 @@ class PetApp:
         self._last_facing_x = self.fsm.pos[0]
 
     # ---- v0.3 动画 ----
+    # H1 修（REVIEW-2026-08-25）：随机小动作 key 集——_frame_tick 的兜底停
+    # 豁免这组（旧版 ANIMATE 刚启动就在同一 tick 被兜底停掉，永远不可见），
+    # 终止改由 _play_animate 排的到期 singleShot 负责。
+    _SMALL_ANIM_KEYS = ("stretch", "blink", "roll")
+
     def _play_animate(self, name: str) -> None:
         """随机小动作（v0.10.15 帧动画）：stretch/blink 播帧序列，
         roll 单帧定格；缺帧回退 get_frames（静帧）。"""
@@ -823,8 +833,20 @@ class PetApp:
         if isinstance(self.provider, AIArtProvider):
             frames = self.provider.frames_for(self.store.get().stage.value, key)
             if frames:
+                interval = self.provider.frame_interval(key)
                 self._play_key(key, frames, loop=(key == "blink"),
-                               interval=self.provider.frame_interval(key))
+                               interval=interval)
+                # H1 修：显式终止——blink 循环两轮后停；stretch/roll 播完
+                # 定格一小会儿再回静帧（key 已被后续动画覆盖则不动）
+                ms = (2 * len(frames) * interval if key == "blink"
+                      else len(frames) * interval + 400)
+                anim_key = key
+
+                def _end_anim() -> None:
+                    if getattr(self, "_anim_key", None) == anim_key:
+                        self._stop_anim()
+
+                QTimer.singleShot(ms + 120, _end_anim)
                 return
         frames = self.provider.get_frames(self.store.get(), ActionType.ANIMATE)
         self.window.play_frames(frames)
@@ -878,7 +900,10 @@ class PetApp:
                 self._play_key("walk", walk, loop=True,
                                interval=provider.frame_interval("walk"))
             return
-        if getattr(self, "_anim_key", None) not in (None, "land"):
+        # H1 修：兜底停豁免小动作（stretch/blink/roll 由 _play_animate 的
+        # 到期 singleShot 终止）——旧版这里把刚启动的小动作同 tick 停掉
+        if (getattr(self, "_anim_key", None) not in (None, "land")
+                and self._anim_key not in self._SMALL_ANIM_KEYS):
             self._stop_anim()
 
     def shutdown(self) -> None:

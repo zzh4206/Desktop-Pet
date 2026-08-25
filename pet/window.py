@@ -12,6 +12,8 @@ signal 交互入口（``patRequested``/``feedRequested``/``cleanRequested``/
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QActionGroup, QFont
 from PySide6.QtWidgets import QLabel, QMenu, QWidget
@@ -67,7 +69,9 @@ class WindowBase(QWidget):
         font = QFont()
         font.setPointSizeF(sprite.width * 0.62)
         self._label.setFont(font)
-        self._pix_cache: dict = {}  # path→QPixmap（set_sprite 使用，须先于构造调用）
+        # H3 修（REVIEW-2026-08-25）：OrderedDict 真 LRU——命中 move_to_end、
+        # 逐出 popitem(last=False)。旧版普通 dict 命中不重排，"LRU"实为 FIFO。
+        self._pix_cache: OrderedDict = OrderedDict()
         self._facing = 1  # v0.10.16 朝向（1=右/-1=左，帧素材面朝右）
         self.set_sprite(sprite)
         # v0.10：构造期走统一 set_sprite（图片/emoji 分支），
@@ -93,36 +97,41 @@ class WindowBase(QWidget):
     def set_sprite(self, sprite: SpriteRef) -> None:
         """v0.10：path 为文件路径（os.path.exists）→ QPixmap 图片渲染；
         否则 emoji 文本（降级路径，v0.1 起行为不变）。v0.10.15 加 pix 缓存：
-        1024 帧图每 tick 重载代价高（LRU 64）。"""
+        1024 帧图每 tick 重载代价高。H3 修（v0.10.18）：缓存**显示档缩放后**
+        的小图（旧版存 1024×1536 全分辨率镜像图，64 条≈400MiB；且每次换帧
+        都从全图 SmoothTransformation 缩放，CPU 持续消耗）——显示档单条
+        <0.6MiB，键含尺寸防不同档混用。"""
         import os
 
         self._sprite = sprite
         if os.path.isfile(sprite.path):
             from PySide6.QtGui import QPixmap
 
-            key = (sprite.path, self._facing)
+            key = (sprite.path, self._facing, sprite.width, sprite.height)
             pm = self._pix_cache.get(key)
-            if pm is None:
-                pm = QPixmap(sprite.path)
-                if not pm.isNull():
+            if pm is not None:
+                self._pix_cache.move_to_end(key)   # 真 LRU：命中刷新热度
+            else:
+                raw = QPixmap(sprite.path)
+                if not raw.isNull():
                     if self._facing < 0:
                         from PySide6.QtGui import QTransform
 
-                        pm = pm.transformed(
+                        raw = raw.transformed(
                             QTransform().scale(-1, 1))
+                    pm = raw.scaled(
+                        sprite.width, sprite.height,
+                        Qt.KeepAspectRatio, Qt.SmoothTransformation,
+                    )
                     self._pix_cache[key] = pm
                     if len(self._pix_cache) > 64:
-                        self._pix_cache.pop(next(iter(self._pix_cache)))
-            if not pm.isNull():
-                # 按 sprite 尺寸等比缩放（保持宽高比，多余透明填充）
-                from PySide6.QtCore import Qt
-
-                scaled = pm.scaled(
-                    sprite.width, sprite.height,
-                    Qt.KeepAspectRatio, Qt.SmoothTransformation,
-                )
-                self._label.setPixmap(scaled)
-            # 加载失败 → 清 pixmap 退文本（下一 tick 走 emoji 降级）
+                        self._pix_cache.popitem(last=False)
+                else:
+                    # 加载失败也入缓存（null 哨兵）——防动画每帧 interval
+                    # 重复 isfile+解码的主线程 IO；label 保持上一帧画面
+                    self._pix_cache[key] = QPixmap()
+            if pm is not None and not pm.isNull():
+                self._label.setPixmap(pm)
         else:
             self._label.setText(sprite.path)
         if (sprite.width, sprite.height) != (self.width(), self.height()):

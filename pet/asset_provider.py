@@ -281,16 +281,26 @@ class AIArtProvider:
         return refs
 
     def frames_for(self, stage: str, action_key: str) -> list[SpriteRef]:
-        """按 (stage, action_key) 返回帧序列（无帧 → []，app 走静帧兜底）。"""
+        """按 (stage, action_key) 返回帧序列（无帧 → []，app 走静帧兜底）。
+
+        v0.10.18：SpriteRef 直接填 _STAGE_SIZE 显示档（旧版 width=1/height=1
+        依赖调用方先改尺寸——新调用方直接 play_frames 会把窗口 resize 成
+        1×1）。
+        """
         spec = self._FRAME_SPECS.get(action_key)
         if spec is None:
             return []
+        try:
+            width, height = _STAGE_SIZE[Stage(stage)]
+        except (KeyError, ValueError):
+            width, height = 192, 192
         refs = []
         for n in spec[0]:
             p = os.path.join(self._frames_dir(), f"{stage}_{n}.png")
             if os.path.isfile(p):
                 refs.append(SpriteRef(
-                    path=p, width=1, height=1, anchor="bottom_center",
+                    path=p, width=width, height=height,
+                    anchor="bottom_center",
                 ))
         return refs
 

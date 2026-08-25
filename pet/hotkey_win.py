@@ -36,6 +36,10 @@ _MOD_MAP = {
     "ctrl": MOD_CONTROL, "control": MOD_CONTROL,
     "alt": MOD_ALT, "option": MOD_ALT,
     "shift": MOD_SHIFT, "win": MOD_WIN, "meta": MOD_WIN,
+    # H2 修（REVIEW-2026-08-25）：config.example 的 hotkeys 是跨平台 mac 键位
+    # "cmd+option+p/t"，深合并后 win 端恒读到——cmd 在 win 解释为 ctrl
+    # （option 已映射 alt），mac 风格串在 win 即 Ctrl+Alt+P/T，与文档一致。
+    "cmd": MOD_CONTROL, "command": MOD_CONTROL,
 }
 
 _VK_MAP = {}
@@ -133,6 +137,9 @@ class HotkeyManager:
                 _ID_CHAT: parse_hotkey(chat_key),
                 _ID_SPIT: parse_hotkey(spit_key),
             }
+            # 原始键串（日志/冲突提示用——旧版硬编码 "ctrl+alt+p/t"，
+            # 用户改键或 cmd 别名解析后提示与实际不符）
+            self._key_strs = {_ID_CHAT: chat_key, _ID_SPIT: spit_key}
             self._on_conflict = on_conflict
             self._bridge = bridge
             self._thread = threading.Thread(
@@ -169,8 +176,8 @@ class HotkeyManager:
                 continue
             ok = _user32.RegisterHotKey(None, hid, mods, vk)
             self._reg_ok[hid] = bool(ok)
+            key_str = self._key_strs.get(hid, "?")
             if not ok:
-                key_str = "ctrl+alt+p" if hid == _ID_CHAT else "ctrl+alt+t"
                 _log.warning("[热键] %s 注册失败(被占用?) err=%s",
                              key_str, ctypes.get_last_error())
                 if self._on_conflict:
@@ -180,7 +187,6 @@ class HotkeyManager:
                     except Exception:
                         pass
             else:
-                key_str = "ctrl+alt+p" if hid == _ID_CHAT else "ctrl+alt+t"
                 _log.info("[热键] %s 注册成功 (%s)",
                           "聊天" if hid == _ID_CHAT else "吐出", key_str)
 

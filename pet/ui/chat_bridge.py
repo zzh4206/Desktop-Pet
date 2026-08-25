@@ -19,6 +19,7 @@ from typing import Optional
 from PySide6.QtCore import (
     QAbstractListModel,
     QModelIndex,
+    QThread,
     Property,
     Qt,
     Signal,
@@ -57,6 +58,61 @@ def _md_to_html(text: str) -> str:
     return s
 
 
+# 摘要轮 system（挂 system_override 顺带让 chat_once 走 tools_override=None
+# 分支——摘要请求不挂工具，不触 dispatch）
+_SUM_SYSTEM = "你是对话摘要助手。把对话压缩为要点，只输出摘要正文。"
+
+
+class _SummarizeWorker(QThread):
+    """H4 修（REVIEW-2026-08-25）：滚屏摘要后台线程。
+
+    旧版在 send() 主线程 Slot 里同步 chat_once（connect 10s + read 120s
+    超时，冻整个 UI 含宠物 50ms tick）。M2 修：FALLBACK_REPLY 降级文案/
+    空摘要按失败处理（保留原文），不当有效摘要写回。
+    """
+
+    done = Signal(int, object, str)   # cut, old_first(ChatTurn), summary
+    failed = Signal()
+
+    def __init__(self, client, prompt: str, cut: int, old_first,
+                 owns_client: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        self._client = client
+        self._prompt = prompt
+        self._cut = cut
+        self._old_first = old_first
+        self._owns_client = owns_client
+
+    def cancel(self) -> None:
+        """中断摘要流式。仅独占客户端时关 _resp——共享实例上关闭会误伤
+        在飞的聊天/主动关怀流（M5 竞态）。"""
+        if not self._owns_client:
+            return
+        try:
+            if self._client._resp is not None:
+                self._client._resp.close()
+        except Exception:
+            pass
+
+    def run(self) -> None:
+        from ..llm import FALLBACK_REPLY, ChatTurn
+
+        try:
+            summary, _ = self._client.chat_once(
+                [ChatTurn("user", self._prompt)], None,
+                system_override=_SUM_SYSTEM, tools_override=None,
+            )
+        except Exception:
+            log.warning("[记忆] 滚动摘要请求失败(保留原文)", exc_info=True)
+            self.failed.emit()
+            return
+        summary = (summary or "").strip()
+        if not summary or summary == FALLBACK_REPLY:
+            self.failed.emit()
+            return
+        self.done.emit(self._cut, self._old_first, summary)
+
+
 class ChatBridge(QAbstractListModel):
     """QML ↔ DS 桥。messages 走 QAbstractListModel（insertRows 刷新 ListView）。"""
 
@@ -68,15 +124,19 @@ class ChatBridge(QAbstractListModel):
     offlineRequested = Signal()
     failedReply = Signal(str)
 
-    def __init__(self, client, registry, make_ctx, parent=None) -> None:
+    def __init__(self, client, registry, make_ctx, parent=None,
+                 sum_client=None) -> None:
         super().__init__(parent)
         self._client = client
         self._registry = registry
         self._make_ctx = make_ctx
+        # H4/M5 修：摘要专用客户端（app 注入独立实例；缺省回落共享实例）
+        self._sum_client = sum_client
         self._messages: list = []
         self._history: list = []  # list[ChatTurn] 喂 DS（与 messages 同步）
         self._streaming = ""
         self._worker = None
+        self._sum_worker = None   # 滚动摘要后台线程（同一时刻至多一个）
         self.on_user_message = None  # v0.6 可选钩子：app 侧 follow-up 启发式
         self._offline = False
 
@@ -127,7 +187,8 @@ class ChatBridge(QAbstractListModel):
             return
 
         self._append_message("user", text)
-        self._maybe_summarize()   # v0.9 滚屏摘要（发送前检查历史长度）
+        # v0.9 滚动摘要：不再在 send 前同步做（H4 修）——改在轮次完成后
+        # （_on_done/_on_failed）后台异步触发，见 _maybe_summarize
         if self.on_user_message is not None:
             try:
                 self.on_user_message(text)  # v0.6 follow-up 启发式（不阻塞聊天）
@@ -154,11 +215,16 @@ class ChatBridge(QAbstractListModel):
         v0.9.3(H4 修)：切片边界按**完整轮次**对齐——从 _SUMMARIZE_BATCH
         向后扫描，切点前若是 assistant(tool_calls) 或紧邻的 tool 结果则
         推迟一位（保证配对不切断；切断致 DS 收非法序列永久 400）。
-        DS 失败保留原文（下次再试），不阻塞发送。
+        v0.10.18（H4 修收尾）：摘要移后台线程（旧版在 send() 主线程同步
+        chat_once，read 超时 120s 冻 UI）；触发点从"send 前"挪到"轮次完成
+        后"（_on_done/_on_failed）——避免与在飞 ChatWorker 并发共享客户端。
+        失败/降级保留原文（下次再试），不阻塞任何路径。
         """
         if (self._client is None
                 or len(self._history) <= self._SUMMARIZE_THRESHOLD):
             return
+        if self._sum_worker is not None and self._sum_worker.isRunning():
+            return  # 上一轮摘要还在飞
         # 安全切点：从 batch 开始，跳过 tool 配对边界
         cut = self._SUMMARIZE_BATCH
         while cut < len(self._history):
@@ -172,33 +238,57 @@ class ChatBridge(QAbstractListModel):
                     cut += 1  # 切点前是配对尾部 → 推迟
                     continue
             break
-        try:
-            old_turns = self._history[:cut]
-            transcript = "\n".join(
-                f"{t.role}: {t.content[:200]}" for t in old_turns
-                if t.role in ("user", "assistant")
-            )
-            prompt = (
-                "把以下对话压缩成一段不超过150字的要点摘要"
-                "（保留人名/偏好/约定/结论），只输出摘要：\n\n" + transcript
-            )
-            from ..llm import ChatTurn
+        old_turns = self._history[:cut]
+        transcript = "\n".join(
+            f"{t.role}: {t.content[:200]}" for t in old_turns
+            if t.role in ("user", "assistant")
+        )
+        prompt = (
+            "把以下对话压缩成一段不超过150字的要点摘要"
+            "（保留人名/偏好/约定/结论），只输出摘要：\n\n" + transcript
+        )
+        client = self._sum_client if self._sum_client is not None else self._client
+        self._sum_worker = _SummarizeWorker(
+            client, prompt, cut, old_turns[0],
+            owns_client=self._sum_client is not None,
+        )
+        self._sum_worker.done.connect(self._on_summarized)
+        self._sum_worker.failed.connect(self._on_summarize_failed)
+        self._sum_worker.start()
 
-            summary, _ = self._client.chat_once(
-                [ChatTurn("user", prompt)], None,
-            )
-            summary = (summary or "").strip()
-            if not summary:
-                return
-            self._history = (
-                [ChatTurn("user", f"[此前对话摘要]\n{summary}")]
-                + self._history[cut:]
-            )
-            self._messages = self._messages[cut * 2:]
-            log.info("[记忆] 滚屏摘要: %d轮(cut=%d)→摘要%.0f字",
-                     len(old_turns), cut, len(summary))
-        except Exception:
-            log.warning("[记忆] 滚屏摘要失败(保留原文)", exc_info=True)
+    @Slot(int, object, str)
+    def _on_summarized(self, cut: int, old_first, summary: str) -> None:
+        """摘要后台完成 → 主线程替换历史（前缀校验防陈旧应用）。"""
+        from ..llm import ChatTurn
+
+        # worker 在飞期间历史头若已变（不该发生——单飞+尾部追加，保险），
+        # 丢弃本次防错切
+        if not self._history or self._history[0] is not old_first:
+            return
+        # M3 修：UI messages 按轮数对齐删除——_history 的 tool 轮不进
+        # _messages（每轮固定 user+assistant 两条），旧版 cut*2 按"每轮
+        # 两条 history"假设切片，有工具调用的会话删多。头部若已是上一次
+        # 的摘要标记 turn（user 角色、无 UI 行），计数扣 1。
+        users = sum(1 for t in self._history[:cut] if t.role == "user")
+        if (self._history[0].role == "user"
+                and self._history[0].content.startswith("[此前对话摘要]")):
+            users -= 1
+        self._history = (
+            [ChatTurn("user", f"[此前对话摘要]\n{summary}")]
+            + self._history[cut:]
+        )
+        pairs = max(0, min(users, len(self._messages) // 2))
+        if pairs:
+            self.beginRemoveRows(QModelIndex(), 0, pairs * 2 - 1)
+            self._messages = self._messages[pairs * 2:]
+            self.endRemoveRows()
+        log.info("[记忆] 滚屏摘要: cut=%d→摘要%.0f字（UI 删 %d 轮）",
+                 cut, len(summary), pairs)
+
+    @Slot()
+    def _on_summarize_failed(self) -> None:
+        # 保留原文（下次轮次完成再试）；失败细节 worker 已打日志
+        pass
 
     @Slot()
     def cancel(self) -> None:
@@ -221,6 +311,20 @@ class ChatBridge(QAbstractListModel):
                 w.wait(2000)
             w.deleteLater()
         self._worker = None
+        # H4 修：摘要线程一并收口（shutdown 也走这里——QThread 挂后台
+        # 不等会 "Destroyed while thread is still running"）
+        sw = self._sum_worker
+        if sw is not None:
+            try:
+                sw.done.disconnect(self._on_summarized)
+                sw.failed.disconnect(self._on_summarize_failed)
+            except (TypeError, RuntimeError):
+                pass
+            if sw.isRunning():
+                sw.cancel()
+                sw.wait(2000)
+            sw.deleteLater()
+        self._sum_worker = None
         self._set_streaming("")
 
     # ---- worker 信号 ----
@@ -246,6 +350,8 @@ class ChatBridge(QAbstractListModel):
         self._append_message("assistant", final_text)
         self._set_streaming("")
         self._worker = None
+        # H4 修：轮次完成后异步触发滚屏摘要（旧版在 send 前 同步做）
+        self._maybe_summarize()
 
     @Slot()
     def _on_offline(self) -> None:
@@ -267,6 +373,8 @@ class ChatBridge(QAbstractListModel):
         self._history.append(ChatTurn("assistant", reply))
         self._set_streaming("")
         self._worker = None
+        # 降级轮也查摘要（历史持续增长；DS 恢复后下次触发补上）
+        self._maybe_summarize()
 
     # ---- 内部 ----
     def _append_message(self, role: str, content: str) -> None:
