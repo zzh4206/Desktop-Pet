@@ -33,6 +33,7 @@ MEMORY_SAVE_SCHEMA = ToolSchema(
         "additionalProperties": False,
     },
     dangerous=False,
+    text_fields=("fact",),   # L10：自然语句事实，跳过黑名单扫描
 )
 
 MEMORY_SEARCH_SCHEMA = ToolSchema(
@@ -51,6 +52,7 @@ MEMORY_SEARCH_SCHEMA = ToolSchema(
         "additionalProperties": False,
     },
     dangerous=False,
+    text_fields=("query",),  # L10：自然语言查询词，跳过黑名单扫描
 )
 
 

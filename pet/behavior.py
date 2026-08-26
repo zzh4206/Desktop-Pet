@@ -31,9 +31,10 @@ class ActionType(Enum):
     ANIMATE = "animate"
     SPEAK = "speak"
     EAT_MOUSE = "eat_mouse"
-    FOLLOW_CURSOR = "follow_cursor"
 
-    # WANDER 是 FSM 行为模式（反复发 MOVE_TO 随机目标），非独立 ActionType
+    # WANDER 是 FSM 行为模式（反复发 MOVE_TO 随机目标），非独立 ActionType。
+    # L15 修（REVIEW-2026-08-25）：删 FOLLOW_CURSOR 死枚举——全仓无构造点
+    # （跟随是 FSM motion_mode，不是 Action）；设计思路 §2.2 已同步。
 
 
 @dataclass

@@ -200,8 +200,6 @@ class AIArtProvider:
                  assets_dir: str = ""):
         self._fallback = EmojiProvider(idle_fn, sleepy_idle_s)
         if not assets_dir:
-            import os
-
             assets_dir = os.path.normpath(os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "..", "assets", "ai",
@@ -217,10 +215,10 @@ class AIArtProvider:
         mood = _mood_from_state(state, self._fallback._idle_s())
         suffix = "" if skin == "default" else f"_{skin}"
         filename = f"{state.stage.value}_{state.branch.value}"                    f"_{mood.value}{suffix}.png"
-        path = os.path.join(self._dir, filename)  # noqa: F821
+        path = os.path.join(self._dir, filename)
 
         if filename not in self._miss_cache:
-            if os.path.isfile(path):  # noqa: F821
+            if os.path.isfile(path):
                 width, height = _STAGE_SIZE[state.stage]
                 return SpriteRef(
                     path=path, width=width, height=height,
@@ -243,8 +241,6 @@ class AIArtProvider:
     }
 
     def _frames_dir(self) -> str:
-        import os
-
         return os.path.normpath(os.path.join(self._dir, "..", "frames"))
 
     def get_frames(
@@ -263,7 +259,6 @@ class AIArtProvider:
         key = {
             "move_to": "walk", "animate": None, "fall": "fall",
             "eat_mouse": "eat_mouse", "speak": None,
-            "follow_cursor": "walk",
         }.get(action_name, None)
         # animate 的 name 参数（app 传 ActionType.ANIMATE + params 里 name；
         # 这里无 params，由 app 走 get_frames(state, ANIMATE) 通用序或由

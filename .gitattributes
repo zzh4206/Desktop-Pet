@@ -13,3 +13,6 @@
 *.sh text eol=lf
 *.txt text eol=lf
 .gitignore text eol=lf
+
+# 二进制素材（PNG 立绘/帧）——禁任何换行/编码转换（REVIEW T11）
+*.png binary

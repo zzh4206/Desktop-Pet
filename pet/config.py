@@ -153,6 +153,10 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "dnd": {"type": "boolean"},
             "video_apps": {"type": "array",
                            "items": {"type": "string"}},
+            # M10 修（REVIEW-2026-08-25）：代码读此键定制气泡吐出热键文案
+            # （proactive.py），旧版 schema 未收——用户一配即整段校验失败
+            # 回退默认（quiet_hours/sedentary 等自定义全丢）
+            "eat_mouse_hotkey_label": {"type": "string"},
             "eat_mouse_gain": {
                 "type": "object",
                 "properties": {

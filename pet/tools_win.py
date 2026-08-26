@@ -115,6 +115,8 @@ CLIPBOARD_SCHEMA = ToolSchema(
         "additionalProperties": False,
     },
     dangerous=False,
+    # L10：text 是任意用户文本载荷，跳过路径/命令黑名单扫描
+    text_fields=("text",),
 )
 
 

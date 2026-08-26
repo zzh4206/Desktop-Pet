@@ -86,6 +86,42 @@ def main() -> int:
     check("正常参数不命中黑名单",
           _scan_args_unsafe({"app": "notepad", "url": "https://x.com"}) is None)
 
+    # ---- L10 修（REVIEW-2026-08-27）：纯文本字段跳过黑名单 ----
+    # clipboard.text / memory fact/query 是任意自然文本，旧版一刀切扫描
+    # 拒绝"复制含 .. 的文本""记忆含 rm -rf 字样的事实"
+    from pet.tools_win import CLIPBOARD_SCHEMA
+    from pet.memory_tools import (
+        MEMORY_SAVE_SCHEMA, MEMORY_SEARCH_SCHEMA,
+    )
+
+    reg5 = ToolRegistry()
+    # 用 dispatch 层验证豁免（handler 用 Stub 不真写剪贴板）
+    reg5.register(CLIPBOARD_SCHEMA, StubHandler(ToolResult(True, "copied")))
+    r5 = reg5.dispatch(
+        "clipboard",
+        {"action": "set", "text": "路径说明：cd ../parent 与 rm -rf 命令"},
+        ToolContext(pet_state=None, user_name="x", config={}))
+    check("L10 clipboard.text 含 '../''rm -rf' 字样不再被黑名单拒",
+          r5.success is True)
+    reg5.register(MEMORY_SAVE_SCHEMA, StubHandler(ToolResult(True, "saved")))
+    r6 = reg5.dispatch(
+        "memory_save",
+        {"fact": "用户提到过 ... 与 ../../etc 字样", "importance": 0.5},
+        ToolContext(pet_state=None, user_name="x", config={}))
+    check("L10 memory fact 含路径字样不再被拒", r6.success is True)
+    check("L10 text_fields 已标注（clipboard/memory_save/search）",
+          CLIPBOARD_SCHEMA.text_fields == ("text",)
+          and MEMORY_SAVE_SCHEMA.text_fields == ("fact",)
+          and MEMORY_SEARCH_SCHEMA.text_fields == ("query",))
+    # 路径类字段仍拦截（file_search.pattern 不豁免）
+    from pet.tools_win import FILE_SEARCH_SCHEMA
+    reg5.register(FILE_SEARCH_SCHEMA, StubHandler(ToolResult(True, "hit")))
+    r7 = reg5.dispatch(
+        "file_search", {"pattern": "../../etc/passwd"},
+        ToolContext(pet_state=None, user_name="x", config={}))
+    check("L10 file_search.pattern 越界仍被拒（豁免仅限文本字段）",
+          r7.success is False and "不安全" in r7.message)
+
     # ---- register 同名 warn（v0.8.1）----
     reg4 = ToolRegistry()
     reg4.register(safe_schema, StubHandler(ToolResult(True, "a")))

@@ -64,6 +64,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
+from pet import __version__ as PKG_VERSION
 from pet.asset_provider import AIArtProvider, EmojiProvider
 from pet.behavior import ActionType, BehaviorFSM
 from pet.bubble import BubbleType, BubbleWidget
@@ -75,7 +76,9 @@ from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
 
-APP_VERSION = "v0.7.4+win"
+# 版本单一源 = pet/__init__.__version__（L2 治理：旧版三处硬编码漂移到
+# v0.7.4+win / 0.9.3 / 幻影 v0.12.1 注释）。发版只改 pet/__init__.py。
+APP_VERSION = f"v{PKG_VERSION}"
 
 _SAVE_DEBOUNCE_MS = 500       # 变更后 500ms 内多次只存一次
 _SAVE_PERIODIC_MS = 30_000    # 定时存档
@@ -549,8 +552,11 @@ class PetApp:
             self._show_chat()
 
     def _toggle_autostart(self, enabled: bool) -> None:
-        """v0.11 托盘自启切换。"""
+        """v0.11 托盘自启切换。L6 修：设置失败回滚托盘勾选（旧版失败只弹
+        气泡，勾选态与真实状态脱节到重启）。"""
         ok = self.adapter.set_autostart(enabled)
+        if not ok:
+            self.tray.set_autostart_state(False)
         self.bubble.show(
             "开机自启已开启～" if ok and enabled else
             "开机自启已关闭" if ok else "自启设置失败",
@@ -905,7 +911,10 @@ class PetApp:
                 self._play_key("eat_mouse_chew", seq, loop=True,
                                interval=provider.frame_interval("chew"))
             return
-        if mode == "walk" or (mode == "idle" and getattr(self, "_follow", False)):
+        # L1 修（REVIEW-2026-08-25）：follow 判定读 FSM 真实模式（旧版
+        # getattr(self,"_follow") 读 PetApp 不存在的属性恒 False——死分支）
+        if (mode == "walk"
+                or (mode == "idle" and self.fsm.motion_mode == "follow")):
             walk = provider.frames_for(stage, "walk")
             if walk:
                 self._play_key("walk", walk, loop=True,

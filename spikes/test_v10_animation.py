@@ -45,6 +45,7 @@ class _AppStub:
         self.window = window
         self.store = types.SimpleNamespace(
             get=lambda: types.SimpleNamespace(stage=stage))
+        self.fsm = types.SimpleNamespace(motion_mode="free")  # L1 后真实读取
         self._anim_key = None
 
 

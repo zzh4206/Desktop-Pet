@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 
@@ -69,6 +70,10 @@ class MemoryStore:
     def __init__(self) -> None:
         self._mem: list[dict] = []   # [{id,fact,importance,created,
         #                            #   last_recalled,recall_count}]
+        # L12 修（REVIEW-2026-08-25）：ChatWorker 线程 memorize/recall（DS
+        # 工具）与主线程 save/forget（UI/记忆页）并发读写收口。RLock 因
+        # memorize 内部调 forget_expired（重入）
+        self._lock = threading.RLock()
 
     # ---- 持久化（同 pet_state 模式） ----
 
@@ -103,7 +108,8 @@ class MemoryStore:
 
     def save(self, path: str) -> None:
         """原子写：.tmp → copy2 旧档→.bak → replace（pet_state 同序）。"""
-        data = {"version": _VERSION, "memories": self._mem}
+        with self._lock:
+            data = {"version": _VERSION, "memories": list(self._mem)}
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -122,24 +128,25 @@ class MemoryStore:
         fact = (fact or "").strip()
         if not fact:
             return ""
-        for m in self._mem:
-            if m["fact"] == fact:
-                m["importance"] = max(m["importance"],
-                                      _clamp_imp(importance))
-                return m["id"]
-        if len(self._mem) >= _MAX_MEMORIES:
-            self.forget_expired()          # 先清一轮
+        with self._lock:
+            for m in self._mem:
+                if m["fact"] == fact:
+                    m["importance"] = max(m["importance"],
+                                          _clamp_imp(importance))
+                    return m["id"]
             if len(self._mem) >= _MAX_MEMORIES:
-                self._mem.sort(key=lambda m: m["importance"])
-                self._mem = self._mem[1:]  # 仍满：挤掉最不重要
-        mid = "m_" + uuid.uuid4().hex[:10]
-        self._mem.append({
-            "id": mid, "fact": fact,
-            "importance": _clamp_imp(importance),
-            "created": time.time(),
-            "last_recalled": time.time(),
-            "recall_count": 0,
-        })
+                self.forget_expired()          # 先清一轮
+                if len(self._mem) >= _MAX_MEMORIES:
+                    self._mem.sort(key=lambda m: m["importance"])
+                    self._mem = self._mem[1:]  # 仍满：挤掉最不重要
+            mid = "m_" + uuid.uuid4().hex[:10]
+            self._mem.append({
+                "id": mid, "fact": fact,
+                "importance": _clamp_imp(importance),
+                "created": time.time(),
+                "last_recalled": time.time(),
+                "recall_count": 0,
+            })
         _log.info("[记忆] 存: %s(imp=%.2f)", fact[:40], importance)
         return mid
 
@@ -150,70 +157,75 @@ class MemoryStore:
         返回 [{id, fact, importance}]（按分降序）。
         """
         q_tokens = _tokenize(query)
-        if not q_tokens or not self._mem:
-            return []
-        now = time.time()
-        # IDF（M11 修：旧版 df 构建后零消费是死代码——现按 IDF 加权）
-        df = {}
-        docs = []
-        for m in self._mem:
-            toks = _tokenize(m["fact"])
-            docs.append(toks)
-            for t in set(toks):
-                df[t] = df.get(t, 0) + 1
-        n_docs = max(1, len(docs))
-        import math
+        with self._lock:
+            if not q_tokens or not self._mem:
+                return []
+            now = time.time()
+            # IDF（M11 修：旧版 df 构建后零消费是死代码——现按 IDF 加权）
+            df = {}
+            docs = []
+            for m in self._mem:
+                toks = _tokenize(m["fact"])
+                docs.append(toks)
+                for t in set(toks):
+                    df[t] = df.get(t, 0) + 1
+            n_docs = max(1, len(docs))
+            import math
 
-        def _idf(t):
-            return math.log(n_docs / max(1, df.get(t, 0)))
+            def _idf(t):
+                return math.log(n_docs / max(1, df.get(t, 0)))
 
-        q_set = set(q_tokens)
-        scored = []
-        for m, toks in zip(self._mem, docs):
-            t_set = set(toks)
-            common = q_set & t_set
-            if not common:
-                continue
-            # IDF 加权重合度：稀有词命中权重高，高频词（"主人""喜欢"）降权
-            overlap = (sum(_idf(t) for t in common)
-                       / max(0.001, sum(_idf(t) for t in q_set)))
-            recency = max(0.0, 1.0 - (now - m["last_recalled"]) / 86400.0)
-            score = (overlap * 0.5 + m["importance"] * 0.3
-                     + recency * 0.2)
-            scored.append((score, m))
-        scored.sort(key=lambda x: -x[0])
-        hits = []
-        for score, m in scored[:k]:
-            m["recall_count"] += 1
-            m["last_recalled"] = now
-            m["importance"] = min(1.0, m["importance"] + _RECALL_BOOST)
-            hits.append({"id": m["id"], "fact": m["fact"],
-                         "importance": round(m["importance"], 3)})
-        return hits
+            q_set = set(q_tokens)
+            scored = []
+            for m, toks in zip(self._mem, docs):
+                t_set = set(toks)
+                common = q_set & t_set
+                if not common:
+                    continue
+                # IDF 加权重合度：稀有词命中权重高，高频词（"主人""喜欢"）降权
+                overlap = (sum(_idf(t) for t in common)
+                           / max(0.001, sum(_idf(t) for t in q_set)))
+                recency = max(0.0, 1.0 - (now - m["last_recalled"]) / 86400.0)
+                score = (overlap * 0.5 + m["importance"] * 0.3
+                         + recency * 0.2)
+                scored.append((score, m))
+            scored.sort(key=lambda x: -x[0])
+            hits = []
+            for score, m in scored[:k]:
+                m["recall_count"] += 1
+                m["last_recalled"] = now
+                m["importance"] = min(1.0, m["importance"] + _RECALL_BOOST)
+                hits.append({"id": m["id"], "fact": m["fact"],
+                             "importance": round(m["importance"], 3)})
+            return hits
 
     def forget(self, mem_id: str) -> None:
         """按 id 删除（UI 用）。删后不再注入（recall 源即本列表）。"""
-        before = len(self._mem)
-        self._mem = [m for m in self._mem if m["id"] != mem_id]
-        if len(self._mem) != before:
+        with self._lock:
+            before = len(self._mem)
+            self._mem = [m for m in self._mem if m["id"] != mem_id]
+            removed = len(self._mem) != before
+        if removed:
             _log.info("[记忆] 删: %s", mem_id)
 
     def clear(self) -> None:
-        self._mem.clear()
+        with self._lock:
+            self._mem.clear()
         _log.info("[记忆] 清空")
 
     def forget_expired(self) -> int:
         """衰减+清理：importance 按天衰减，<0.1 物理删除。返删除数。"""
         now = time.time()
         kept, dropped = [], 0
-        for m in self._mem:
-            days = max(0.0, (now - m["last_recalled"]) / 86400.0)
-            m["importance"] *= _DECAY_PER_DAY ** days
-            if m["importance"] < _FORGET_BELOW:
-                dropped += 1
-            else:
-                kept.append(m)
-        self._mem = kept
+        with self._lock:
+            for m in self._mem:
+                days = max(0.0, (now - m["last_recalled"]) / 86400.0)
+                m["importance"] *= _DECAY_PER_DAY ** days
+                if m["importance"] < _FORGET_BELOW:
+                    dropped += 1
+                else:
+                    kept.append(m)
+            self._mem = kept
         if dropped:
             _log.info("[记忆] 遗忘清理 %d 条", dropped)
         return dropped
@@ -227,7 +239,8 @@ class MemoryStore:
 
     def all(self) -> list:
         """全量（UI 列表用；按 importance 降序）。"""
-        return sorted(self._mem, key=lambda m: -m["importance"])
+        with self._lock:
+            return sorted(self._mem, key=lambda m: -m["importance"])
 
     def __len__(self) -> int:
         return len(self._mem)

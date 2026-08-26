@@ -58,7 +58,7 @@ class PlatformAdapter:
         """前台是否全屏窗口（v0.3 全屏/演示检测）。
 
         基类返回 False（不抑制）；mac/win 各自覆盖。
-        v0.12.1：删冗余 is_fullscreen 中间层（仅 mac 自家调用），
+        删冗余 is_fullscreen 中间层（仅 mac 自家调用），
         mac 直接在 is_fullscreen_active 调 sensor_mac.fullscreen_status。
         """
         return False
@@ -140,8 +140,10 @@ class PlatformAdapter:
         pass
 
     def set_ds_key(self, key: str) -> None:
-        """存入平台密钥库。基类 no-op（无密钥库概念时调用方应自行降级）。"""
-        pass
+        """存 DS key（v0.4 单 provider 遗留兼容）。默认经 set_llm_key——
+        子类（mac/win）用 keyring 覆盖，基类无密钥库时为 no-op。
+        L16 修：mac/win 子类同款转发删除，只留此一处。"""
+        self.set_llm_key("deepseek", key)
 
     def confirm_dangerous(
         self, title: str, command: str, risk: str
@@ -188,7 +190,7 @@ def _mac_paths() -> dict:
 
     for d in (data_dir, log_dir, config_dir):
         os.makedirs(d, exist_ok=True)
-        # v0.12.1：data_dir/log_dir 收紧到 0o700（存 pet_state.json 含养成数据，
+        # data_dir/log_dir 收紧到 0o700（存 pet_state.json 含养成数据，
         # 旧版 0o755 其他用户可读；config_dir 同理）
         try:
             os.chmod(d, 0o700)
@@ -245,7 +247,7 @@ if sys.platform == "darwin":
 
         @staticmethod
         def _activate_existing(pid: int | None) -> None:
-            """派发 osascript 前置已有实例。v0.12.1：改 subprocess.run timeout
+            """派发 osascript 前置已有实例。改 subprocess.run timeout
             （旧版 Popen 不 wait，Popen 对象 GC 可能杀掉 osascript 致唤醒失败）。"""
             if not pid:
                 return
@@ -284,7 +286,7 @@ if sys.platform == "darwin":
             return sensor_mac.build_sensors()
 
         def is_fullscreen_active(self) -> bool:
-            # v0.12.1：删冗余 is_fullscreen 中间层，直接调 sensor_mac
+            # 删冗余 is_fullscreen 中间层，直接调 sensor_mac
             return sensor_mac.fullscreen_status()[0]
 
         def create_pet_window(self, sprite):
@@ -424,13 +426,6 @@ if sys.platform == "darwin":
                         "register_own_windows 登记 widget 失败: %s", exc)
             sensor_mac.set_own_wids(wids)
 
-        # ---- v0.4：DS key 存 Keychain / 危险确认 NSAlert ----
-        def get_ds_key(self) -> str | None:
-            return self.get_llm_key("deepseek", "DEEPSEEK_API_KEY")
-
-        def set_ds_key(self, key: str) -> None:
-            self.set_llm_key("deepseek", key)
-
         # ---- v0.4.15 多 provider key（Keychain 按 provider 名存取） ----
         def get_llm_key(self, provider: str, env_var: str) -> str | None:
             """Keychain 优先（按 provider 名）→ env 兜底 → None。"""
@@ -512,7 +507,7 @@ elif sys.platform == "win32":
 
         def __init__(self, data_dir, log_dir, config_path, lock_path):
             super().__init__(data_dir, log_dir, config_path, lock_path)
-            self._lock_fd: int | None = None  # v0.12.1：注解对齐 mac
+            self._lock_fd: int | None = None  # 注解对齐 mac
 
         def acquire_single_instance_lock(self) -> bool:
             fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR)
@@ -543,7 +538,7 @@ elif sys.platform == "win32":
             """best-effort 前置已有实例：按 pid 枚举可见顶层窗口后
             SetForegroundWindow（注意其参数是 HWND，非进程句柄）。
 
-            v0.12.1：加 AllowSetForegroundWindow(ASFW_ANY) 解除前台锁定
+            加 AllowSetForegroundWindow(ASFW_ANY) 解除前台锁定
             （旧版第二实例无前台权限，SetForegroundWindow 静默失败不前置）。
             多窗口时取第一个可见顶层窗（宠物本体通常唯一，聊天窗隐藏态）。
             """
@@ -670,13 +665,6 @@ elif sys.platform == "win32":
             if not name:
                 return False
             return _video_app_match(name, video_apps)
-
-        # ---- v0.4：DS key 存 Windows 凭据管理器 / 危险确认 Qt 对话框 ----
-        def get_ds_key(self) -> str | None:
-            return self.get_llm_key("deepseek", "DEEPSEEK_API_KEY")
-
-        def set_ds_key(self, key: str) -> None:
-            self.set_llm_key("deepseek", key)
 
         # ---- v0.4.15 多 provider key（凭据管理器按 provider 名存取） ----
         def get_llm_key(self, provider: str, env_var: str) -> str | None:

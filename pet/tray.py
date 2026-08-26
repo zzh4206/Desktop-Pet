@@ -21,7 +21,7 @@ class TrayManager(QObject):
         self._on_spit = None
         self._on_mem = None
         self._autostart_state = False
-        self._on_autostart = None  # v0.7 强制吐出（吃鼠标时键盘热键外的备用出口）
+        self._on_autostart = None  # v0.11 自启切换回调（L14 修：注释原误标"强制吐出"）
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
 

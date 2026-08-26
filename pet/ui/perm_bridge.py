@@ -100,10 +100,11 @@ class PermBridge(QObject):
     def _check_ll_hook(self):
         # M4 修：结构性检测——SetWindowsHookEx 后立即 Unhook（不进
         # 消息循环、不吞事件、<10ms 无感；旧版真装 0.3s 冻结鼠标）
+        # L13 修：user32 开 use_last_error——旧版失败详情读的是陈旧值
         import ctypes
         import ctypes.wintypes as wintypes
 
-        u = ctypes.WinDLL("user32")
+        u = ctypes.WinDLL("user32", use_last_error=True)
         WH_MOUSE_LL = 14
         # 最小回调（不抑制，直透）
         _CB = ctypes.WINFUNCTYPE(

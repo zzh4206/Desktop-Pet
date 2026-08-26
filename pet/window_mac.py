@@ -62,4 +62,3 @@ class PetWindow(WindowBase):
             # 无 pyobjc / 句柄异常时退化为纯 Qt 行为，仍可上屏
             import logging
             logging.getLogger("pet").warning("window_mac polish 失败: %s", exc)
-            pass

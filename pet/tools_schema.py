@@ -60,6 +60,10 @@ class ToolSchema:
     description: str
     parameters: dict
     dangerous: bool = False  # True→dispatch 先走 confirm_fn
+    # L10 修（REVIEW-2026-08-25）：纯文本载荷字段名——这些字段的值跳过
+    # 路径/命令黑名单扫描（旧版一刀切：复制含 ".." 的文本、记忆存
+    # "..." 事实全被拒）。文件路径类字段（file_search.pattern 等）不列。
+    text_fields: tuple = ()
 
 
 # 参数黑名单（§五 prompt 注入防护）：路径根/越界/破坏性模式。
@@ -83,14 +87,17 @@ def _is_unsafe_path(value: str) -> bool:
     return False
 
 
-def _scan_args_unsafe(args) -> Optional[str]:
+def _scan_args_unsafe(args, skip=frozenset()) -> Optional[str]:
     """递归扫所有字符串值（含 dict/list 嵌套）是否命中黑名单；命中返回该值。
 
     v0.8.1：旧版只扫顶层 args.values()，嵌套参数（如 ``{"opts":{"p":"../"}}``）
     可绕过；现递归扫 dict/list 内所有字符串。
+    L10：``skip`` 为豁免的**顶层字段名**（纯文本载荷，见 ToolSchema.text_fields）。
     """
     if isinstance(args, dict):
-        for v in args.values():
+        for k, v in args.items():
+            if k in skip:
+                continue
             bad = _scan_args_unsafe(v)
             if bad is not None:
                 return bad
@@ -177,8 +184,9 @@ class ToolRegistry:
             return ToolResult(False, f"未知工具: {name}")
         schema = self._schemas[name]
 
-        # 参数黑名单校验（注入防护，递归扫 dict/list）
-        bad = _scan_args_unsafe(args or {})
+        # 参数黑名单校验（注入防护，递归扫 dict/list；L10：纯文本字段豁免）
+        bad = _scan_args_unsafe(args or {},
+                                skip=frozenset(schema.text_fields))
         if bad is not None:
             log.warning("工具 %s 参数命中黑名单: %r", name, bad)
             return ToolResult(False, "参数包含不安全的路径或命令。")
