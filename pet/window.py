@@ -107,7 +107,9 @@ class WindowBase(QWidget):
         if os.path.isfile(sprite.path):
             from PySide6.QtGui import QPixmap
 
-            key = (sprite.path, self._facing, sprite.width, sprite.height)
+            # v0.10.18：key 含 mtime——帧文件被热替换时缓存自动失效
+            key = (sprite.path, self._facing, sprite.width, sprite.height,
+                   os.path.getmtime(sprite.path))
             pm = self._pix_cache.get(key)
             if pm is not None:
                 self._pix_cache.move_to_end(key)   # 真 LRU：命中刷新热度
