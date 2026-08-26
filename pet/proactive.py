@@ -32,7 +32,7 @@ import time
 from collections import deque
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from .pet_state import PetStateStore
 
@@ -203,6 +203,11 @@ class ProactiveScheduler:
             "Ctrl+Alt+T" if sys.platform == "win32" else "⌘⌥T"
         )
         self._wake_worker = None                     # 异步决策 worker（v0.6.2）
+        self._wake_dying = None                      # shutdown 超时未退的 worker（保引用防 GC）
+        # worker 的 QObject 属主：scheduler 非 QObject，给 QThread 挂父对象
+        # 让 C++ 生命周期归它管——done 送达时线程可能仍在收尾，Python 引用
+        # 先丢会触发"销毁运行中 QThread"的原生崩溃（perm worker 实测段错误）
+        self._worker_owner = QObject()
         self._wake_ctx_pending: dict | None = None   # 决策中的 ctx（worker 返回后用）
         self._followups: deque = deque()             # [(when, msg)]（保序，poll 取左端）
         self._sedentary_since: float | None = None   # 本久坐段起点
@@ -351,12 +356,12 @@ class ProactiveScheduler:
         app.shutdown 七步序调用。旧版退出不停 ``_wake_worker``（最长挂
         120s read 超时），QThread 对象随 scheduler 被 GC 会触发
         "QThread: Destroyed while thread is still running" 崩溃。断信号
-        → cancel 中断流式 → wait 退出 → deleteLater；无 worker no-op。
+        → cancel 中断流式 → wait 退出。deleteLater 由 finished→deleteLater
+        连接兜底，此处不手删（wait 超时线程未退时强删即同款崩溃）。
         """
         w = self._wake_worker
         if w is None:
             return
-        self._wake_worker = None
         try:
             w.done.disconnect(self._on_wake_done)
             w.failed.disconnect(self._on_wake_failed)
@@ -364,8 +369,12 @@ class ProactiveScheduler:
             pass
         if w.isRunning():
             w.cancel()
-            w.wait(2000)
-        w.deleteLater()
+            if not w.wait(2000):
+                # 线程仍卡（罕见：connect 阶段最长 10s）——保留引用防
+                # QThread wrapper 被 GC，finished→deleteLater 兜底回收
+                self._wake_dying = w
+                return
+        self._wake_worker = None
 
     def eat_mouse_tick(self) -> None:
         """app 每 tick 调（廉价）：approach 超时兜底 → 到点强制开吃。
@@ -545,18 +554,18 @@ class ProactiveScheduler:
             _log.info("[主动] 上一轮决策 worker 仍在跑，跳过本次唤醒")
             return
         self._wake_ctx_pending = ctx
-        self._wake_worker = _ProactiveWorker(self._client, ctx)
+        self._wake_worker = _ProactiveWorker(self._client, ctx,
+                                             parent=self._worker_owner)
         self._wake_worker.done.connect(self._on_wake_done)
         self._wake_worker.failed.connect(self._on_wake_failed)
+        # 删除只走 finished→deleteLater 单通道（parent 管生存期，见 __init__）
+        self._wake_worker.finished.connect(self._wake_worker.deleteLater)
         self._wake_worker.start()
 
     @Slot(object, object)
     def _on_wake_done(self, text: object, ctx: object) -> None:
         """worker done：解析 JSON → 发气泡 + 排下一次（主线程槽）。"""
-        w = self._wake_worker
         self._wake_worker = None
-        if w is not None:
-            w.deleteLater()
         try:
             delay_min, msg = self._parse_decision(str(text))
             if msg:
@@ -577,10 +586,7 @@ class ProactiveScheduler:
     @Slot(object)
     def _on_wake_failed(self, ctx: object) -> None:
         """worker failed（超时/离线/异常）：退本地罐头。"""
-        w = self._wake_worker
         self._wake_worker = None
-        if w is not None:
-            w.deleteLater()
         d, m = self._local_canned()
         self._emit_bubble(m, self._now())
         _log.info("[主动] 唤醒(LLM失败退本地): %s → 下次 %.0fmin", ctx, d)

@@ -161,7 +161,14 @@ def main() -> int:
         waited = 0
         while waited < timeout_ms:
             sw = b._sum_worker
-            if sw is None or not sw.isRunning():
+            if sw is None:
+                QTest.qWait(50)   # done/failed 排队信号送达
+                return
+            try:
+                running = sw.isRunning()
+            except RuntimeError:
+                running = False   # 已被 finished→deleteLater 回收
+            if not running:
                 QTest.qWait(50)   # done/failed 排队信号送达
                 return
             QTest.qWait(50)

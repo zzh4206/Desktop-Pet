@@ -10,9 +10,35 @@ from __future__ import annotations
 import logging
 import os
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QThread, Signal, Slot
 
 _log = logging.getLogger("pet")
+
+
+class _PermCheckWorker(QThread):
+    """M8 修（REVIEW-2026-08-25）：自检项后台执行。
+
+    旧版 refresh 在主线程同步跑全部检查（剪贴板走 PowerShell 典型
+    1-3s + COM 音量 + 文件探测），app 启动路径与 QML"重新检测"都冻结
+    UI 数秒。检查函数均为无状态只读探测，跨线程安全；结果经 done 信号
+    回主线程更新 items。"""
+
+    done = Signal(object)   # list[dict{name,ok,detail}]
+
+    def __init__(self, checks: list, parent=None) -> None:
+        super().__init__(parent)
+        self._checks = checks   # [(name, fn)]
+
+    def run(self) -> None:
+        items = []
+        for name, fn in self._checks:
+            try:
+                ok, detail = fn()
+            except Exception as exc:  # 自检自身不许崩
+                _log.warning("[权限自检] %s 异常: %s", name, exc)
+                ok, detail = False, str(exc)[:60]
+            items.append({"name": name, "ok": ok, "detail": detail or "-"})
+        self.done.emit(items)
 
 
 class PermBridge(QObject):
@@ -25,6 +51,7 @@ class PermBridge(QObject):
         super().__init__(parent)
         self._adapter = adapter
         self._items: list = []
+        self._worker: _PermCheckWorker | None = None
         self._note = "Windows 端无需系统授权；以下为运行时能力自检"
         self.refresh()
 
@@ -43,28 +70,32 @@ class PermBridge(QObject):
 
     @Slot()
     def refresh(self) -> None:
-        self._items = [
-            self._check("鼠标抑制钩子（吃鼠标）", self._check_ll_hook),
-            self._check("强制吐出热键 Ctrl+Alt+T", self._check_hotkey),
-            self._check("剪贴板读写", self._check_clipboard),
-            self._check("音量控制（CoreAudio）", self._check_volume),
-            self._check("数据目录可写", self._check_paths),
-            self._check("DS key（凭据管理器）", self._check_ds_key),
+        """触发自检（M8：后台线程执行；上一轮在飞时忽略重复请求）。"""
+        if self._worker is not None and self._worker.isRunning():
+            return
+        checks = [
+            ("鼠标抑制钩子（吃鼠标）", self._check_ll_hook),
+            ("强制吐出热键 Ctrl+Alt+T", self._check_hotkey),
+            ("剪贴板读写", self._check_clipboard),
+            ("音量控制（CoreAudio）", self._check_volume),
+            ("数据目录可写", self._check_paths),
+            ("DS key（凭据管理器）", self._check_ds_key),
         ]
+        self._worker = _PermCheckWorker(checks, parent=self)
+        self._worker.done.connect(self._on_checks_done)
+        # 线程对象挂 parent=self（C++ 生命周期归桥管）——done 送达时线程
+        # 可能仍在收尾，Python 引用先丢会触发"销毁运行中 QThread"的原生
+        # 崩溃（实测段错误）；删除只走 finished→deleteLater 单通道
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.start()
+
+    @Slot(object)
+    def _on_checks_done(self, items: list) -> None:
+        self._items = items
         self.itemsChanged.emit()
+        self._worker = None
 
-    # ---- 单项包装 ----
-
-    @staticmethod
-    def _check(name, fn) -> dict:
-        try:
-            ok, detail = fn()
-        except Exception as exc:  # 自检自身不许崩
-            _log.warning("[权限自检] %s 异常: %s", name, exc)
-            ok, detail = False, str(exc)[:60]
-        return {"name": name, "ok": ok, "detail": detail or "-"}
-
-    # ---- 各项检测 ----
+    # ---- 各项检测（worker 线程执行，须无状态只读） ----
 
     def _check_ll_hook(self):
         # M4 修：结构性检测——SetWindowsHookEx 后立即 Unhook（不进

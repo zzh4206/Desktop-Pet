@@ -236,6 +236,28 @@ def main() -> int:
           ev3 == [] and locked is not None and not FakeLockInstance.active
           if False else (ev3 == [] and pr4._eat_pending is None))
 
+    # ---- H M7 修（REVIEW-2026-08-27）：活跃内容白名单 exe 名归一化 ----
+    # sensor_win.foreground_process_name() 返回大写带 .EXE 名，旧版裸
+    # upper 集合比对恒不命中（win 白名单门禁形同虚设）
+    from pet.platform import _video_app_match
+
+    check("H1 exe 形态命中（CHROME.EXE vs chrome.exe）",
+          _video_app_match("CHROME.EXE", ["chrome.exe"]))
+    check("H2 裸名命中（VLC.EXE vs VLC）",
+          _video_app_match("VLC.EXE", ["VLC"]))
+    check("H3 大小写不敏感（msedge.exe vs MSEDGE.EXE）",
+          _video_app_match("MSEDGE.EXE", ["msedge.exe"]))
+    check("H4 example 白名单（mac 显示名+win exe 名混合）",
+          _video_app_match("CHROME.EXE", [
+              "Google Chrome", "VLC", "chrome.exe", "potplayer.exe"])
+          and _video_app_match("POTPLAYER.EXE", [
+              "Google Chrome", "VLC", "chrome.exe", "potplayer.exe"]))
+    check("H5 无关进程不命中（NOTEPAD.EXE）",
+          not _video_app_match("NOTEPAD.EXE", ["chrome.exe", "VLC"]))
+    check("H6 空白名单/空名不命中",
+          not _video_app_match("", ["chrome.exe"])
+          and not _video_app_match("CHROME.EXE", []))
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

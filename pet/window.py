@@ -169,7 +169,11 @@ class WindowBase(QWidget):
         """
         if not frames:
             return
-        self._static_sprite = self._sprite  # 播完/打断恢复
+        # L4 修（REVIEW-2026-08-25）：动画→动画切换（walk→chew）时保留进入
+        # 播放前真正的静帧作恢复目标——旧版把"当前动画帧"捕获为
+        # _static_sprite，切换后 stop 恢复的是旧动画帧
+        if not self._frames:
+            self._static_sprite = self._sprite
         self._frames = list(frames)
         self._frame_idx = 0
         self._frame_loop = bool(loop)
@@ -198,9 +202,19 @@ class WindowBase(QWidget):
         self.set_sprite(self._frames[self._frame_idx])
 
     def on_state_change(self, state) -> None:
-        """v0.2 订阅 PetStateStore.on_change → 按 state 切 emoji。"""
-        if self._provider is not None:
-            self.set_sprite(self._provider.get_static(state))
+        """v0.2 订阅 PetStateStore.on_change → 按 state 切 emoji。
+
+        M1 修（REVIEW-2026-08-25）：帧动画播放中（walk/chew 循环等）只更新
+        ``_static_sprite`` 恢复目标、不换当前画面——旧版每 1s 衰减 on_change
+        无条件 set_sprite 静帧，动画期间周期性闪一帧静帧（持续到下一帧
+        tick 换回）。动画自然结束/stop_frames 恢复时即用最新静帧。"""
+        if self._provider is None:
+            return
+        sprite = self._provider.get_static(state)
+        if self._frames:
+            self._static_sprite = sprite
+            return
+        self.set_sprite(sprite)
 
     def move_bottom_center(self, x: float, y: float) -> None:
         """(x, y) = bottom_center 点 → 算 top-left 后 move。

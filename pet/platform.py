@@ -155,6 +155,29 @@ class PlatformAdapter:
         return False
 
 
+def _video_app_match(proc_name: str, video_apps) -> bool:
+    """M7 修（REVIEW-2026-08-25）：win 活跃内容白名单归一化比对。
+
+    ``sensor_win.foreground_process_name()`` 返回大写带后缀 exe 名
+    （CHROME.EXE），白名单常写裸名/exe 形态/另一平台的显示名——旧版裸
+    upper 集合比对恒不命中（"VLC" vs "VLC.EXE"、"chrome.exe" vs
+    "CHROME.EXE"），窗口化视频前台时吃鼠标门禁形同虚设。归一化：双方
+    都生成「裸名+带 .EXE」两形态再交集判定（mac 显示名→win exe 名无法
+    推导，跨平台条目由 config 各自列出）。
+    """
+    if not proc_name or not video_apps:
+        return False
+
+    def _forms(s) -> set:
+        u = str(s).upper()
+        return {u, u[:-4] if u.endswith(".EXE") else u + ".EXE"}
+
+    allowed: set = set()
+    for a in video_apps:
+        allowed |= _forms(a)
+    return bool(_forms(proc_name) & allowed)
+
+
 def _mac_paths() -> dict:
     home = os.path.expanduser("~")
     data_dir = os.path.join(home, "Library", "Application Support", "Desktop-Pet")
@@ -641,12 +664,12 @@ elif sys.platform == "win32":
             if not video_apps:
                 return False
             # M8 修：不依赖全屏（旧版窗口化播放视频漏检白名单豁免）
+            # M7 修：exe 名归一化比对（旧版 mac 显示名/裸名 vs CHROME.EXE
+            # 恒不命中，门禁被配置漂移抵消）
             name = sensor_win.foreground_process_name()
             if not name:
                 return False
-            return name.upper() in {
-                str(a).upper() for a in video_apps
-            }
+            return _video_app_match(name, video_apps)
 
         # ---- v0.4：DS key 存 Windows 凭据管理器 / 危险确认 Qt 对话框 ----
         def get_ds_key(self) -> str | None:

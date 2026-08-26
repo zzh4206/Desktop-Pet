@@ -57,7 +57,13 @@
       "Firefox",
       "Microsoft Edge",
       "Brave Browser",
-      "Arc"
+      "Arc",
+      "chrome.exe",
+      "msedge.exe",
+      "firefox.exe",
+      "brave.exe",
+      "arc.exe",
+      "potplayer.exe"
     ],
     "eat_mouse_gain": {
       "fullness": 5,

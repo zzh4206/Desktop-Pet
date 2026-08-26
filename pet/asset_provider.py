@@ -208,6 +208,10 @@ class AIArtProvider:
             ))
         self._dir = assets_dir
         self._miss_cache: set = set()   # 已知缺失文件（防每 tick 重复 stat）
+        # M9 修（REVIEW-2026-08-25）：frames_for 结果缓存（含 None 缺帧
+        # 哨兵）——walk 模式 _frame_tick 每 50ms 调用，旧版每 tick 重复
+        # isfile ≈ 40 stat/s 持续在主线程
+        self._frames_cache: dict = {}
 
     def get_static(self, state: PetState, skin: str = "default") -> SpriteRef:
         mood = _mood_from_state(state, self._fallback._idle_s())
@@ -286,23 +290,35 @@ class AIArtProvider:
         v0.10.18：SpriteRef 直接填 _STAGE_SIZE 显示档（旧版 width=1/height=1
         依赖调用方先改尺寸——新调用方直接 play_frames 会把窗口 resize 成
         1×1）。
+        M9 修（REVIEW-2026-08-25）：stat 结果按 (stage, key) 缓存（缺帧也
+        缓存 None 哨兵）。返回防御拷贝（调用方会改 SpriteRef 尺寸，如
+        app._play_key 按 window 尺寸覆写）——不污染缓存。帧文件**热替换**
+        不受影响：路径不变，window 层缓存键含 mtime 自行失效重读；但
+        **新增**此前缺失的帧文件需重启才发现（与 _miss_cache 同语义）。
         """
         spec = self._FRAME_SPECS.get(action_key)
         if spec is None:
             return []
-        try:
-            width, height = _STAGE_SIZE[Stage(stage)]
-        except (KeyError, ValueError):
-            width, height = 192, 192
-        refs = []
-        for n in spec[0]:
-            p = os.path.join(self._frames_dir(), f"{stage}_{n}.png")
-            if os.path.isfile(p):
-                refs.append(SpriteRef(
-                    path=p, width=width, height=height,
-                    anchor="bottom_center",
-                ))
-        return refs
+        ck = (stage, action_key)
+        if ck not in self._frames_cache:
+            try:
+                width, height = _STAGE_SIZE[Stage(stage)]
+            except (KeyError, ValueError):
+                width, height = 192, 192
+            refs = []
+            for n in spec[0]:
+                p = os.path.join(self._frames_dir(), f"{stage}_{n}.png")
+                if os.path.isfile(p):
+                    refs.append(SpriteRef(
+                        path=p, width=width, height=height,
+                        anchor="bottom_center",
+                    ))
+            self._frames_cache[ck] = refs or None
+        cached = self._frames_cache[ck]
+        if not cached:
+            return []
+        return [SpriteRef(path=f.path, width=f.width, height=f.height,
+                          anchor=f.anchor) for f in cached]
 
     def frame_interval(self, action_name: str) -> int:
         return int(self._FRAME_SPECS.get(action_name, ("x", 150))[1])

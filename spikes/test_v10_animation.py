@@ -129,6 +129,51 @@ def main() -> int:
               last_key is not None and len(last_key) == 5
               and last_key[:4] == (sa.path, 1, 64, 64))
 
+    # ---- T7 M1/L4 修（REVIEW-2026-08-27）：动画中 on_change 不闪静帧 ----
+    window.set_sprite_provider(provider)
+    static2 = provider.get_static(state)
+    window._pix_cache.clear()
+    window.stop_frames()                 # 清场：回到静帧
+    window.set_sprite(static2)
+    window.play_frames(provider.frames_for("young", "walk"), loop=True)
+    check("T7a 前置：动画播放中", bool(window._frames))
+    window.on_state_change(state)        # 衰减每 1s 触发同款调用
+    check("T7b M1：动画中 on_change 不动当前画面（_sprite 仍动画帧）",
+          window._sprite.path.endswith("walk_0.png"))
+    check("T7c M1：动画中 on_change 更新恢复目标静帧",
+          window._static_sprite.path == static2.path)
+    window.play_frames(provider.frames_for("young", "chew"), loop=True)
+    check("T7d L4：walk→chew 切换恢复目标仍是静帧（旧版变 walk 帧）",
+          window._static_sprite.path == static2.path)
+    window.stop_frames()
+    check("T7e 停止后恢复静帧", window._sprite.path == static2.path)
+
+    # ---- T8 M9 修（REVIEW-2026-08-27）：frames_for 结果缓存 + 防御拷贝 ----
+    import pet.asset_provider as ap
+
+    provider._frames_cache.clear()
+    orig_isfile = os.path.isfile
+    stat_calls = []
+
+    def _spy_isfile(p, *a, **k):
+        stat_calls.append(str(p))
+        return orig_isfile(p, *a, **k)
+
+    ap.os.path.isfile = _spy_isfile
+    try:
+        provider.frames_for("young", "walk")
+        n_first = len(stat_calls)
+        provider.frames_for("young", "walk")
+        n_second = len(stat_calls) - n_first
+    finally:
+        ap.os.path.isfile = orig_isfile
+    check("T8a 首次 stat 建缓存", n_first >= 1)
+    check("T8b 二次调用零 stat（M9 缓存命中）", n_second == 0)
+    w1 = provider.frames_for("young", "walk")
+    w1[0].width = 99                     # 模拟调用方改尺寸（app._play_key）
+    w2 = provider.frames_for("young", "walk")
+    check("T8c 返回防御拷贝（改尺寸不污染缓存）", w2[0].width == 192)
+
     print(f"\n动画层: {len(PASS)} 通过, {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

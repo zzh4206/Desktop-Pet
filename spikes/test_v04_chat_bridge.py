@@ -45,8 +45,13 @@ class FakeChatWorker(QThread):
         self._history = history
         self._user_text = user_text
 
+    def start(self, *a, **k):
+        pass   # 替身不起真线程（run 为空，信号由 emit_* 手动驱动）——真
+               # start 的空线程在进程退出时与 C++ 收尾竞态，曾致 ~30% 概率
+               # 无栈段错误（历史抖动根因）
+
     def run(self):
-        # 不做真网络；测试通过 emit_* 手动驱动（run 默认空，start 后立即 finish）
+        # 不做真网络；测试通过 emit_* 手动驱动（run 默认空，start 已 no-op）
         pass
 
     def cancel(self):

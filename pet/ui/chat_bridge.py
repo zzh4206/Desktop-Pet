@@ -198,7 +198,7 @@ class ChatBridge(QAbstractListModel):
         from ..llm import ChatWorker
 
         self._worker = ChatWorker(
-            self._client, self._history, text, self._make_ctx()
+            self._client, self._history, text, self._make_ctx(), parent=self
         )
         self._worker.delta.connect(self._on_delta)
         self._worker.done.connect(self._on_done)
@@ -251,9 +251,14 @@ class ChatBridge(QAbstractListModel):
         self._sum_worker = _SummarizeWorker(
             client, prompt, cut, old_turns[0],
             owns_client=self._sum_client is not None,
+            parent=self,
         )
         self._sum_worker.done.connect(self._on_summarized)
         self._sum_worker.failed.connect(self._on_summarize_failed)
+        # 线程对象挂 parent=self（C++ 生命周期归桥管）——done 送达时线程
+        # 可能仍在收尾，Python 引用先丢会触发"销毁运行中 QThread"的原生
+        # 崩溃（perm worker 实测段错误）；删除只走 finished→deleteLater
+        self._sum_worker.finished.connect(self._sum_worker.deleteLater)
         self._sum_worker.start()
 
     @Slot(int, object, str)
@@ -277,6 +282,7 @@ class ChatBridge(QAbstractListModel):
             [ChatTurn("user", f"[此前对话摘要]\n{summary}")]
             + self._history[cut:]
         )
+        self._sum_worker = None   # done 先于 finished 送达，此刻清理安全
         pairs = max(0, min(users, len(self._messages) // 2))
         if pairs:
             self.beginRemoveRows(QModelIndex(), 0, pairs * 2 - 1)
@@ -288,7 +294,7 @@ class ChatBridge(QAbstractListModel):
     @Slot()
     def _on_summarize_failed(self) -> None:
         # 保留原文（下次轮次完成再试）；失败细节 worker 已打日志
-        pass
+        self._sum_worker = None   # failed 先于 finished 送达，此刻清理安全
 
     @Slot()
     def cancel(self) -> None:
@@ -312,7 +318,9 @@ class ChatBridge(QAbstractListModel):
             w.deleteLater()
         self._worker = None
         # H4 修：摘要线程一并收口（shutdown 也走这里——QThread 挂后台
-        # 不等会 "Destroyed while thread is still running"）
+        # 不等会 "Destroyed while thread is still running"）。deleteLater
+        # 由 finished→deleteLater 连接兜底（含自然完成路径），此处不重复
+        # 手删——对象可能已被事件循环回收。
         sw = self._sum_worker
         if sw is not None:
             try:
@@ -320,10 +328,13 @@ class ChatBridge(QAbstractListModel):
                 sw.failed.disconnect(self._on_summarize_failed)
             except (TypeError, RuntimeError):
                 pass
-            if sw.isRunning():
+            try:
+                running = sw.isRunning()
+            except RuntimeError:
+                running = False   # 已被 finished→deleteLater 回收
+            if running:
                 sw.cancel()
                 sw.wait(2000)
-            sw.deleteLater()
         self._sum_worker = None
         self._set_streaming("")
 
