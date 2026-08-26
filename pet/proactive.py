@@ -90,15 +90,17 @@ class EatMouseSession:
     def start(self, duration_s: float) -> None:
         """抑制鼠标（§2.2：``-> None``）。无 platform mouse_lock → 无操作。
 
-        成功抑制时发 FSM ``eat_mouse`` 事件切咀嚼态；失败（权限/系统拒绝）
-        不发事件（不进 EAT_MOUSE 态），由上层据 ``active`` 决定提示。
+        v0.7.4 两段式：``eat_mouse`` 事件由 scheduler 两段式入口发（FSM 先
+        奔向光标），本方法在到达后才被调——只做系统层 start + 记
+        ``_was_active`` 供 ``sync_release`` 的 active→False 释放检测；不再
+        自发 FSM 事件（会在到达后重复触发追赶）。失败（权限/系统拒绝）
+        返 False，由 ``eat_mouse_arrived`` 的失败分支处理（M4：补发
+        ``eat_mouse_off`` 让 FSM 退出 EAT_MOUSE）。
         """
         if self._lock is None:
             return
         ok = self._lock.start(duration_s)
         if ok:
-            # v0.7.4：eat_mouse 事件由 scheduler 两段式入口发（此处再发会在
-            # 到达后重复触发追赶）；此处只记 active 供释放检测
             self._was_active = True
 
     def force_spit(self) -> None:
@@ -324,7 +326,16 @@ class ProactiveScheduler:
                 except Exception:
                     _log.warning("[吃鼠标] 养成回血异常", exc_info=True)
         else:
-            # tap 创建失败（权限被拒/UIPI 系统拒绝）→ 不抑制，提示
+            # tap 创建失败（权限被拒/UIPI 系统拒绝）→ 不抑制，提示。
+            # M4 修（REVIEW-2026-08-25）：补发 eat_mouse_off 让 FSM 退出
+            # EAT_MOUSE——旧版只发气泡，_was_active 未置真致 sync_release
+            # 的释放检测永不触发，宠物冻在光标处咀嚼，仅热键/托盘可解
+            if self._fsm_event_fn is not None:
+                try:
+                    self._fsm_event_fn("eat_mouse_off")
+                except Exception:
+                    _log.warning("[吃鼠标] 抑制失败回退事件派发异常",
+                                 exc_info=True)
             self._emit_bubble("没管住鼠标（权限或系统拒绝），先气泡提醒～",
                               self._now())
 
@@ -333,6 +344,28 @@ class ProactiveScheduler:
         同样路径）。无 mouse_lock → 无操作。含清 approach pending。"""
         self._eat_pending = None  # 追赶中吐出：不再启动抑制
         self._eat_session.force_spit()
+
+    def shutdown(self) -> None:
+        """M6 修（REVIEW-2026-08-25）：收口在飞的决策 worker。
+
+        app.shutdown 七步序调用。旧版退出不停 ``_wake_worker``（最长挂
+        120s read 超时），QThread 对象随 scheduler 被 GC 会触发
+        "QThread: Destroyed while thread is still running" 崩溃。断信号
+        → cancel 中断流式 → wait 退出 → deleteLater；无 worker no-op。
+        """
+        w = self._wake_worker
+        if w is None:
+            return
+        self._wake_worker = None
+        try:
+            w.done.disconnect(self._on_wake_done)
+            w.failed.disconnect(self._on_wake_failed)
+        except (TypeError, RuntimeError):
+            pass
+        if w.isRunning():
+            w.cancel()
+            w.wait(2000)
+        w.deleteLater()
 
     def eat_mouse_tick(self) -> None:
         """app 每 tick 调（廉价）：approach 超时兜底 → 到点强制开吃。
@@ -619,6 +652,16 @@ class _ProactiveWorker(QThread):
         super().__init__(parent)
         self._client = client
         self._ctx = ctx
+
+    def cancel(self) -> None:
+        """中断在飞请求（shutdown 用）：关底层流式 socket——iter_lines 抛
+        ConnectionError→OfflineError→run 的 except→failed.emit（信号已断，
+        无副作用），线程随即退出，wait 不必吃满 read 超时。"""
+        try:
+            if self._client._resp is not None:
+                self._client._resp.close()
+        except Exception:
+            pass
 
     @Slot()
     def run(self) -> None:

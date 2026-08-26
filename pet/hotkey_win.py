@@ -89,6 +89,9 @@ class _HotkeySignalBridge:
 
     HotkeyManager 保持纯 Python（无 Qt 依赖，测试友好）；app 在 start()
     后用 bridge 的信号 connect 到实际 handler。
+    M12 修（REVIEW-2026-08-25）：注册冲突回调（热键线程内触发）也编码为
+    ``conflict(name, key_str)`` 信号——旧版直调 on_conflict（app 侧
+    bubble.show 跨线程碰 Qt 未定义行为）。
     """
 
     def __init__(self) -> None:
@@ -96,12 +99,17 @@ class _HotkeySignalBridge:
 
         class _Sig(QObject):
             fired = Signal(int)       # hotkey id
+            conflict = Signal(str, str)   # M12: (名称, 键串) 注册冲突
 
         self._obj = _Sig()
 
     @property
     def fired(self):
         return self._obj.fired
+
+    @property
+    def conflict(self):
+        return self._obj.conflict
 
 
 class HotkeyManager:
@@ -142,12 +150,17 @@ class HotkeyManager:
             self._key_strs = {_ID_CHAT: chat_key, _ID_SPIT: spit_key}
             self._on_conflict = on_conflict
             self._bridge = bridge
+            # M11 修（REVIEW-2026-08-25）：_ready/_reg_ok 必须在 start() 前
+            # 创建——旧版 Event 在 start() 后建，子线程先跑到 _ready.set()
+            # 则主线程 AttributeError；_reg_ok 由子线程写入，主线程 wait
+            # 超时后读未初始化属性同样炸（_loop 内不再重建 _reg_ok）。
+            self._ready = threading.Event()
+            self._reg_ok = {}
             self._thread = threading.Thread(
                 target=self._loop, daemon=True, name="global-hotkey",
             )
             self._thread.start()
             # 等线程就绪
-            self._ready = threading.Event()
             self._ready.wait(timeout=2.0)
             self._active = any(v != (0, 0) and ok
                                for v, ok in self._reg_ok.items())
@@ -167,7 +180,7 @@ class HotkeyManager:
     def _loop(self) -> None:
         """热键线程体：注册 → GetMessage 循环 → 清理。"""
         self._thread_id = _kernel32.GetCurrentThreadId()
-        self._reg_ok = {}
+        # _reg_ok 已在 start() 内预创建（M11），此处只填结果
 
         for hid, (mods, vk) in self._keys.items():
             if (mods, vk) == (0, 0):
@@ -181,11 +194,16 @@ class HotkeyManager:
                 _log.warning("[热键] %s 注册失败(被占用?) err=%s",
                              key_str, ctypes.get_last_error())
                 if self._on_conflict:
-                    try:
-                        name = "聊天" if hid == _ID_CHAT else "吐出"
-                        self._on_conflict(name, key_str)
-                    except Exception:
-                        pass
+                    name = "聊天" if hid == _ID_CHAT else "吐出"
+                    # M12 修：经 bridge 信号转主线程（旧版热键线程直调
+                    # on_conflict → bubble.show 跨线程 GUI 未定义行为）
+                    if self._bridge is not None:
+                        self._bridge.conflict.emit(name, key_str)
+                    else:
+                        try:
+                            self._on_conflict(name, key_str)
+                        except Exception:
+                            pass
             else:
                 _log.info("[热键] %s 注册成功 (%s)",
                           "聊天" if hid == _ID_CHAT else "吐出", key_str)

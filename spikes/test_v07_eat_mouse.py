@@ -198,6 +198,19 @@ def section_gates() -> None:
     check("G6 tap 创建失败 不抑制（active False）", not lock.active)
     check("G6 tap 失败提示气泡", any("没管住" in b for b in bubbles))
 
+    # G6b M4 修（REVIEW-2026-08-27）：抑制启动失败要补发 eat_mouse_off 让
+    # FSM 退出 EAT_MOUSE（旧版只发气泡，宠物冻在光标处咀嚼仅热键可解）
+    lock = FakeMouseLock(start_ok=False)
+    evs = []
+    s, bubbles2 = _make(lock, idle_s=30 * 60,
+                        cfg={"idle_threshold_min": 5},
+                        accessibility_fn=lambda: True, fsm_events=evs)
+    s.eat_mouse(10)          # 两段式：evs=["eat_mouse"]，pending 记账
+    s.eat_mouse_arrived()    # 到达后 start 失败 → M4 回退事件
+    check("G6b 启动失败补发 eat_mouse_off（FSM 退出吃鼠标态）",
+          evs == ["eat_mouse", "eat_mouse_off"]
+          and any("没管住" in b for b in bubbles2))
+
     # G7 force_spit → 吐出 + FSM eat_mouse_off 回 idle
     lock = FakeMouseLock()
     evs = []

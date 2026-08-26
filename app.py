@@ -190,7 +190,8 @@ class PetApp:
             store=self.store,
             bubble_fn=lambda t: self.bubble.show(t, anchor=self._pet_anchor()),
             idle_fn=lambda: self.sensors.idle_time,
-            client=getattr(self, "_chat_client", None),
+            # M5：独立决策客户端（见 _setup_chat 注释），不与聊天共享 _resp
+            client=getattr(self, "_proactive_client", None),
             cfg=proactive_cfg,
             mouse_lock=self.adapter.get_mouse_lock(),
             # mac DND v0.7 走 config 手动开关（proactive.dnd）；osascript
@@ -361,6 +362,11 @@ class PetApp:
         # 实例的 _resp/usage 跨线程互踩（摘要与在飞聊天流并发时 cancel
         # 可能误关对方的流）。配置同源，仅多一个实例。
         self._sum_client = create_client(selected, key, registry, self.cfg)
+        # M5 修收尾：主动关怀决策同样独立实例（ChatWorker 与
+        # _ProactiveWorker 共享时 cancel/usage 同源竞态）。三个 worker
+        # 各持一个客户端，_resp 互不误伤。
+        self._proactive_client = create_client(
+            selected, key, registry, self.cfg)
         self.logger.info("LLM provider: %s", selected)
         self._build_chat_panel(registry)
 
@@ -505,6 +511,11 @@ class PetApp:
                 _hk_hint = "Ctrl+Alt+P 聊天 / Ctrl+Alt+T 吐出"
             hotkey_bridge = _HotkeySignalBridge()
             hotkey_bridge.fired.connect(self._on_hotkey_fired)
+            # M12 修：注册冲突也走信号转主线程（win bridge 提供 conflict；
+            # mac bridge 无此信号——Carbon 回调本在主线程，直调安全）
+            conflict_sig = getattr(hotkey_bridge, "conflict", None)
+            if conflict_sig is not None:
+                conflict_sig.connect(on_conflict)
         except ImportError:
             pass  # 平台热键模块不可用 → bridge=None，回调直调
 
@@ -933,6 +944,13 @@ class PetApp:
                 self._proactive.force_spit()
             except Exception:
                 self.logger.warning("shutdown 释放 EatMouseSession 异常",
+                                    exc_info=True)
+            # M6 修（REVIEW-2026-08-25）：收口在飞 proactive 决策线程（旧版
+            # 不 cancel 不 wait，QThread 随 GC 触发 destroyed-while-running）
+            try:
+                self._proactive.shutdown()
+            except Exception:
+                self.logger.warning("shutdown 收口 proactive worker 异常",
                                     exc_info=True)
         # ③ 注销全局热键（v0.11 持久热键线程）
         try:

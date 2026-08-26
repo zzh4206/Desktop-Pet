@@ -182,6 +182,30 @@ def main() -> int:
     d, m = s._decide({"hour": "10:00"})
     check("T23 message=null 走罐头不显示None", 30 <= d <= 120 and m != "None")
 
+    # T24 M6 修（REVIEW-2026-08-27）：shutdown 收口在飞决策 worker——
+    # cancel 中断 + wait 退出 + 引用清空，不抛不挂（旧版退出时 wake_worker
+    # 挂 120s read，QThread 随 GC destroyed-while-running）
+    import time as _time
+
+    class SlowClient:
+        _resp = None   # cancel() 探测的流式引用（无在飞流）
+
+        def chat_once(self, history, ctx, on_delta=None,
+                      system_override=None, tools_override=None):
+            _time.sleep(0.3)
+            return '{"message": "慢决策", "next_min": 30}', []
+
+    clock = FakeClock("2026-08-17 10:00")
+    s, _ = make(clock)
+    s._client = SlowClient()
+    clock.advance(121)   # 到首次唤醒点 → _fire_wake 起 worker
+    s.poll()
+    check("T24 决策 worker 在飞", s._wake_worker is not None)
+    s.shutdown()
+    check("T24 shutdown 收口 worker（引用清空不挂）", s._wake_worker is None)
+    s.shutdown()   # 幂等：二次调用 no-op
+    check("T24 shutdown 幂等", s._wake_worker is None)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 
