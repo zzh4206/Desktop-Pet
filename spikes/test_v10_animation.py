@@ -123,8 +123,11 @@ def main() -> int:
         window.set_sprite(sb)
         window.set_sprite(sa)   # 命中 → 应移到尾部（最新）
         keys = list(window._pix_cache)
-        check("T6 LRU 命中重排（最热在尾）",
-              keys and keys[-1] == (sa.path, 1, 64, 64))
+        # v0.10.18b 缓存键加 mtime 成 5 元组 (path, facing, w, h, mtime)
+        last_key = keys[-1] if keys else None
+        check("T6 LRU 命中重排（最热在尾，5 元组键）",
+              last_key is not None and len(last_key) == 5
+              and last_key[:4] == (sa.path, 1, 64, 64))
 
     print(f"\n动画层: {len(PASS)} 通过, {len(FAIL)} 失败")
     return 1 if FAIL else 0

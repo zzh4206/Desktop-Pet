@@ -132,17 +132,21 @@ def main() -> int:
     check("T10 无命中返空", memory_context(store, "量子涨落") == "")
 
     # ---- T11 滚屏摘要：>20 轮压缩最老 10 轮 ----
+    # H4 修后摘要走 _SummarizeWorker 后台 QThread（chat_once 带
+    # system_override/tools_override 关键字），断言前须等 worker 退出且
+    # done/failed 信号经事件循环送达（旧版同步调用可直接断言）。
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from pet.ui.chat_bridge import ChatBridge
     from pet.llm import ChatTurn
 
     class SumClient:
-        def chat_once(self, history, ctx, on_delta=None):
+        def chat_once(self, history, ctx, on_delta=None, **kw):
             return "用户喜欢喝咖啡；约好周五交周报。", []
 
     class NoClient:
-        def chat_once(self, history, ctx, on_delta=None):
+        def chat_once(self, history, ctx, on_delta=None, **kw):
             raise RuntimeError("断网模拟")
 
     def make_bridge(client):
@@ -151,11 +155,24 @@ def main() -> int:
         b._client = client   # 直接灌（绕过 send 的 worker 路径）
         return b
 
+    def wait_sum(b, timeout_ms=5000):
+        """等摘要 worker 跑完（QTest.qWait 泵事件循环驱动信号送达）。"""
+        QTest.qWait(20)     # 让 start() 落地，避开 isRunning 假阴性窗口
+        waited = 0
+        while waited < timeout_ms:
+            sw = b._sum_worker
+            if sw is None or not sw.isRunning():
+                QTest.qWait(50)   # done/failed 排队信号送达
+                return
+            QTest.qWait(50)
+            waited += 50
+
     # >20 轮触发：最老 10 轮 → 摘要 1 轮
     br = make_bridge(SumClient())
     br._history = [ChatTurn("user" if i % 2 == 0 else "assistant",
                             f"消息{i}") for i in range(24)]
     br._maybe_summarize()
+    wait_sum(br)
     check("T11 24轮→摘要(≈15轮)", len(br._history) == 15)
     check("T11 摘要含要点", "咖啡" in br._history[0].content
           and br._history[0].content.startswith("[此前对话摘要]"))
@@ -163,11 +180,13 @@ def main() -> int:
     br2 = make_bridge(SumClient())
     br2._history = [ChatTurn("user", f"m{i}") for i in range(20)]
     br2._maybe_summarize()
+    QTest.qWait(300)   # 不触发的负例也等一拍，防"未跑完"假阳性
     check("T11 20轮不触发", len(br2._history) == 20)
     # 失败保留原文
     br3 = make_bridge(NoClient())
     br3._history = [ChatTurn("user", f"m{i}") for i in range(24)]
     br3._maybe_summarize()
+    wait_sum(br3)
     check("T11 DS失败保留原文", len(br3._history) == 24)
 
     # ---- T12 拖放文件（快捷启动器）----
