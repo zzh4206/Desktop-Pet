@@ -137,6 +137,12 @@ class RigWindow(WindowBase):
             w.setClearColor(Qt.transparent)
             w.setAttribute(Qt.WA_TranslucentBackground, True)
             w.setAttribute(Qt.WA_AlwaysStackOnTop, True)
+            # v0.13.4 关键：场景无任何交互 QML，必须对鼠标透明——否则实机
+            # （D3D11 RHI）下 QQuickWidget 吞掉原生 WM_LBUTTONDOWN，WindowBase
+            # 的手势/拖拽/右键全部失效（表现为"物理交互全灭"）。offscreen+
+            # QTest 测不出此 bug：QTest 直接对目标控件投递事件，绕过 OS 命中
+            # 分发（mock 盲区，真实验证须 SendInput 打实机窗口）。
+            w.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             # 根 Item 无显式尺寸：默认 SizeViewToRootObject 会把控件缩成
             # 0×0（P0 spike 实测，spikes/spike_rig_qtquick.py）
             w.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
