@@ -1,0 +1,29 @@
+{
+  "figures": {
+    "neglected_neutral": "figs\\neglected_neutral.png"
+  },
+  "parts": [
+    {
+      "id": "tail_neglected_neutral",
+      "file": "parts\\tail_neglected_neutral.png",
+      "source_figure": "neglected_neutral",
+      "px_rect": [
+        770,
+        701,
+        991,
+        1141
+      ],
+      "pivot": [
+        800.0,
+        1130.0
+      ],
+      "z": "under_core",
+      "sway": {
+        "amp_deg": 4.0,
+        "period_ms": 2600.0,
+        "phase_ms": 0.0
+      }
+    }
+  ],
+  "spec": 1
+}

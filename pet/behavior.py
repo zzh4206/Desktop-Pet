@@ -391,6 +391,12 @@ class BehaviorFSM:
     def pos(self) -> tuple:
         return self._pos
 
+    @property
+    def velocity(self) -> tuple:
+        """(vx, vy) px/s —— v0.13 rig 呈现层的倾斜/律动参数源（公开只读；
+        历史上仅内部 _vx/_vy，app 层不读私有是接口卫生）。"""
+        return (self._vx, self._vy)
+
     # ---- 主循环 ----
 
     def _window_spanning(self, x: float, y: float, require_band: bool = True):

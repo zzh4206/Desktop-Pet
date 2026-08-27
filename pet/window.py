@@ -353,3 +353,21 @@ class WindowBase(QWidget):
         """同步菜单选中状态；FSM 仍是移动行为的唯一状态源。"""
         if mode in {"follow", "free", "edge"}:
             self._motion_mode = mode
+
+    # ---- v0.13 呈现层接口扩展（RigWindow 重写；基类保守缺省） ----
+    def is_playing(self) -> bool:
+        """是否有帧序列在播（_play_key 同 key 重入门卫用的公开读法）。
+
+        v0.13 前 app 直读私有 ``window._frames``（泄漏）；收口为本方法，
+        两套呈现后端共用同一门卫语义。
+        """
+        return bool(getattr(self, "_frames", None))
+
+    def set_motion_params(self, tilt_deg: float = 0.0, walking: bool = False,
+                          airborne: bool = False) -> None:
+        """FSM 实况参数钩子（速度倾斜/行走律动/空中标志）。
+
+        frames 后端无逐帧变换需求 —— 基类 no-op 缺省即可被 _tick 无条件
+        调用而零成本旁路；RigWindow 重写以驱动场景。
+        """
+        return None

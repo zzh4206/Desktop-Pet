@@ -85,6 +85,8 @@ python app.py --verbose
 
 常用配置包括：
 
+- `provider`：立绘来源，`emoji`（表情占位）或 `ai`（AI 立绘，缺图自动回退表情）。
+- `presentation`：展示后端，`frames`（默认帧动画）或 `rig`（v0.13 分层绑骨：交叉淡化、呼吸律动与部件弹簧；需 `assets/rig/{stage}/` 资产，缺件自动回退 frames）。
 - `interaction_gain`：摸摸、喂食、洗澡和戳一戳的数值影响。
 - `behavior`：行走和跟随速度、游走间隔、边缘距离等桌面行为参数。
 - `proactive`：安静时段、久坐阈值、视频应用白名单及“吃鼠标”持续时间。

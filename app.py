@@ -128,9 +128,18 @@ class PetApp:
         wa = self.sensors.work_area
         self.fsm = BehaviorFSM(dict(wa), self.cfg.get("behavior", {}))
 
-        self.window = adapter.create_pet_window(  # 注入式，不直 import window_mac
-            self.provider.get_static(self.store.get())
-        )
+        # v0.13 展示后端选择：presentation=frames（默认，旧行为不变）| rig
+        # （分层绑骨：交叉淡化+常驻微动+部件弹簧；资产/环境不满足自动回退，
+        # 降级铁律收敛在 pet.rig.presenter.build_rig_window 一处）
+        sprite0 = self.provider.get_static(self.store.get())
+        if self.cfg.get("presentation", "frames") == "rig":
+            from pet.rig.presenter import build_rig_window
+
+            self.window = build_rig_window(
+                adapter.create_pet_window, sprite0,
+                self.store.get().stage.value)
+        else:
+            self.window = adapter.create_pet_window(sprite0)
         self.window.set_sprite_provider(self.provider)
         # v0.3.12 真实身位高喂 FSM（净空钻行判定；阶段进化变尺寸时更新）
         self.fsm.set_pet_height(self.window.height())
@@ -834,6 +843,16 @@ class PetApp:
             if abs(dx) > 0.4:
                 self.window.set_facing(1 if dx > 0 else -1)
         self._last_facing_x = self.fsm.pos[0]
+        # v0.13 rig 呈现层运动参数：速度倾斜/行走律动/空中标志（frames 后端
+        # 的基类 no-op 缺省让该调用在旧模式下零成本旁路）
+        if getattr(self.window, "rig_active", False):
+            vx, _vy = self.fsm.velocity
+            tilt = max(-9.0, min(9.0, vx / 140.0))
+            walking = (mode == "walk"
+                       or (mode == "idle" and self.fsm.motion_mode == "follow"))
+            self.window.set_motion_params(
+                tilt_deg=tilt, walking=walking,
+                airborne=mode in ("fall", "thrown", "drag"))
 
     # ---- v0.3 动画 ----
     # H1 修（REVIEW-2026-08-25）：随机小动作 key 集——_frame_tick 的兜底停
@@ -872,7 +891,8 @@ class PetApp:
     def _play_key(self, key: str, frames: list, loop: bool = False,
                   interval: int = 150) -> None:
         """播放并记录当前 key（同 key 重入不重启计时器）。"""
-        if getattr(self, "_anim_key", None) == key and self.window._frames:
+        # v0.13：私有 _frames 直读收口为 is_playing()（两套呈现后端同语义）
+        if getattr(self, "_anim_key", None) == key and self.window.is_playing():
             return
         self._anim_key = key
         for f in frames:
