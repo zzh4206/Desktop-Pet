@@ -1,6 +1,7 @@
 {
   "figures": {
-    "neglected_neutral": "figs\\neglected_neutral.png"
+    "neglected_neutral": "figs\\neglected_neutral.png",
+    "healthy_neutral": "figs/healthy_neutral.png"
   },
   "parts": [
     {
@@ -22,6 +23,27 @@
         "amp_deg": 4.0,
         "period_ms": 2600.0,
         "phase_ms": 0.0
+      }
+    },
+    {
+      "id": "tail_healthy_neutral",
+      "file": "parts/tail_healthy_neutral.png",
+      "source_figure": "healthy_neutral",
+      "px_rect": [
+        717,
+        595,
+        1024,
+        1046
+      ],
+      "pivot": [
+        709,
+        1239
+      ],
+      "z": "under_core",
+      "sway": {
+        "amp_deg": 4,
+        "period_ms": 2600,
+        "phase_ms": 1300
       }
     }
   ],
