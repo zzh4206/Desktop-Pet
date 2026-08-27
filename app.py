@@ -130,14 +130,17 @@ class PetApp:
 
         # v0.13 展示后端选择：presentation=frames（默认，旧行为不变）| rig
         # （分层绑骨：交叉淡化+常驻微动+部件弹簧；资产/环境不满足自动回退，
-        # 降级铁律收敛在 pet.rig.presenter.build_rig_window 一处）
+        # 降级铁律收敛在 pet.rig.presenter.build_rig_window 一处）。
+        # v0.13.3：defer_quick=True —— rig 引擎延至事件循环首拍，保证
+        # _setup_chat 的 QML singleton 注册先于全进程首个 QML 引擎
+        # （app.py:349 同源约束，否则聊天面板载入失败）。
         sprite0 = self.provider.get_static(self.store.get())
         if self.cfg.get("presentation", "frames") == "rig":
             from pet.rig.presenter import build_rig_window
 
             self.window = build_rig_window(
                 adapter.create_pet_window, sprite0,
-                self.store.get().stage.value)
+                self.store.get().stage.value, defer_quick=True)
         else:
             self.window = adapter.create_pet_window(sprite0)
         self.window.set_sprite_provider(self.provider)

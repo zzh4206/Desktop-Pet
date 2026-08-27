@@ -227,6 +227,23 @@ def main() -> int:
     check("T9b 回到图片：场景回归",
           win._quick.isVisibleTo(win) and not win._label.isVisibleTo(win))
 
+    # ---- T10 defer_quick（v0.13.3 引擎次序修）----
+    win_d = build_rig_window(WindowBase, base_sprite, "final",
+                             rig_root=os.path.join(REPO, "assets", "rig"),
+                             defer_quick=True)
+    check("T10a 构造期 pending（引擎未建）",
+          isinstance(win_d, RigWindow)
+          and win_d._rig_pending and not win_d.rig_active)
+    QTest_wait.qWait(80)       # 事件循环转首拍 → singleShot(0) 执行 _init_quick
+    check("T10b 首拍后场景就绪",
+          win_d.rig_active and not win_d._rig_pending)
+    if win_d.rig_active:
+        win_d.set_sprite(base_sprite)
+        check("T10c 延迟模式下直显翻译照常",
+              _usProp(win_d, "figASrc").endswith("figs/neglected_neutral.png"))
+        win_d.stop_frames()
+        win_d._frame_timer.stop()
+
     # 收尾清理定时器，防 Qt teardown 抖（对齐 v04 教训）
     win.stop_frames()
     win._frame_timer.stop()

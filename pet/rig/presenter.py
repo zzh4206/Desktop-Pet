@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import os
 
-from PySide6.QtCore import QPropertyAnimation, QUrl
+from PySide6.QtCore import QPropertyAnimation, QTimer, QUrl
 from PySide6.QtGui import QFont, QImage
 
 from ..asset_provider import SpriteRef
@@ -61,11 +61,19 @@ def default_rig_root() -> str:
 
 
 def build_rig_window(base_cls, sprite: SpriteRef, stage: str,
-                     rig_root: str = "") -> WindowBase:
+                     rig_root: str = "",
+                     defer_quick: bool = False) -> WindowBase:
     """装配入口：任一环节不满足即返回 ``base_cls(sprite)``（旧行为原样）。
 
     三类降级点（Qt Quick 导入失败 / manifest 缺失 / 场景加载失败）全部收敛
     在此处一次判定，app 装配侧只看返回值。
+
+    ``defer_quick=True``（app 实装用）：QQuickWidget/引擎延到事件循环首拍
+    再建 —— v0.13.3 修：QQuickWidget 构造即建全进程**首个 QML 引擎**，而
+    mem/perm/chat 三个 QML singleton 按 PySide6 6.10 约束必须在首个引擎前
+    注册（app.py:349 注释），否则聊天面板 "Cannot assign..." 载入失败。
+    延迟后聊天引擎（_setup_chat 同步建）保持首位，rig 引擎退居其次。
+    此路径下rig_active 在构造期尚为 False，以 ``_rig_pending`` 表示待就绪。
     """
     try:
         from PySide6.QtQuickWidgets import QQuickWidget  # noqa: F401
@@ -80,9 +88,9 @@ def build_rig_window(base_cls, sprite: SpriteRef, stage: str,
         log.info("无 %s 阶段 rig 清单，回退帧动画", stage)
         return base_cls(sprite)
 
-    win = RigWindow(sprite, spec)
-    if not win.rig_active:                # 场景加载失败 → 换干净基类实例
-        win.deleteLater()
+    win = RigWindow(sprite, spec, defer_quick=defer_quick)
+    if not (win.rig_active or getattr(win, "_rig_pending", False)):
+        win.deleteLater()                 # 场景加载失败 → 换干净基类实例
         return base_cls(sprite)
     log.info("rig 后端就绪：%d figures / %d parts",
              len(spec.figures), len(spec.parts))
@@ -96,8 +104,10 @@ class RigWindow(WindowBase):
     _quick_ok = False
     _quick = None
     _root = None
+    _rig_pending = False
 
-    def __init__(self, sprite: SpriteRef, spec: RigSpec | None = None):
+    def __init__(self, sprite: SpriteRef, spec: RigSpec | None = None,
+                 defer_quick: bool = False):
         super().__init__(sprite)
         self._spec = spec
         self._quick_ok = False
@@ -108,7 +118,14 @@ class RigWindow(WindowBase):
         self._src_size_cache: dict[str, tuple[int, int]] = {}
         self._air_prev = False            # 空中标志边沿检测（落地压扁）
         if spec is not None:
-            self._init_quick()
+            if defer_quick:
+                # 引擎延至事件循环首拍（见 build_rig_window docstring：
+                # singleton 注册须先于首个 QML 引擎）。失败时 _init_quick
+                # 自行降级为基类行为，无需换实例。
+                self._rig_pending = True
+                QTimer.singleShot(0, self._init_quick)
+            else:
+                self._init_quick()
 
     # ---------------- 场景初始化 ----------------
     def _init_quick(self) -> None:
@@ -154,6 +171,7 @@ class RigWindow(WindowBase):
             self._root = w.rootObject()
             self._label.hide()            # 场景接管后位图 label 不再参与
             self._quick_ok = True
+            self._rig_pending = False
             self._mix_anim = QPropertyAnimation(self._root, b"mix", self)
             self._root.setProperty("partsModel", parts)
             self._set_prop("facing", int(getattr(self, "_facing", 1)))
@@ -163,6 +181,7 @@ class RigWindow(WindowBase):
             log.warning("Qt Quick 初始化失败，rig 回退 QLabel 路径：%s",
                         e, exc_info=True)
             self._quick_ok = False
+            self._rig_pending = False     # 已裁定（降级），不再是"待就绪"
 
     @property
     def rig_active(self) -> bool:
