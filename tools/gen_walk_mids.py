@@ -97,10 +97,100 @@ def align_to(ref: Image.Image, new: Image.Image) -> Image.Image:
     return canvas
 
 
+def align_pair(ref_a: Image.Image, ref_b: Image.Image,
+               new: Image.Image) -> Image.Image:
+    """细分帧对齐：目标高度=两参考 bbox 高均值（钳幅±15%），底对齐，
+    水平居中=两参考中心均值。"""
+    canvas = Image.new("RGBA", ref_a.size, (0, 0, 0, 0))
+    ab, bb, nb = ref_a.getbbox(), ref_b.getbbox(), new.getbbox()
+    if not nb:
+        raise SystemExit("生成件全透明")
+    h_target = ((ab[3] - ab[1]) + (bb[3] - bb[1])) / 2
+    s = h_target / (nb[3] - nb[1])
+    if not (0.85 <= s <= 1.18):
+        print(f"  ⚠️ 高度比 {s:.3f} 超钳幅，取边界值")
+        s = max(0.85, min(1.18, s))
+    nw, nh2 = int(new.width * s), int(new.height * s)
+    new = new.resize((nw, nh2), Image.LANCZOS)
+    nb = new.getbbox()
+    cx = ((ab[0] + ab[2]) // 2 + (bb[0] + bb[2]) // 2) // 2
+    dx = cx - (nb[0] + nb[2]) // 2
+    dy = min(ab[3], bb[3]) - nb[3]
+    canvas.alpha_composite(new, (dx, dy))
+    return canvas
+
+
+PROMPT_MID_EXTRA = (
+    " Every limb's angle in the new frame must be exactly midway between its "
+    "angles in IMAGE 1 and IMAGE 2, so the motion reads as even rotation. "
+    "The character has exactly one pair of arms and one pair of legs — no "
+    "extra, duplicated or ghosted limbs."
+)
+
+# v0.13.7 八帧细分：新帧 = 相邻两已验收帧的中点
+SUBDIVIDE_PAIRS = [
+    ("walk_m1", "walk_0", "walk_0b"),
+    ("walk_m2", "walk_0b", "walk_1"),
+    ("walk_m3", "walk_1", "walk_1b"),
+    ("walk_m4", "walk_1b", "walk_0"),
+]
+
+
+def subdivide() -> int:
+    global PROMPT
+    base_prompt = PROMPT
+    only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+    for out_name, ra_name, rb_name in SUBDIVIDE_PAIRS:
+        if only and out_name != only:
+            continue
+        out_path = os.path.join(FR, f"final_{out_name}.png")
+        if os.path.isfile(out_path) and "--force" not in sys.argv \
+                and not only:
+            print(f"{out_name} 已存在，跳过（--force 重生成）")
+            continue
+        ra = os.path.join(FR, f"final_{ra_name}.png")
+        rb = os.path.join(FR, f"final_{rb_name}.png")
+        PROMPT = base_prompt + PROMPT_MID_EXTRA
+        for attempt in (1, 2, 3):
+            print(f"细分生成 {out_name}（{ra_name} ↔ {rb_name}）第 {attempt} 次...")
+            img = gen_two_refs(ra, rb)
+            a = img.getchannel("A")
+            transparent = sum(1 for v in a.getdata() if v == 0) / (img.width * img.height)
+            # 背景必须真透明；低于 15% 视为把"棋盘格/底色"画成实体（m1 事故）
+            if transparent >= 0.15:
+                break
+            print(f"  ⚠️ 透明占比仅 {transparent * 100:.1f}%（背景被画成实体），重试")
+        else:
+            raise SystemExit(f"{out_name} 连续 3 次背景不透明，请人工处理")
+        img.save(os.path.join(QA, f"_final_{out_name}_raw.png"))
+        aligned = align_pair(Image.open(ra).convert("RGBA"),
+                             Image.open(rb).convert("RGBA"), img)
+        aligned.save(out_path)
+    # QA 条带：八帧全环两遍收口
+    TH = 380
+    def th(im):
+        t = im.copy(); t.thumbnail((10000, TH)); return t
+    seq = ["walk_0", "walk_m1", "walk_0b", "walk_m2",
+           "walk_1", "walk_m3", "walk_1b", "walk_m4", "walk_0"]
+    row = [th(Image.open(os.path.join(FR, f"final_{n}.png")).convert("RGBA"))
+           for n in seq]
+    strip = Image.new("RGB", (sum(p.width for p in row) + 8 * len(row),
+                              TH), (30, 30, 36, 255))
+    x = 0
+    for p in row:
+        strip.paste(p, (x, 0), p)
+        x += p.width + 8
+    strip.save(os.path.join(QA, "walk_cycle_8f.png"))
+    print("QA 条带 walk_cycle_8f.png（八帧全环+w0 收口）")
+    return 0
+
+
 def main() -> int:
     if not KEY:
         raise SystemExit("缺少 QUANZIL_API_KEY")
     os.makedirs(QA, exist_ok=True)
+    if "--subdivide" in sys.argv:
+        return subdivide()
     strips = []
     for branch in ("neglected", "healthy"):
         stage = "final"

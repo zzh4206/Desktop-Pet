@@ -230,10 +230,13 @@ class AIArtProvider:
         return self._fallback.get_static(state, skin)
 
     # 动作 → 帧名模板（assets/frames/{stage}_{action}.png）与帧间隔
-    # v0.13.5：walk 支持可选中间步姿（walk_0b=0→1 过渡, walk_1b=1→0 过渡）；
-    # frames_for 对缺文件自动跳过 ⇒ 未产 _b 帧的阶段自动维持 2 帧行为。
+    # v0.13.5/0.13.7：walk 支持可选中间步姿渐进增强——
+    #   4 帧: walk_0b(0→1), walk_1b(1→0)
+    #   8 帧: 另有 walk_m1(0→0b), walk_m2(0b→1), walk_m3(1→1b), walk_m4(1b→0)
+    # frames_for 对缺文件自动跳过 ⇒ 有几张入几张，未产帧阶段自动 2 帧。
     _FRAME_SPECS: dict = {
-        "walk":   (("walk_0", "walk_0b", "walk_1", "walk_1b"), 200),
+        "walk":   (("walk_0", "walk_m1", "walk_0b", "walk_m2",
+                    "walk_1", "walk_m3", "walk_1b", "walk_m4"), 200),
         "stretch": (("stretch_0", "stretch_1", "stretch_2"), 260),
         "roll":   (("roll",), 260),
         "blink":  (("idle_blink_0", "idle_blink_1"), 300),
@@ -318,16 +321,17 @@ class AIArtProvider:
                           anchor=f.anchor) for f in cached]
 
     def frame_interval(self, action_name: str, stage: str | None = None) -> int:
-        """帧间隔。v0.13.5：walk 按实际可用帧数分配步态周期——
-        2 帧=200ms/帧（旧行为）；v0.13.6：4 帧中间步姿后放慢到 140ms/帧
-        （560ms 周期，100ms 频闪观感差且残影显著，用户实测）。其余动作/
-        spec 默认不变。stage=None 时退回 spec 值（旧调用兼容）。"""
+        """帧间隔。v0.13.5/0.13.7：walk 按实际帧数分配步态周期——
+        2 帧=200ms（旧行为）；4 帧=140ms（560ms）；8 帧=90ms（720ms，
+        单槽硬切下无残影，离散感由帧距减半消除）。
+        stage=None 时退回 spec 值（旧调用兼容）。"""
         base = int(self._FRAME_SPECS.get(action_name, ("x", 150))[1])
         if action_name == "walk" and stage is not None:
             cached = self._frames_cache.get((stage, "walk"))
             n = len(cached) if cached else 0
-            if n >= 4:
-                return 140
+            table = {2: 200, 4: 140, 8: 90}
+            if n in table:
+                return table[n]
             if n:
-                return max(80, 400 // n)
+                return max(85, 720 // n)
         return base

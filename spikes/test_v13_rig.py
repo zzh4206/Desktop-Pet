@@ -162,10 +162,15 @@ def main() -> int:
                                   branch=Branch.NEGLECTED,
                                   mood=80, fullness=80)
     walk = provider.frames_for("final", "walk")
-    check("T5a 前置：walk 帧存在（2 或含中间步姿 4）",
-          len(walk) in (2, 4))
-    if len(walk) == 4:
-        check("T5a-2 步态环顺序 0→0b→1→1b",
+    check("T5a 前置：walk 帧存在（2/4/8）", len(walk) in (2, 4, 8))
+    if len(walk) == 8:
+        check("T5a-2 八帧步态环顺序",
+              [os.path.basename(f.path) for f in walk] ==
+              ["final_walk_0.png", "final_walk_m1.png", "final_walk_0b.png",
+               "final_walk_m2.png", "final_walk_1.png", "final_walk_m3.png",
+               "final_walk_1b.png", "final_walk_m4.png"])
+    elif len(walk) == 4:
+        check("T5a-2 四帧步态环顺序 0→0b→1→1b",
               [os.path.basename(f.path) for f in walk] ==
               ["final_walk_0.png", "final_walk_0b.png",
                "final_walk_1.png", "final_walk_1b.png"])
@@ -180,11 +185,11 @@ def main() -> int:
     check("T5b-4 walk 硬切策略（fade=0）", win._fade_ms == 0)
     QTest_wait = getattr(__import__("PySide6.QtTest", fromlist=["QTest"]),
                          "QTest")
-    QTest_wait.qWait(240)      # 越过首个 200ms 间隔（硬切即换帧）
+    QTest_wait.qWait(240)      # 硬切下无论推进几帧，前景必已离开 walk_0
     mix_mid = float(win._root.property("mix"))
-    front = _usProp(win, "figASrc") + "|" + _usProp(win, "figBSrc")
-    check("T5c 第一跳：硬切已切到第二帧（0b）或淡化中",
-          "walk_0b" in front or 0.05 < mix_mid < 0.99)
+    a_src = _usProp(win, "figASrc")
+    check("T5c 第一跳：前景已推进（离开 walk_0）",
+          not a_src.endswith("final_walk_0.png"))
     # T5c-2（v0.13.6）：硬切必须单槽直换——B 槽空、mix=0，两帧不得叠放
     # （叠放=旧帧从新帧透明区透出=多手多脚残影）
     check("T5c-2 硬切单槽（无叠放残影条件）",
