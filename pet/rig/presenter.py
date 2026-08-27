@@ -224,7 +224,14 @@ class RigWindow(WindowBase):
 
     def play_frames(self, frames: list, loop: bool = False,
                     interval_ms: int = 150) -> None:
-        """交叉淡化序列播放；簿记语义与基类一致（L4 恢复目标规则）。"""
+        """序列播放；簿记语义与基类一致（L4 恢复目标规则）。
+
+        v0.13.5 混合播放策略：**大位移动作（walk/chew/eat_mouse）硬切**，
+        其余（表情/眨眼/小动作/落地帧）交叉淡化。依据：步姿两帧间腿部
+        位移大，淡化=A 淡出+B 淡入=双影糊（用户实测"看不出迈步"）；
+        经典 2/4 帧小跑的正确播法是快速硬切。表情类变化连续、淡化才丝滑。
+        判定按首帧行为文件名前缀，零配置数据。
+        """
         if not frames or not self.rig_active:
             super().play_frames(frames, loop, interval_ms)
             return
@@ -233,8 +240,13 @@ class RigWindow(WindowBase):
         self._frames = list(frames)
         self._frame_idx = 0
         self._frame_loop = bool(loop)
-        # 过渡时长 = 帧间隔的 ~45%，钳在 70–150ms（间隔过短也保底可读）
-        self._fade_ms = int(min(max(interval_ms * 0.45, 70), 150))
+        first = os.path.basename(self._frames[0].path)
+        # 文件名形如 {stage}_walk_0.png —— 阶段前缀在前，须用子串判定
+        if any(seg in first for seg in ("_walk_", "_chew_", "_eat_mouse_")):
+            self._fade_ms = 0          # 硬切
+        else:
+            # 过渡时长 = 帧间隔的 ~45%，钳在 70–150ms（间隔过短也保底可读）
+            self._fade_ms = int(min(max(interval_ms * 0.45, 70), 150))
         self._show_now(self._frames[0].path)
         if len(self._frames) > 1:
             self._frame_timer.setInterval(interval_ms)

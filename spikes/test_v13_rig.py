@@ -162,21 +162,29 @@ def main() -> int:
                                   branch=Branch.NEGLECTED,
                                   mood=80, fullness=80)
     walk = provider.frames_for("final", "walk")
-    check("T5a 前置：walk 两帧存在", len(walk) == 2)
+    check("T5a 前置：walk 帧存在（2 或含中间步姿 4）",
+          len(walk) in (2, 4))
+    if len(walk) == 4:
+        check("T5a-2 步态环顺序 0→0b→1→1b",
+              [os.path.basename(f.path) for f in walk] ==
+              ["final_walk_0.png", "final_walk_0b.png",
+               "final_walk_1.png", "final_walk_1b.png"])
     win.stop_frames()
     win.set_sprite(base_sprite)
     win.play_frames(walk, loop=True, interval_ms=200)
-    check("T5b-1 簿记一致", len(win._frames) == 2 and win.is_playing())
+    check("T5b-1 簿记一致", len(win._frames) == len(walk)
+          and win.is_playing())
     check("T5b-2 首帧直显 walk_0",
           _usProp(win, "figASrc").endswith("final_walk_0.png"))
     check("T5b-3 计时器已启动", win._frame_timer.isActive())
+    check("T5b-4 walk 硬切策略（fade=0）", win._fade_ms == 0)
     QTest_wait = getattr(__import__("PySide6.QtTest", fromlist=["QTest"]),
                          "QTest")
-    QTest_wait.qWait(240)      # 越过首个 200ms 间隔（fade≈90ms 启动）
+    QTest_wait.qWait(240)      # 越过首个 200ms 间隔（硬切即换帧）
     mix_mid = float(win._root.property("mix"))
-    check("T5c 第一跳：淡化中(mix∈(0.05,0.99)) 或已完成换帧(walk_1 入 B 槽)",
-          0.05 < mix_mid < 0.99
-          or _usProp(win, "figBSrc").endswith("final_walk_1.png"))
+    front = _usProp(win, "figASrc") + "|" + _usProp(win, "figBSrc")
+    check("T5c 第一跳：硬切已切到第二帧（0b）或淡化中",
+          "walk_0b" in front or 0.05 < mix_mid < 0.99)
     win.play_frames(provider.frames_for("final", "chew"), loop=False,
                     interval_ms=120)
     check("T5d 序列切换重置簿记（idx=0/键不变由 app 管）",

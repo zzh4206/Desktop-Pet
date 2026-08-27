@@ -230,8 +230,10 @@ class AIArtProvider:
         return self._fallback.get_static(state, skin)
 
     # 动作 → 帧名模板（assets/frames/{stage}_{action}.png）与帧间隔
+    # v0.13.5：walk 支持可选中间步姿（walk_0b=0→1 过渡, walk_1b=1→0 过渡）；
+    # frames_for 对缺文件自动跳过 ⇒ 未产 _b 帧的阶段自动维持 2 帧行为。
     _FRAME_SPECS: dict = {
-        "walk":   (("walk_0", "walk_1"), 200),
+        "walk":   (("walk_0", "walk_0b", "walk_1", "walk_1b"), 200),
         "stretch": (("stretch_0", "stretch_1", "stretch_2"), 260),
         "roll":   (("roll",), 260),
         "blink":  (("idle_blink_0", "idle_blink_1"), 300),
@@ -315,5 +317,14 @@ class AIArtProvider:
         return [SpriteRef(path=f.path, width=f.width, height=f.height,
                           anchor=f.anchor) for f in cached]
 
-    def frame_interval(self, action_name: str) -> int:
-        return int(self._FRAME_SPECS.get(action_name, ("x", 150))[1])
+    def frame_interval(self, action_name: str, stage: str | None = None) -> int:
+        """帧间隔。v0.13.5：walk 按实际可用帧数均分 400ms 步态周期
+        （2 帧=200ms 维持旧行为；4 帧中间步姿落地后=100ms/帧更连续）；
+        其余动作/spec 默认不变。stage=None 时退回 spec 值（旧调用兼容）。"""
+        base = int(self._FRAME_SPECS.get(action_name, ("x", 150))[1])
+        if action_name == "walk" and stage is not None:
+            cached = self._frames_cache.get((stage, "walk"))
+            n = len(cached) if cached else 0
+            if n:
+                return max(80, 400 // n)
+        return base

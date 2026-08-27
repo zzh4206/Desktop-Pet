@@ -941,7 +941,7 @@ class PetApp:
             walk = provider.frames_for(stage, "walk")
             if walk:
                 self._play_key("walk", walk, loop=True,
-                               interval=provider.frame_interval("walk"))
+                               interval=provider.frame_interval("walk", stage))
             return
         # H1 修：兜底停豁免小动作（stretch/blink/roll 由 _play_animate 的
         # 到期 singleShot 终止）——旧版这里把刚启动的小动作同 tick 停掉
