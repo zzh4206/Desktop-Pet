@@ -185,6 +185,10 @@ def main() -> int:
     front = _usProp(win, "figASrc") + "|" + _usProp(win, "figBSrc")
     check("T5c 第一跳：硬切已切到第二帧（0b）或淡化中",
           "walk_0b" in front or 0.05 < mix_mid < 0.99)
+    # T5c-2（v0.13.6）：硬切必须单槽直换——B 槽空、mix=0，两帧不得叠放
+    # （叠放=旧帧从新帧透明区透出=多手多脚残影）
+    check("T5c-2 硬切单槽（无叠放残影条件）",
+          _usProp(win, "figBSrc") == "" and mix_mid == 0.0)
     win.play_frames(provider.frames_for("final", "chew"), loop=False,
                     interval_ms=120)
     check("T5d 序列切换重置簿记（idx=0/键不变由 app 管）",

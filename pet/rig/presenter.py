@@ -353,8 +353,25 @@ class RigWindow(WindowBase):
         self._set_prop("activeFigure", key or "")
 
     def _transition_to(self, path: str, fade_ms: int) -> None:
-        """交叉淡出到下一图源：目标恒写 B 槽，mix 0→1（见模块 docstring）。"""
+        """切到下一图源。
+
+        fade_ms>0：交叉淡出到 B 槽（mix 0→1，见模块 docstring）。
+        fade_ms<=0（v0.13.6 硬切）：**直接换前景槽**，B 槽保持清空——
+        绝不让两帧叠放：双槽叠放下旧帧恒不透明，会从新帧的透明区域
+        （迈步扫开的腿档）透出来 = "多手多脚"残影。
+        """
         if not self.rig_active:
+            return
+        if fade_ms <= 0:
+            self._canonicalize()
+            w, h = self._src_size(path)
+            self._root.setSourceSize(w, h)
+            self._root.setProperty("figASrc", _file_url(path))
+            self._root.setProperty("figBSrc", "")
+            self._root.setProperty("mix", 0.0)
+            key = figure_key_from_path(path)
+            if key:
+                self._set_prop("activeFigure", key)
             return
         self._canonicalize()
         disp = self._resolve_display(path)

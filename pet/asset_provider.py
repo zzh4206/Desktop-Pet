@@ -318,13 +318,16 @@ class AIArtProvider:
                           anchor=f.anchor) for f in cached]
 
     def frame_interval(self, action_name: str, stage: str | None = None) -> int:
-        """帧间隔。v0.13.5：walk 按实际可用帧数均分 400ms 步态周期
-        （2 帧=200ms 维持旧行为；4 帧中间步姿落地后=100ms/帧更连续）；
-        其余动作/spec 默认不变。stage=None 时退回 spec 值（旧调用兼容）。"""
+        """帧间隔。v0.13.5：walk 按实际可用帧数分配步态周期——
+        2 帧=200ms/帧（旧行为）；v0.13.6：4 帧中间步姿后放慢到 140ms/帧
+        （560ms 周期，100ms 频闪观感差且残影显著，用户实测）。其余动作/
+        spec 默认不变。stage=None 时退回 spec 值（旧调用兼容）。"""
         base = int(self._FRAME_SPECS.get(action_name, ("x", 150))[1])
         if action_name == "walk" and stage is not None:
             cached = self._frames_cache.get((stage, "walk"))
             n = len(cached) if cached else 0
+            if n >= 4:
+                return 140
             if n:
                 return max(80, 400 // n)
         return base
