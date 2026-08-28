@@ -1,0 +1,97 @@
+{
+  "figures": {
+    "healthy_neutral": "figs\\healthy_neutral.png",
+    "neglected_neutral": "figs\\neglected_neutral.png"
+  },
+  "parts": [
+    {
+      "id": "leg_r_neglected_neutral",
+      "file": "parts\\leg_r_neglected_neutral.png",
+      "source_figure": "neglected_neutral",
+      "px_rect": [
+        511,
+        1148,
+        622,
+        1532
+      ],
+      "pivot": [
+        570.0,
+        1150.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 1300.0
+      }
+    },
+    {
+      "id": "leg_l_neglected_neutral",
+      "file": "parts\\leg_l_neglected_neutral.png",
+      "source_figure": "neglected_neutral",
+      "px_rect": [
+        405,
+        1148,
+        511,
+        1531
+      ],
+      "pivot": [
+        460.0,
+        1150.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 0.0
+      }
+    },
+    {
+      "id": "leg_r_healthy_neutral",
+      "file": "parts\\leg_r_healthy_neutral.png",
+      "source_figure": "healthy_neutral",
+      "px_rect": [
+        514,
+        1131,
+        610,
+        1534
+      ],
+      "pivot": [
+        556.0,
+        1133.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 1300.0
+      }
+    },
+    {
+      "id": "leg_l_healthy_neutral",
+      "file": "parts\\leg_l_healthy_neutral.png",
+      "source_figure": "healthy_neutral",
+      "px_rect": [
+        416,
+        1131,
+        512,
+        1534
+      ],
+      "pivot": [
+        467.0,
+        1131.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 0.0
+      }
+    }
+  ],
+  "spec": 1
+}
