@@ -364,10 +364,17 @@ class WindowBase(QWidget):
         return bool(getattr(self, "_frames", None))
 
     def set_motion_params(self, tilt_deg: float = 0.0, walking: bool = False,
-                          airborne: bool = False) -> None:
-        """FSM 实况参数钩子（速度倾斜/行走律动/空中标志）。
+                          airborne: bool = False, walk_hz: float = 0.0) -> None:
+        """FSM 实况参数钩子（速度倾斜/行走律动/空中标志/步频）。
 
         frames 后端无逐帧变换需求 —— 基类 no-op 缺省即可被 _tick 无条件
         调用而零成本旁路；RigWindow 重写以驱动场景。
         """
         return None
+
+    def part_walk_active(self) -> bool:
+        """当前展示 figure 是否可部件驱动步态（v0.14 paperdoll 路由查询）。
+
+        frames 后端恒 False —— app 路由据此回退帧动画，无需判后端类型。
+        """
+        return False

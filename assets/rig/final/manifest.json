@@ -1,7 +1,7 @@
 {
   "figures": {
     "neglected_neutral": "figs\\neglected_neutral.png",
-    "healthy_neutral": "figs/healthy_neutral.png"
+    "healthy_neutral": "figs\\healthy_neutral.png"
   },
   "parts": [
     {
@@ -23,7 +23,8 @@
         "amp_deg": 4.0,
         "period_ms": 2600.0,
         "phase_ms": 0.0
-      }
+      },
+      "kind": "sway"
     },
     {
       "id": "tail_healthy_neutral",
@@ -44,6 +45,51 @@
         "amp_deg": 4,
         "period_ms": 2600,
         "phase_ms": 1300
+      },
+      "kind": "sway"
+    },
+    {
+      "id": "leg_r_healthy_neutral",
+      "file": "parts\\leg_r_healthy_neutral.png",
+      "source_figure": "healthy_neutral",
+      "px_rect": [
+        505,
+        1282,
+        576,
+        1520
+      ],
+      "pivot": [
+        541.0,
+        1284.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 1300.0
+      }
+    },
+    {
+      "id": "leg_l_healthy_neutral",
+      "file": "parts\\leg_l_healthy_neutral.png",
+      "source_figure": "healthy_neutral",
+      "px_rect": [
+        437,
+        1282,
+        505,
+        1521
+      ],
+      "pivot": [
+        466.0,
+        1284.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 0.0
       }
     }
   ],

@@ -60,6 +60,7 @@ _MANIFEST_SCHEMA: dict = {
                         "maxItems": 2,
                     },
                     "z": {"enum": ["under_core", "over_core"]},
+                    "kind": {"enum": ["sway", "limb"]},
                     "sway": {
                         "type": "object",
                         "properties": {
@@ -85,7 +86,11 @@ _MANIFEST_SCHEMA: dict = {
 
 @dataclass
 class RigPart:
-    """一个可动部件（v0.13 只有鲸尾一项数据集，引擎按清单通用）。"""
+    """一个可动部件（v0.13 鲸尾 sway；v0.14 增 limb=行走驱动肢体）。
+
+    kind 仅是驱动器语义标签：limb 在无 limb 驱动的旧引擎上按 sway 解释
+    （amp/period/phase 字段同形），资产向后兼容。
+    """
 
     id: str
     path: str                 # 部件 PNG 绝对路径
@@ -93,6 +98,7 @@ class RigPart:
     px_rect: tuple            # 源图包围盒 (x0, y0, x1, y1)
     pivot: tuple              # 源图坐标旋转轴
     z: str                    # under_core / over_core
+    kind: str = "sway"        # sway=常驻正弦摆 / limb=行走驱动（v0.14）
     amp_deg: float = 0.0
     period_ms: float = 2600.0
     phase_ms: float = 0.0
@@ -156,6 +162,7 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
             px_rect=tuple(float(v) for v in item["px_rect"]),
             pivot=tuple(float(v) for v in item["pivot"]),
             z=item["z"],
+            kind=item.get("kind", "sway"),
             amp_deg=float(sway.get("amp_deg", 0.0)),
             period_ms=float(sway.get("period_ms", 2600.0)),
             phase_ms=float(sway.get("phase_ms", 0.0)),

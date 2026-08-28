@@ -156,6 +156,7 @@ class RigWindow(WindowBase):
                     "px_rect": [float(v) for v in p.px_rect],
                     "pivot": [float(v) for v in p.pivot],
                     "z": p.z,
+                    "kind": p.kind,
                     "sway": {"amp_deg": float(p.amp_deg),
                              "period_ms": float(p.period_ms),
                              "phase_ms": float(p.phase_ms)},
@@ -288,16 +289,31 @@ class RigWindow(WindowBase):
 
     # ---------- v0.13 运动参数钩子（app._tick 每 tick 调用） ----------
     def set_motion_params(self, tilt_deg: float = 0.0, walking: bool = False,
-                          airborne: bool = False) -> None:
-        """喂 FSM 实况：倾斜目标角 / 行走律动开关 / 空中标志（落地沿→squash）。"""
+                          airborne: bool = False,
+                          walk_hz: float = 0.0) -> None:
+        """喂 FSM 实况：倾斜目标角 / 行走律动开关 / 空中标志（落地沿→squash）/
+        步态频率 Hz（v0.14，limb 部件与 bob/rot 共用；0=部件周期缺省）。"""
         if not self.rig_active:
             return
         self._set_prop("bodyTilt", float(tilt_deg))
         if bool(walking) != bool(self._root.property("walking")):
             self._set_prop("walking", bool(walking))
+        self._set_prop("walkHz", float(walk_hz))
         if (not airborne) and self._air_prev:
             self._root.squash()           # 空中→地面 边沿触发压扁回弹
         self._air_prev = bool(airborne)
+
+    def part_walk_active(self) -> bool:
+        """当前展示 figure 是否挂有 limb 部件（部件驱动步态可用，v0.14）。
+
+        动作帧播放期间 activeFigure 为帧名反推（多为 None）→ False，
+        天然与"帧序列展示期间部件隐藏"的既有机制一致。
+        """
+        if not (self.rig_active and self._spec is not None):
+            return False
+        key = self._root.property("activeFigure") or ""
+        return any(p.kind == "limb" and p.source_figure == key
+                   for p in self._spec.parts)
 
     # ---------------- 场景私有工具 ----------------
     def _set_prop(self, name: str, value) -> None:

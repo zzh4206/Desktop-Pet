@@ -131,11 +131,14 @@ class PetApp:
         # v0.13 展示后端选择：presentation=frames（默认，旧行为不变）| rig
         # （分层绑骨：交叉淡化+常驻微动+部件弹簧；资产/环境不满足自动回退，
         # 降级铁律收敛在 pet.rig.presenter.build_rig_window 一处）。
+        # v0.14 paperdoll：第三档——在 rig 之上把行走改为部件驱动优先
+        # （figure 挂 limb 部件时程序化正面步态，无 limb 自动回退帧路径）。
         # v0.13.3：defer_quick=True —— rig 引擎延至事件循环首拍，保证
         # _setup_chat 的 QML singleton 注册先于全进程首个 QML 引擎
         # （app.py:349 同源约束，否则聊天面板载入失败）。
         sprite0 = self.provider.get_static(self.store.get())
-        if self.cfg.get("presentation", "frames") == "rig":
+        presentation = self.cfg.get("presentation", "frames")
+        if presentation in ("rig", "paperdoll"):
             from pet.rig.presenter import build_rig_window
 
             self.window = build_rig_window(
@@ -143,6 +146,7 @@ class PetApp:
                 self.store.get().stage.value, defer_quick=True)
         else:
             self.window = adapter.create_pet_window(sprite0)
+        self._part_walk = presentation == "paperdoll"
         self.window.set_sprite_provider(self.provider)
         # v0.3.12 真实身位高喂 FSM（净空钻行判定；阶段进化变尺寸时更新）
         self.fsm.set_pet_height(self.window.height())
@@ -846,15 +850,17 @@ class PetApp:
             if abs(dx) > 0.4:
                 self.window.set_facing(1 if dx > 0 else -1)
         self._last_facing_x = self.fsm.pos[0]
-        # v0.13 rig 呈现层运动参数：速度倾斜/行走律动/空中标志（frames 后端
-        # 的基类 no-op 缺省让该调用在旧模式下零成本旁路）
+        # v0.13 rig 呈现层运动参数：速度倾斜/行走律动/空中标志/步频（frames
+        # 后端的基类 no-op 缺省让该调用在旧模式下零成本旁路）
         if getattr(self.window, "rig_active", False):
             vx, _vy = self.fsm.velocity
             tilt = max(-9.0, min(9.0, vx / 140.0))
             walking = (mode == "walk"
                        or (mode == "idle" and self.fsm.motion_mode == "follow"))
+            # v0.14 步频随速度：walk_speed 120px/s≈1.2Hz、follow 600≈2Hz 上限
+            hz = max(0.9, min(2.0, 0.9 + abs(vx) / 400.0))
             self.window.set_motion_params(
-                tilt_deg=tilt, walking=walking,
+                tilt_deg=tilt, walking=walking, walk_hz=hz,
                 airborne=mode in ("fall", "thrown", "drag"))
 
     # ---- v0.3 动画 ----
@@ -938,6 +944,14 @@ class PetApp:
         # getattr(self,"_follow") 读 PetApp 不存在的属性恒 False——死分支）
         if (mode == "walk"
                 or (mode == "idle" and self.fsm.motion_mode == "follow")):
+            # v0.14 部件驱动步态优先（paperdoll）：当前 figure 挂 limb 部件
+            # → 不播 walk 帧，正面原地步态由场景 limb 驱动器程序化合成；
+            # 无 limb figure（mood 姿态/未铺量阶段）走下方帧路径自动回退。
+            if getattr(self, "_part_walk", False) \
+                    and self.window.part_walk_active():
+                if self._anim_key == "walk":
+                    self._stop_anim()
+                return
             walk = provider.frames_for(stage, "walk")
             if walk:
                 self._play_key("walk", walk, loop=True,

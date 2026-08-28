@@ -124,6 +124,12 @@ def main() -> int:
     ap.add_argument("--amp-deg", type=float, default=4.0)
     ap.add_argument("--period-ms", type=float, default=2600.0)
     ap.add_argument("--phase-ms", type=float, default=0.0)
+    ap.add_argument("--kind", choices=["sway", "limb"], default="sway",
+                    help="sway=常驻正弦摆（尾/呆毛）；limb=行走驱动肢体（v0.14，"
+                         "引擎按 kind 分驱动，旧引擎视 limb 为 sway 兼容）")
+    ap.add_argument("--qa-swing", type=float, default=0.0, metavar="DEG",
+                    help=">0 时另出摆角条带 QA 图：部件绕 pivot 转 "
+                         "[-DEG,-DEG/2,0,DEG/2,DEG] 叠核心图合成（预检接缝/出界）")
     args = ap.parse_args()
 
     src_rel = f"assets/ai/{args.stage}_{args.branch}_{args.mood}.png"
@@ -155,21 +161,29 @@ def main() -> int:
     a = part.getchannel("A").filter(ImageFilter.GaussianBlur(0.7))
     part.putalpha(a)
 
-    core = im.copy()
-    cpx = core.load()
-    for (x, y) in cutting:
-        r, g, b, _a = cpx[x, y]
-        cpx[x, y] = (r, g, b, 0)
-
+    figure_key = f"{args.branch}_{args.mood}"
     out_dir = os.path.join(REPO, "assets", "rig", args.stage)
     parts_dir = os.path.join(out_dir, "parts")
     figs_dir = os.path.join(out_dir, "figs")
     os.makedirs(parts_dir, exist_ok=True)
     os.makedirs(figs_dir, exist_ok=True)
-
-    figure_key = f"{args.branch}_{args.mood}"
     part_path = os.path.join(parts_dir, f"{args.part}_{figure_key}.png")
     fig_path = os.path.join(figs_dir, f"{figure_key}.png")
+
+    core = im.copy()
+    # 多部件累计挖除：同 figure 已有派生核心图（先前切件产物）则在其上
+    # 继续挖，避免本件覆盖丢掉先前件的挖除（核心图残留烤死件=摆动双影）。
+    # 从头重切需先删 figs/{figure}.png。
+    if os.path.isfile(fig_path):
+        core = Image.open(fig_path).convert("RGBA")
+        if core.size != im.size:
+            raise SystemExit(f"已有核心图尺寸 {core.size} ≠ 源图 {im.size}，"
+                             f"请删除 {fig_path} 重切")
+    cpx = core.load()
+    for (x, y) in cutting:
+        r, g, b, _a = cpx[x, y]
+        cpx[x, y] = (r, g, b, 0)
+
     part.save(part_path)
     core.save(fig_path)
 
@@ -192,6 +206,7 @@ def main() -> int:
         "px_rect": [bx0, by0, bx1, by1],
         "pivot": list(args.pivot),
         "z": "under_core",
+        "kind": args.kind,
         "sway": {"amp_deg": args.amp_deg, "period_ms": args.period_ms,
                  "phase_ms": args.phase_ms},
     })
@@ -216,6 +231,31 @@ def main() -> int:
     qa_path = os.path.join(
         qa_dir, f"split_{args.stage}_{figure_key}_{args.part}.png")
     panel.save(qa_path)
+
+    # ---- QA 摆角条带（--qa-swing DEG）----
+    # 部件层全画布贴回 bbox 原位 → 绕 pivot 旋转 → 核心图压在其上
+    # （under_core 语义），五档角度横排——上引擎前人工预检接缝与出界。
+    if args.qa_swing > 0:
+        a_max = args.qa_swing
+        angles = [-a_max, -a_max / 2, 0.0, a_max / 2, a_max]
+        th_w, th_h = im.width // 3, im.height // 3
+        strip = Image.new("RGBA", (th_w * len(angles) + 8 * (len(angles) - 1),
+                                   th_h), (24, 24, 28, 255))
+        for i, ang in enumerate(angles):
+            layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+            layer.paste(part, (bx0, by0))
+            layer = layer.rotate(ang, resample=Image.BICUBIC,
+                                 center=tuple(args.pivot))
+            comp = Image.alpha_composite(layer, core)
+            th = comp.resize((th_w, th_h))
+            strip.paste(th, (i * (th_w + 8), 0), th)
+        d = ImageDraw.Draw(strip)
+        d.text((4, 4), f"{args.part} swing ±{a_max}deg", fill=(255, 255, 255, 255))
+        swing_path = os.path.join(
+            qa_dir, f"swing_{args.stage}_{figure_key}_{args.part}.png")
+        strip.save(swing_path)
+        print(f"   QA 摆角条带={os.path.relpath(swing_path, REPO)}")
+
     print(f"✅ 部件={os.path.relpath(part_path, REPO)}\n"
           f"   派生核心={os.path.relpath(fig_path, REPO)}\n"
           f"   manifest 已合并更新（figures[{figure_key}]→figs）\n"
