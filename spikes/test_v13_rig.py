@@ -126,8 +126,9 @@ def main() -> int:
 
     # ---- T3 装配 ----
     base_sprite = SpriteRef(path=src_neutral, width=320, height=320)
+    # v0.14 起三阶段均有清单——"无清单回退"用空 rig_root 验证同一降级语义
     win_none = build_rig_window(WindowBase, base_sprite, "young",
-                                rig_root=os.path.join(REPO, "assets", "rig"))
+                                rig_root=tempfile.mkdtemp())
     check("T3a 无清单阶段回退基类", type(win_none) is WindowBase)
     win_true = build_rig_window(WindowBase, base_sprite, "final",
                                 rig_root=os.path.join(REPO, "assets", "rig"))

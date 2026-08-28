@@ -101,9 +101,10 @@ def main() -> int:
               encoding="utf-8") as f:
         rm = json.load(f)
     legs = [p for p in rm["parts"] if p.get("kind") == "limb"]
-    check("T2a real manifest 腿件 limb 成对",
-          len(legs) == 2
-          and sorted(p["sway"]["phase_ms"] for p in legs) == [0.0, 1300.0]
+    legs_h = [p for p in legs if p["source_figure"] == "healthy_neutral"]
+    check("T2a real manifest 腿件 limb 成对（healthy 对 + neglected 对）",
+          len(legs) == 4 and len(legs_h) == 2
+          and sorted(p["sway"]["phase_ms"] for p in legs_h) == [0.0, 1300.0]
           and all(abs(p["sway"]["amp_deg"] - 7.0) < 1e-6 for p in legs))
 
     base = SpriteRef(path=os.path.join(REPO, "assets", "ai",
