@@ -85,6 +85,68 @@ def main() -> int:
     check("B4 释放后移动恢复", abs(after[0] - before[0]) >= 80)
     _user32.SetCursorPos(*before)  # 归位（非验证，直接设位即可）
 
+    # ---- B5 批次B（REVIEW-2026-08-28 H1/M7）：启动窗口期竞态 ----
+    import threading as _th
+
+    # B5a：_release 在 _starting（钩子未装好）时到达——旧版 not _active
+    # 直接 return，取消意图丢失 → 钩子后装上=永久吞鼠标；新版必须置 _cancel
+    lk5 = MouseLockWin()
+    with lk5._lock:
+        lk5._starting = True
+        lk5._cancel = False
+        lk5._deadline = time.monotonic() + 0.5
+    wd5 = _th.Thread(target=lk5._watchdog_loop, daemon=True)
+    wd5.start()
+    lk5._release("测试-启动期取消")
+    check("B5a 启动期 _release 取消会话（_starting 清、_cancel 置位）",
+          lk5._starting is False and lk5._cancel is True
+          and lk5._active is False)
+    wd5.join(2.0)
+    check("B5a 看门狗随即退场（会话已无）", not wd5.is_alive())
+
+    # B5b：看门狗在 _starting 窗口期驻守（旧版轮询到 not _active 即退场）
+    lk6 = MouseLockWin()
+    with lk6._lock:
+        lk6._starting = True
+        lk6._cancel = False
+        lk6._deadline = time.monotonic() + 0.6
+    wd6 = _th.Thread(target=lk6._watchdog_loop, daemon=True)
+    wd6.start()
+    time.sleep(0.35)  # 越过一个 0.25s 轮询点：_starting 期间不得退场
+    alive_mid = wd6.is_alive()
+    wd6.join(2.5)     # 0.6s 到期 → 下一轮询 _release 释放并退场
+    check("B5b 看门狗 _starting 窗口期驻守且到期释放",
+          alive_mid and not wd6.is_alive() and lk6._cancel is True
+          and lk6._active is False)
+
+    # B5c：预取消的钩子线程装钩后自拆（真 SetWindowsHookExW 路径）——
+    # _release 先到、钩子后装上，不得留下孤儿钩子
+    lk7 = MouseLockWin()
+    with lk7._lock:
+        lk7._starting = True
+        lk7._cancel = True   # 模拟 _release 已在装钩前送达
+    lk7._ready = __import__("threading").Event()  # start() 才建；直跑钩子线程须预置
+    ht7 = _th.Thread(target=lk7._hook_loop, daemon=True)
+    ht7.start()
+    ht7.join(3.0)
+    check("B5c 预取消钩子装好后自拆（不发布句柄、线程退场）",
+          not ht7.is_alive() and lk7._hook is None
+          and lk7._active is False)
+
+    # B5d：启动窗口期二次 start 只续期不双开线程（M7 放大器）
+    lk8 = MouseLockWin()
+    with lk8._lock:
+        lk8._starting = True
+        lk8._cancel = False
+        lk8._deadline = time.monotonic() + 1.0
+    wd_before = lk8._watchdog
+    ok8 = lk8.start(2.0)
+    check("B5d 启动窗口期二次 start 幂等续期（不重建线程）",
+          ok8 is True and lk8._watchdog is wd_before and lk8._starting is True)
+    with lk8._lock:
+        lk8._starting = False   # 手工收场（本用例不起真钩子）
+
+
     # ---- C 热键注入（WM_HOTKEY 模拟 Ctrl+Alt+T） ----
     lk3 = MouseLockWin()
     lk3.start(8.0)  # 长 duration：只能靠热键/吐出提前释放

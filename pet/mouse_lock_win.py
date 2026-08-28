@@ -157,6 +157,14 @@ class MouseLockWin:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._active = False
+        # 批次B（REVIEW-2026-08-28 H1/M7）：会话生命周期三态——
+        # _starting：start() 已发起、钩子未装好（此前该窗口期用 _active
+        #   表达不了，看门狗轮询到 "not _active" 直接退场，钩子后装上
+        #   → 永久吞鼠标）；
+        # _cancel：_release 在钩子装好前到达的取消意图，钩子线程装好后
+        #   复查自拆（防孤儿钩子）。
+        self._starting = False
+        self._cancel = False
         self._hook = None            # 钩子句柄（钩子线程装）
         self._hook_thread: threading.Thread | None = None
         self._hook_thread_id = 0
@@ -178,8 +186,10 @@ class MouseLockWin:
         deadline 强制走一遍 _release 的幂等清理）。
         """
         with self._lock:
-            if self._active:
-                # 已在吃：仅顺延 deadline（幂等续期）
+            # 批次B：_starting 也算"会话进行中"——启动窗口期的二次 start
+            # 只续期，不再并发拉起第二套 watchdog/钩子线程（旧版只查
+            # _active，启动窗口期会双开线程）
+            if self._active or self._starting:
                 self._deadline = time.monotonic() + self._clamp(duration_s)
                 return True
             if _foreground_elevated():
@@ -188,6 +198,9 @@ class MouseLockWin:
             dur = self._clamp(duration_s)
             # 钉光标锚点 = 当前位置
             _user32.GetCursorPos(ctypes.byref(self._anchor))
+            # 批次B：新会话复位取消标志（上一会话的 _release 可能置过）
+            self._starting = True
+            self._cancel = False
             # 看门狗先启动
             self._deadline = time.monotonic() + dur
             self._watchdog = threading.Thread(
@@ -203,13 +216,23 @@ class MouseLockWin:
                 name="eat-mouse-hook",
             )
             self._hook_thread.start()
-            self._ready.wait(timeout=1.0)   # 等钩子装好（或失败）
-            if not self._hook_ok:
+        # 批次B/H1：锁外等装钩子——旧版持锁 wait，并发的 _release（热键/
+        # 看门狗超时）会卡在锁上直到 wait 期满，取消意图送达时钩子往往
+        # 已装上却又无人再管。0.3s（L13）也在此处生效：装钩慢时不再冻结
+        # UI 近 1s；超时但 _hook_ok 仍 True 时照样置 _active（钩子稍后装
+        # 好、_cancel 复查兜底），看门狗在场保证最终必释放。
+        self._ready.wait(timeout=0.3)
+        with self._lock:
+            if not self._hook_ok or self._cancel:
+                # 装钩失败；或等待期间已被 _release 取消（force_spit/
+                # 超短 duration 的看门狗先到）——不留活口，钩子线程自拆
                 self._active = False
+                self._starting = False
                 return False
             self._active = True
-            _log.info("[吃鼠标] 抑制开始 duration=%.1fs 热键=Ctrl+Alt+T", dur)
-            return True
+            self._starting = False
+        _log.info("[吃鼠标] 抑制开始 duration=%.1fs 热键=Ctrl+Alt+T", dur)
+        return True
 
     def force_spit(self) -> None:
         """强制吐出（热键/托盘/看门狗/shutdown 共用；幂等）。"""
@@ -223,9 +246,14 @@ class MouseLockWin:
 
     def _release(self, reason: str) -> None:
         with self._lock:
-            if not self._active:
-                return  # 幂等：inactive 上调不崩不做事
+            # 批次B/H1：_starting 也算"有会话"——取消一个尚未完成的启动。
+            # 旧版 not _active 直接 return，装钩慢时看门狗在 _active 置位
+            # 前退场、钩子随后装上 = 永久抑制无人释放。
+            if not (self._active or self._starting):
+                return  # 幂等：无会话上调不崩不做事
             self._active = False
+            self._starting = False
+            self._cancel = True   # 尚未装好的钩子线程装好后复查自拆
             hook, tid = self._hook, self._hook_thread_id
             self._hook = None
         if hook:
@@ -240,7 +268,8 @@ class MouseLockWin:
         while True:
             time.sleep(_WATCHDOG_POLL_S)
             with self._lock:
-                if not self._active:
+                # 批次B：_starting 窗口期也驻守——启动未完成不代表可以退场
+                if not (self._active or self._starting):
                     return
                 expired = time.monotonic() >= self._deadline
             if expired:
@@ -249,6 +278,9 @@ class MouseLockWin:
 
     # 钩子线程体（消息循环 + LL 回调 + 热键）
     def _hook_loop(self) -> None:
+        # 批次B/M7：钩子句柄线程局部持有——旧版退出清理读共享 self._hook，
+        # 旧线程晚退时会把新会话刚装上的钩子拆掉（抑制假活）。
+        local_hook = None
         self._hook_thread_id = _kernel32.GetCurrentThreadId()
         outer = self
 
@@ -264,16 +296,29 @@ class MouseLockWin:
 
         self._cb_ref = _on_mouse
         hmod = _kernel32.GetModuleHandleW(None)
-        self._hook = _user32.SetWindowsHookExW(
+        local_hook = _user32.SetWindowsHookExW(
             WH_MOUSE_LL, _on_mouse, hmod, 0
         )
-        if not self._hook:
+        if not local_hook:
             _log.error("[吃鼠标] SetWindowsHookEx 失败 err=%s",
                        ctypes.get_last_error())
-            self._hook_ok = False
+            with self._lock:
+                self._hook_ok = False
+                # 批次B：start 可能已 wait 超时先置 _active——失败即回滚
+                self._active = False
+                self._starting = False
             self._ready.set()
             return
+        # 批次B/H1：装好后复查取消——_release 可能在装钩期间到达（此刻
+        # self._hook 尚未发布、_release 拆不到句柄），自拆防孤儿钩子
+        with self._lock:
+            cancelled = self._cancel
+            if not cancelled:
+                self._hook = local_hook
         self._ready.set()
+        if cancelled:
+            _user32.UnhookWindowsHookEx(local_hook)
+            return
         # M2 修：热键注册统一走 HotkeyManager（v0.11 持久线程），此处
         # 不再自注册（双重注册必然冲突，旧版每次吃鼠标刷 warning）。
         # 钩子线程只泵消息（LL 回调 + WM_QUIT + 测试注入 _WM_SPIT）。
@@ -285,10 +330,12 @@ class MouseLockWin:
                 self.force_spit()
             elif msg.message == WM_QUIT:
                 break
-        # 线程退出兜底清理
-        if self._hook:
-            _user32.UnhookWindowsHookEx(self._hook)
-            self._hook = None
+        # 线程退出兜底清理（批次B：只拆自己装的句柄）
+        if local_hook:
+            _user32.UnhookWindowsHookEx(local_hook)
+            with self._lock:
+                if self._hook is local_hook:
+                    self._hook = None
 
 
 _kernel32.GetCurrentThreadId.restype = wintypes.DWORD

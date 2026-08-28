@@ -234,6 +234,12 @@ class MouseLockMac:
     def _on_mouse(self, proxy, event_type, event, refcon):
         # 鼠标 tap（default 模式）：return None 抑制事件（不传下游）。
         # 键盘事件永不进此回调（mask 只含鼠标）——铁律1。
+        # 批次B/L8（与 win 版 _on_mouse 的 outer._active 检查对称）：inactive
+        # 时放行原事件——不把安全性完全押在 CGEventTapEnable(False) 的时序
+        # 上，未来任何路径在 inactive 时保持 tap enabled+挂 source，也不至于
+        # 全系统鼠标冻结。
+        if not self._active:
+            return event
         return None
 
     # ---- 启动 / 释放 ----
