@@ -74,6 +74,16 @@ class MemoryStore:
         # 工具）与主线程 save/forget（UI/记忆页）并发读写收口。RLock 因
         # memorize 内部调 forget_expired（重入）
         self._lock = threading.RLock()
+        # 批次D/F16（REVIEW-2026-08-28）：变更代数——ChatWorker 线程的写入
+        # bump _gen，app 30s 周期存档见 dirty 即落盘（旧版仅 shutdown/记忆
+        # 页触发，崩溃即丢整段会话学到的记忆）。用代数而非布尔：写文件的
+        # 锁外窗口里若又发生变更，_gen 已前进，保存后不会误清脏态
+        self._gen = 0
+        self._saved_gen = 0
+
+    @property
+    def dirty(self) -> bool:
+        return self._gen != self._saved_gen
 
     # ---- 持久化（同 pet_state 模式） ----
 
@@ -98,6 +108,10 @@ class MemoryStore:
                                 m.get("last_recalled", time.time()))
                         except (TypeError, ValueError):
                             continue
+                        # 批次D/F18：缺 id/坏 id 的条目补新 id——旧版原样
+                        # 入库，mem_bridge 的 m["id"] 直接 KeyError 炸 QML 槽
+                        if not isinstance(m.get("id"), str) or not m["id"]:
+                            m["id"] = "m_" + uuid.uuid4().hex[:10]
                         store._mem.append(m)
                     _log.info("记忆载入 %d 条（%s）", len(store._mem), p)
                     return store
@@ -107,9 +121,14 @@ class MemoryStore:
         return store
 
     def save(self, path: str) -> None:
-        """原子写：.tmp → copy2 旧档→.bak → replace（pet_state 同序）。"""
+        """原子写：.tmp → copy2 旧档→.bak → replace（pet_state 同序）。
+
+        批次D/F16：快照变更代数，写完比对——锁外写文件期间若又有变更
+        （_gen 已前进），不推进 _saved_gen，脏态留给下个周期。
+        """
         with self._lock:
             data = {"version": _VERSION, "memories": list(self._mem)}
+            snap_gen = self._gen
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -120,6 +139,9 @@ class MemoryStore:
 
             shutil.copy2(path, path + ".bak")
         os.replace(tmp, path)
+        with self._lock:
+            if self._gen == snap_gen:
+                self._saved_gen = snap_gen
 
     # ---- §2.2 冻结接口 ----
 
@@ -133,6 +155,7 @@ class MemoryStore:
                 if m["fact"] == fact:
                     m["importance"] = max(m["importance"],
                                           _clamp_imp(importance))
+                    self._gen += 1                      # 批次D/F16：变更代数+1
                     return m["id"]
             if len(self._mem) >= _MAX_MEMORIES:
                 self.forget_expired()          # 先清一轮
@@ -147,6 +170,7 @@ class MemoryStore:
                 "last_recalled": time.time(),
                 "recall_count": 0,
             })
+            self._gen += 1                      # 批次D/F16：变更代数+1
         _log.info("[记忆] 存: %s(imp=%.2f)", fact[:40], importance)
         return mid
 
@@ -197,6 +221,8 @@ class MemoryStore:
                 m["importance"] = min(1.0, m["importance"] + _RECALL_BOOST)
                 hits.append({"id": m["id"], "fact": m["fact"],
                              "importance": round(m["importance"], 3)})
+            if hits:
+                self._gen += 1                      # 批次D/F16：变更代数+1
             return hits
 
     def forget(self, mem_id: str) -> None:
@@ -205,12 +231,15 @@ class MemoryStore:
             before = len(self._mem)
             self._mem = [m for m in self._mem if m["id"] != mem_id]
             removed = len(self._mem) != before
+            if removed:
+                self._gen += 1                      # 批次D/F16：变更代数+1
         if removed:
             _log.info("[记忆] 删: %s", mem_id)
 
     def clear(self) -> None:
         with self._lock:
             self._mem.clear()
+            self._gen += 1                      # 批次D/F16：变更代数+1
         _log.info("[记忆] 清空")
 
     def forget_expired(self) -> int:

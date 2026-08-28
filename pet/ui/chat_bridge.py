@@ -137,6 +137,13 @@ class ChatBridge(QAbstractListModel):
         self._streaming = ""
         self._worker = None
         self._sum_worker = None   # 滚动摘要后台线程（同一时刻至多一个）
+        # 批次D/F15：本轮 user 文本——失败/离线路径也要把 user turn 补进
+        # _history（旧版只有 _on_done 的 head 带 user，失败轮 DS 历史出现
+        # "无问之答"，摘要按 user 计数删 UI 行时错位）
+        self._pending_user = ""
+        # 批次D/F10：cancel() 等 2s 未退的 worker 保引用于此，finished 后清
+        # ——旧版无条件 deleteLater = 销毁可能仍在运行的 QThread（原生崩溃）
+        self._dying = None
         self.on_user_message = None  # v0.6 可选钩子：app 侧 follow-up 启发式
         self._offline = False
 
@@ -187,6 +194,7 @@ class ChatBridge(QAbstractListModel):
             return
 
         self._append_message("user", text)
+        self._pending_user = text   # 批次D/F15：失败/离线路径补 user turn 用
         # v0.9 滚动摘要：不再在 send 前同步做（H4 修）——改在轮次完成后
         # （_on_done/_on_failed）后台异步触发，见 _maybe_summarize
         if self.on_user_message is not None:
@@ -204,6 +212,9 @@ class ChatBridge(QAbstractListModel):
         self._worker.done.connect(self._on_done)
         self._worker.offline.connect(self._on_offline)
         self._worker.failed.connect(self._on_failed)
+        # 批次D/F10：finished→deleteLater 唯一删除通道（QThread 铁律）——
+        # 旧版自然完成路径不接，worker 挂 parent 之下永不回收=每轮泄漏
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     _SUMMARIZE_THRESHOLD = 20   # 超过触发
@@ -305,6 +316,10 @@ class ChatBridge(QAbstractListModel):
         （cancel 后 worker 若恰好完成仍 emit done → _on_done 把回复追加进已
         关闭面板 history，下次打开看到幽灵消息）；清 _worker 让 send() 不被
         isRunning() 静默吞新消息。
+        批次D/F10（REVIEW-2026-08-28）：2s 未退（慢网络/确认框阻塞）不再
+        无条件 deleteLater——那是"销毁可能仍在运行的 QThread"的原生崩溃
+        （同文件摘要线程/proactive.shutdown 早已是保引用模式）。改保引用
+        至 _dying，由 finished→deleteLater（send 已接）单通道收尾。
         """
         w = self._worker
         if w is not None:
@@ -312,11 +327,17 @@ class ChatBridge(QAbstractListModel):
                 w.done.disconnect(self._on_done)
             except (TypeError, RuntimeError):
                 pass
+            self._worker = None
             if w.isRunning():
                 w.cancel()
-                w.wait(2000)
-            w.deleteLater()
-        self._worker = None
+                if not w.wait(2000):
+                    log.warning("[聊天] cancel 等待 2s 未退，保留引用待 "
+                                "finished 自清（不销毁运行中线程）")
+                    self._dying = w
+                    try:
+                        w.finished.connect(self._on_dying_finished)
+                    except (TypeError, RuntimeError):
+                        pass
         # H4 修：摘要线程一并收口（shutdown 也走这里——QThread 挂后台
         # 不等会 "Destroyed while thread is still running"）。deleteLater
         # 由 finished→deleteLater 连接兜底（含自然完成路径），此处不重复
@@ -351,6 +372,7 @@ class ChatBridge(QAbstractListModel):
     def _on_done(self, appended: list) -> None:
         if self._worker is None:
             return  # cancel 后迟到的 done，丢弃（防幽灵回复）
+        self._pending_user = ""   # head 已含 user，pending 清账
         final_text = ""
         for turn in appended:
             self._history.append(turn)
@@ -365,12 +387,21 @@ class ChatBridge(QAbstractListModel):
         self._maybe_summarize()
 
     @Slot()
+    def _on_dying_finished(self) -> None:
+        """批次D/F10：cancel 超时未退的 worker 结束后释放保命引用。"""
+        self._dying = None
+
+    @Slot()
     def _on_offline(self) -> None:
-        # 失败/离线路径也追加 _history（user 已在 send 追加 UI，这里补 assistant
-        # turn 进 DS history），否则下次 send 喂 DS 的 history 缺这轮，上下文脱节
+        # 失败/离线路径也追加 _history（user 已在 send 追加 UI，这里补
+        # user+assistant turn 进 DS history），否则下次 send 喂 DS 的
+        # history 缺这轮，上下文脱节（批次D/F15：user turn 旧版永不入史）
         from ..llm import OFFLINE_REPLY, ChatTurn
         self._offline = True
         self._set_streaming("")
+        if self._pending_user:
+            self._history.append(ChatTurn("user", self._pending_user))
+            self._pending_user = ""
         self._append_message("assistant", OFFLINE_REPLY)
         self._history.append(ChatTurn("assistant", OFFLINE_REPLY))
         self._worker = None
@@ -378,8 +409,11 @@ class ChatBridge(QAbstractListModel):
 
     @Slot(str)
     def _on_failed(self, reply: str) -> None:
-        # 降级回复也进 _history（同 _on_offline 理由）
+        # 降级回复也进 _history（同 _on_offline 理由；批次D/F15 补 user turn）
         from ..llm import ChatTurn
+        if self._pending_user:
+            self._history.append(ChatTurn("user", self._pending_user))
+            self._pending_user = ""
         self._append_message("assistant", reply)
         self._history.append(ChatTurn("assistant", reply))
         self._set_streaming("")

@@ -779,6 +779,15 @@ class PetApp:
             self.store.save(self._state_path)
         except Exception:
             self.logger.exception("存档失败")
+        # 批次D/F16（REVIEW-2026-08-28）：记忆随周期存档落盘——旧版仅
+        # shutdown/记忆页操作触发，进程崩溃即丢整段会话学到的记忆
+        # （违背 v0.9"跨会话不丢"Must）。见脏才写，空转零 IO。
+        mem = getattr(self, "memory", None)
+        if mem is not None and mem.dirty:
+            try:
+                self._save_memory()
+            except Exception:
+                self.logger.exception("记忆周期落盘失败")
 
     def _refresh_sensors(self) -> None:
         # 批次C/L10：传感器链（EnumWindows 回调等）任何异常不能从 timer 槽

@@ -116,6 +116,7 @@ class OpenAICompatibleClient(LLMClient):
         model: str = DS_MODEL,
         system_prompt: str = SYSTEM_PROMPT,
         timeout=_TIMEOUT,
+        max_tokens: int = 4096,
     ) -> None:
         self._api_key = api_key
         self._registry = registry
@@ -124,6 +125,9 @@ class OpenAICompatibleClient(LLMClient):
         self._base_system = system_prompt
         self._system = {"role": "system", "content": system_prompt}
         self._timeout = timeout
+        # 批次D/F12（REVIEW-2026-08-28）：显式上限——工具结果已截断，回复
+        # 侧同样封顶（DS 默认恰 4096，行为不变；其余 provider 不再无界）
+        self._max_tokens = int(max_tokens)
         self._resp = None  # 流式响应引用（cancel() 调 close 真中断用）
         self.usage = Usage()
 
@@ -149,6 +153,7 @@ class OpenAICompatibleClient(LLMClient):
             "model": self._model,
             "messages": messages,
             "stream": stream,
+            "max_tokens": self._max_tokens,
         }
         if tools:
             body["tools"] = tools
@@ -219,8 +224,17 @@ class OpenAICompatibleClient(LLMClient):
                             slot["function"]["name"] = fn["name"]
                         if fn.get("arguments"):
                             slot["function"]["arguments"] += fn["arguments"]
-        except requests.ConnectionError:
-            # cancel() 调 resp.close() 会使 iter_lines 抛 ConnectionError
+        except requests.ConnectionError as e:
+            # 批次D/F9：流中"读超时"（urllib3 ReadTimeoutError 被 requests 包成
+            # ConnectionError）不是离线——旧版一律 OfflineError，一次网络抖动
+            # 就把聊天粘死离线（reset_offline 仅重开面板才调）。读超时改抛
+            # requests.Timeout（run() 走 failed 降级，本轮重试语义），
+            # 只有真断线/取消才 OfflineError。
+            cause = e.args[0] if e.args else None
+            if (type(cause).__name__ == "ReadTimeoutError"
+                    or "read timed out" in str(e).lower()):
+                raise requests.Timeout(f"流式读超时: {e}")
+            # cancel() 调 resp.close() 也会走到这里（连接被本地关闭）
             raise OfflineError("流式中断（用户取消或连接断开）")
         finally:
             self._resp = None
@@ -272,8 +286,13 @@ class OpenAICompatibleClient(LLMClient):
         for tc in tool_calls:
             tc_id = tc.get("id", "")
             if not tc_id:
-                # 流式首轮分片未收到 id——跳过，避免回灌空 tool_call_id 致续轮报错
-                log.warning("DS tool_call 无 id，跳过: %s", tc)
+                # 批次D/F11：合成占位 id 回灌失败结果——旧版直接 skip，
+                # 续轮消息序列出现"assistant 带 tool_calls 却无对应 tool
+                # 消息"→ DS 400 整轮失败（比空 id 更糟的失败模式）
+                tc_id = f"call_synth_{len(results)}"
+                log.warning("DS tool_call 无 id，合成占位 id 回灌: %s", tc)
+                results.append(_tool_result_message(
+                    tc_id, "[工具失败] tool_call 缺 id，已被忽略"))
                 continue
             name = tc["function"]["name"]
             try:
@@ -348,6 +367,15 @@ class OpenAICompatibleClient(LLMClient):
                 appended.append(
                     ChatTurn("assistant", text2, tool_calls=final_tc)
                 )
+                text = text2
+            elif not tool_calls or rounds >= self._MAX_TOOL_ROUNDS:
+                # 批次D/F14：循环即将结束但终轮空文本——旧版不 append，
+                # appended 止于 tool 结果、返回 text 停留在上一轮带
+                # tool_calls 的中间文本（UI 显示中间轮）。补终答 turn + 降级。
+                text2 = FALLBACK_REPLY
+                if on_delta:
+                    on_delta(text2)
+                appended.append(ChatTurn("assistant", text2))
                 text = text2
         return text, appended
 
@@ -446,9 +474,23 @@ def create_client(provider: str, api_key: str, registry, cfg: dict) -> LLMClient
     OpenAICompatibleClient；Claude 走 ClaudeClient（待加）。"""
     providers_cfg = cfg.get("llm", {}).get("providers", {})
     pcfg = providers_cfg.get(provider, {})
-    base_url = pcfg.get("base_url", DS_BASE_URL)
+    base_url = pcfg.get("base_url")
+    if not base_url:
+        if provider == "deepseek":
+            base_url = DS_BASE_URL
+        else:
+            # 批次D/F7：非 deepseek 缺 base_url 严禁静默回落 DS 端点——
+            # OpenAI 的 key 会作为 Bearer 发往 api.deepseek.com（凭据误送
+            # 第三方）。宁可启动报错让用户补配置。
+            raise ValueError(
+                f"llm.providers.{provider} 缺 base_url（provider={provider!r} "
+                "非 deepseek，不回落 DeepSeek 端点，请补配置）")
     model = pcfg.get("model", DS_MODEL)
+    max_tokens = pcfg.get("max_tokens",
+                          cfg.get("llm", {}).get("max_tokens", 4096))
     if provider == "claude":
         raise NotImplementedError("ClaudeClient 待加（/messages 格式，首批只 OpenAI 兼容）")
     # deepseek / openai / 任何 OpenAI 兼容中转站 → 同一 Client
-    return OpenAICompatibleClient(api_key, registry, base_url=base_url, model=model)
+    return OpenAICompatibleClient(
+        api_key, registry, base_url=base_url, model=model,
+        max_tokens=max_tokens)

@@ -122,25 +122,33 @@ def main() -> int:
           all(m["content"] != "幽灵回复" for m in bridge._messages))
 
     # ---- C5: _on_failed 追加 _history（UI 与 DS 上下文一致） ----
+    # 批次D/F15 修：失败轮的 user turn 也要入史（旧版只补 assistant，DS
+    # 历史"无问之答"且摘要按 user 计数删 UI 行错位——本断言曾固化该 bug）
     bridge.send("third")
     worker3 = bridge._worker
     hist_before_fail = len(bridge._history)
     worker3.emit_failed("我开小差了～")
     check("C5 failed assistant 进 messages",
           bridge._messages[-1]["content"] == "我开小差了～")
-    check("C5 failed 追加 _history（DS 上下文一致）",
-          len(bridge._history) == hist_before_fail + 1
+    check("C5 failed 补 user+assistant 入 _history（顺序正确）",
+          len(bridge._history) == hist_before_fail + 2
+          and bridge._history[-2].role == "user"
+          and bridge._history[-2].content == "third"
           and bridge._history[-1].role == "assistant"
           and bridge._history[-1].content == "我开小差了～")
 
-    # ---- C5: _on_offline 追加 _history ----
-    bridge.send("fourth")  # _offline 已由 _on_failed? 否，failed 不置 offline
+    # ---- C5b: 离线路径同样补 user turn（批次D/F15）----
+    bridge.send("fourth")
     worker4 = bridge._worker
     hist_before_off = len(bridge._history)
     worker4.emit_offline()
-    check("C5 offline 置 _offline 标志", bridge._offline is True)
-    check("C5 offline 追加 _history",
-          len(bridge._history) == hist_before_off + 1)
+    from pet.llm import OFFLINE_REPLY
+    check("C5b offline 补 user+assistant 入 _history",
+          len(bridge._history) == hist_before_off + 2
+          and bridge._history[-2].role == "user"
+          and bridge._history[-2].content == "fourth"
+          and bridge._history[-1].content == OFFLINE_REPLY)
+    check("C5b offline 置 _offline 标志", bridge._offline is True)
     # 离线后再 send 应触发 offlineRequested 不发 worker
     offline_triggered = [False]
 

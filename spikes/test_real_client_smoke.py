@@ -26,6 +26,9 @@ def fake_post(*a, **kw):
 llm_mod.requests.post = fake_post
 class MiniReg:
     def schemas(self): return []
+    def dispatch(self, name, args, ctx):
+        from pet.tools_schema import ToolResult
+        return ToolResult(True, "ok")
 try:
     c2 = OpenAICompatibleClient(api_key="sk-fake", registry=MiniReg())
     c2.chat_once([], None)
@@ -38,4 +41,96 @@ finally:
 assert timeout_seen["v"] is not None and (isinstance(timeout_seen["v"], (int, float, tuple)) and (isinstance(timeout_seen["v"], (int, float)) or all(x > 0 for x in timeout_seen["v"])))
 print(f"  ✅ H2: chat_once 传 timeout={timeout_seen['v']}s 到网络层")
 
-print("\n真客户端冒烟：3/3 通过")
+# ---- 批次D（REVIEW-2026-08-28）F9/F11/F7/F14 ----
+import requests as _rq
+from pet.llm import OfflineError, create_client  # noqa: E402
+
+# F9：流中读超时（urllib3 ReadTimeoutError 被 requests 包成 ConnectionError）
+# 应判"本次失败"（requests.Timeout），不是 OfflineError（离线粘死）
+class _ReadTimeoutError(Exception):
+    pass
+
+class _FakeResp:
+    status_code = 200
+    def iter_lines(self, decode_unicode=True):
+        raise _rq.ConnectionError(_ReadTimeoutError("Read timed out."))
+    def close(self):
+        pass
+
+c3 = OpenAICompatibleClient(api_key="sk-fake", registry=MiniReg())
+_llm_post = llm_mod.requests.post
+llm_mod.requests.post = lambda *a, **kw: _FakeResp()
+try:
+    try:
+        c3._stream_once([], None)
+        raise AssertionError("F9: 读超时未抛异常")
+    except _rq.Timeout:
+        pass
+    except OfflineError:
+        raise AssertionError("F9: 读超时被误判 OfflineError（离线粘死回归）")
+finally:
+    llm_mod.requests.post = _llm_post
+print("  ✅ F9: 流读超时→Timeout（failed 降级）而非 OfflineError")
+
+# 真断线仍是 OfflineError（取消/断网语义不变）
+class _FakeRespDisc:
+    status_code = 200
+    def iter_lines(self, decode_unicode=True):
+        raise _rq.ConnectionError(ConnectionResetError("reset"))
+    def close(self):
+        pass
+
+llm_mod.requests.post = lambda *a, **kw: _FakeRespDisc()
+try:
+    try:
+        c3._stream_once([], None)
+        raise AssertionError("F9: 断线未抛 OfflineError")
+    except OfflineError:
+        pass
+finally:
+    llm_mod.requests.post = _llm_post
+print("  ✅ F9: 真断线仍 OfflineError")
+
+# F11：无 id 的 tool_call 合成占位 id 回灌失败结果（不再 skip→续轮 400）
+msgs = c3._dispatch_tool_calls(
+    [{"function": {"name": "clipboard", "arguments": "{}"}}], None)
+assert len(msgs) == 1 and msgs[0]["tool_call_id"].startswith("call_synth_") \
+    and msgs[0]["role"] == "tool" and "工具失败" in msgs[0]["content"], msgs
+print("  ✅ F11: 无 id tool_call 合成占位 id 回灌（续轮消息序列合法）")
+
+# F7：非 deepseek 缺 base_url 必须报错（不静默回落 DS 端点送 key）
+try:
+    create_client("openai", "sk-fake", None,
+                  {"llm": {"providers": {"openai": {"model": "gpt"}}}})
+    raise AssertionError("F7: 缺 base_url 未报错")
+except ValueError:
+    pass
+print("  ✅ F7: 非 deepseek 缺 base_url 拒绝回落 DS 端点")
+
+# F12：payload 带显式 max_tokens
+body = c3._payload([], None, stream=False)
+assert body.get("max_tokens") == 4096, body
+print("  ✅ F12: payload 显式 max_tokens=4096")
+
+# F14：工具轮触顶/末轮空文本补终答 turn（appended 不止于 tool 结果）
+class _CapClient(OpenAICompatibleClient):
+    _MAX_TOOL_ROUNDS = 1
+    def _stream_once(self, messages, tools, on_delta=None):
+        return "", [{"id": "c1", "type": "function",
+                     "function": {"name": "t", "arguments": "{}"}}], {}
+    def _non_stream_once(self, messages, tools):
+        return "", [], {}   # 触顶末轮空文本
+
+c4 = _CapClient(api_key="sk-fake", registry=MiniReg())
+text, appended = c4.chat_once(
+    [type("T", (), {"role": "user", "content": "hi",
+                    "tool_calls": None,
+                    "to_message": lambda self: {"role": "user",
+                                                "content": "hi"}})()],
+    None)
+assert appended and appended[-1].role == "assistant" \
+    and appended[-1].content, appended
+assert text == appended[-1].content
+print("  ✅ F14: 触顶空文本补终答 turn（text=终答非中间轮）")
+
+print(f"\n真客户端冒烟：9/9 通过")
