@@ -159,14 +159,30 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
         if not os.path.isfile(pp):
             log.warning("rig part %s 缺文件，弃件", item["id"])
             continue
+        # 批次F/rM3（REVIEW-2026-08-28）：几何与 limb 驱动参数校验——
+        # px_rect 负宽高（x1<=x0）的部件渲染行为未定义；limb 缺
+        # sway/amp=0 时"part_walk_active()=True 却摆角恒 0"→ 冻结腿 +
+        # 压制帧回退 = 平移滑行，静默劣化不如显式弃件降级
+        x0, y0, x1, y1 = (float(v) for v in item["px_rect"])
+        if x1 <= x0 or y1 <= y0:
+            log.warning("rig part %s px_rect 非法（%s），弃件",
+                        item["id"], item["px_rect"])
+            continue
         sway = item.get("sway", {})
+        kind = item.get("kind", "sway")
+        if kind == "limb":
+            if not sway or float(sway.get("amp_deg", 0) or 0) <= 0 \
+                    or float(sway.get("period_ms", 0) or 0) <= 0:
+                log.warning("rig part %s 是 limb 但缺 sway/amp/period "
+                            "（会冻结腿+压制帧回退），弃件", item["id"])
+                continue
         parts.append(RigPart(
             id=item["id"], path=pp,
             source_figure=item["source_figure"],
-            px_rect=tuple(float(v) for v in item["px_rect"]),
+            px_rect=(x0, y0, x1, y1),
             pivot=tuple(float(v) for v in item["pivot"]),
             z=item["z"],
-            kind=item.get("kind", "sway"),
+            kind=kind,
             base_deg=float(item.get("base_deg", 0.0)),
             amp_deg=float(sway.get("amp_deg", 0.0)),
             period_ms=float(sway.get("period_ms", 2600.0)),

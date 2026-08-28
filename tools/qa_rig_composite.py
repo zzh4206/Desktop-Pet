@@ -21,6 +21,59 @@ from PIL import Image, ImageChops, ImageFilter, ImageStat
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# 批次F/C1（REVIEW-2026-08-28）：同 figure 部件两两 α 交叠上限——静止
+# 叠加恰好复原原图，静止门禁对"同一连通域拆两遍"结构性失明（C1：final/
+# neglected 双腿件 27k 像素 100% 互含仍 PASS）；摆动时两件绕不同 pivot
+# 各转 = 四腿重影。羽化切缘 ~1-2px 共享，阈值留 256px 余量。
+_OVERLAP_MAX_PX = 256
+
+
+def part_overlap_px(rig_dir: str, manifest: dict, figure: str) -> list:
+    """同 figure 部件两两 α>0 交叠像素数（跨 bbox 互含也计入）。
+
+    返回 [(id_a, id_b, overlap_px), ...]（仅同 figure 部件对）。
+    """
+    parts = [p for p in manifest["parts"] if p["source_figure"] == figure]
+    if len(parts) < 2:
+        return []
+    loaded = []
+    max_w = max_h = 0
+    for p in parts:
+        img = Image.open(os.path.join(rig_dir, p["file"])).convert("RGBA")
+        x0, y0, _x1, _y1 = p["px_rect"]
+        # 公共画布：各部件 bbox 不同，必须贴回同一尺寸才能逐对比对
+        max_w = max(max_w, int(x0) + img.width)
+        max_h = max(max_h, int(y0) + img.height)
+        loaded.append((p["id"], img, int(x0), int(y0)))
+    alphas = []
+    for pid, img, x0, y0 in loaded:
+        full = Image.new("L", (max_w, max_h), 0)
+        full.paste(img.getchannel("A").point(lambda v: 255 if v > 0 else 0),
+                   (x0, y0))
+        alphas.append((pid, full))
+    out = []
+    for i in range(len(alphas)):
+        for j in range(i + 1, len(alphas)):
+            inter = ImageChops.multiply(alphas[i][1], alphas[j][1])
+            out.append((alphas[i][0], alphas[j][0],
+                        sum(inter.histogram()[1:]) if inter.getbbox() else 0))
+    return out
+
+
+def check_overlap(rig_dir: str, manifest: dict, figure: str,
+                  max_px: int = _OVERLAP_MAX_PX) -> bool:
+    """门禁：同 figure 任意两部件 α 交叠 ≤ max_px。打印报告，返回是否通过。"""
+    rows = part_overlap_px(rig_dir, manifest, figure)
+    bad = [(a, b, n) for (a, b, n) in rows if n > max_px]
+    for (a, b, n) in rows:
+        flag = "❌" if n > max_px else ("⚠️ " if n > 0 else "  ")
+        print(f"  {flag}{a} × {b}: 交叠 {n}px")
+    if bad:
+        print(f"❌ 部件交叠超限（>{max_px}px）：{bad}——疑似同一连通域拆了"
+              f"两遍（split_parts --claim 按 x 分界重切）")
+        return False
+    return True
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -116,8 +169,12 @@ def main() -> int:
     panel.save(qa_path)
 
     ok = inter_pct <= args.max_pct
-    print(f"{'✅ PASS' if ok else '❌ FAIL'}（内部门禁 ≤{args.max_pct}%）"
-          f"  QA 三联图={os.path.relpath(qa_path, REPO)}")
+    # 批次F/C1：部件交叠门禁（静止合成对"同域拆两遍"失明，必须独立挡）
+    print(f"部件交叠检查（≤{_OVERLAP_MAX_PX}px）：")
+    if not check_overlap(rig_dir, manifest, figure):
+        ok = False
+    print(f"{'✅ PASS' if ok else '❌ FAIL'}（内部门禁 ≤{args.max_pct}% + 交叠"
+          f"≤{_OVERLAP_MAX_PX}px）  QA 三联图={os.path.relpath(qa_path, REPO)}")
     return 0 if ok else 1
 
 

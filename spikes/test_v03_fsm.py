@@ -387,6 +387,24 @@ def main() -> int:
     check("T21c 底板穿越被盖窗不停不爬(到达目标)",
           fsm.mode in ("walk", "idle") and fsm.pos[0] > 1200)
 
+    # T31 批次F/H3（REVIEW-2026-08-28）：行走速度回写 velocity——
+    # app 的步频（0.9+|vx|/400）与倾斜（vx/140）映射此前是死代码
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (700.0, floor)
+    fsm._mode = "walk"
+    fsm._target = (1500.0, floor)
+    fsm.step(PetState.default(), layered, DT)
+    v_mid = fsm.velocity
+    exp = fsm._speed  # walk 标称速度（向右为正）
+    check("T31a 行走中 velocity 反映真实速度（步频/倾斜映射接通）",
+          abs(v_mid[0] - exp) < 1e-6 and v_mid[0] > 0)
+    for _ in range(int(30 / DT)):
+        fsm.step(PetState.default(), layered, DT)
+        if fsm.mode == "idle":
+            break
+    check("T31b 到达目标速度归零（停步 tilt/hz 即刻回落）",
+          fsm.mode == "idle" and fsm.velocity == (0.0, 0.0))
+
     # T22 拖到窗口正下方（窗外，y > 窗底）松手 → 正常落地板（不上顶）
     fsm = BehaviorFSM(dict(WA))
     fsm.step(PetState.default(), sensors(windows=(win13,)), DT)  # 预热：填充 FSM._windows（end_drag 用最近一次传感器窗口）

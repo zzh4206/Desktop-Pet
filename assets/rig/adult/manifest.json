@@ -1,12 +1,12 @@
 {
   "figures": {
-    "healthy_neutral": "figs\\healthy_neutral.png",
-    "neglected_neutral": "figs\\neglected_neutral.png"
+    "healthy_neutral": "figs/healthy_neutral.png",
+    "neglected_neutral": "figs/neglected_neutral.png"
   },
   "parts": [
     {
       "id": "leg_r_neglected_neutral",
-      "file": "parts\\leg_r_neglected_neutral.png",
+      "file": "parts/leg_r_neglected_neutral.png",
       "source_figure": "neglected_neutral",
       "px_rect": [
         511,
@@ -28,7 +28,7 @@
     },
     {
       "id": "leg_l_neglected_neutral",
-      "file": "parts\\leg_l_neglected_neutral.png",
+      "file": "parts/leg_l_neglected_neutral.png",
       "source_figure": "neglected_neutral",
       "px_rect": [
         405,
@@ -50,7 +50,7 @@
     },
     {
       "id": "leg_r_healthy_neutral",
-      "file": "parts\\leg_r_healthy_neutral.png",
+      "file": "parts/leg_r_healthy_neutral.png",
       "source_figure": "healthy_neutral",
       "px_rect": [
         514,
@@ -72,7 +72,7 @@
     },
     {
       "id": "leg_l_healthy_neutral",
-      "file": "parts\\leg_l_healthy_neutral.png",
+      "file": "parts/leg_l_healthy_neutral.png",
       "source_figure": "healthy_neutral",
       "px_rect": [
         416,

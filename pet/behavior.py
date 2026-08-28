@@ -599,6 +599,11 @@ class BehaviorFSM:
         stride = (self._follow_speed if self._follow else self._speed) * dt
         nx = x + (stride if tx > x else -stride)
         nx = self._clamp_x(nx)
+        # 批次F/H3（REVIEW-2026-08-28）：行走速度回写 _vx——app 的步频
+        # （0.9+|vx|/400）与倾斜（vx/140）映射此前是死代码：_step_walk 从
+        # 不写 _vx，velocity 恒 (0,0)，follow 600px/s 仍 0.9Hz 慢踏滑步。
+        # 用 (nx-x)/dt 而非标称 speed：钳制/换向当拍的真实位移。
+        self._vx = (nx - x) / dt if dt > 0 else 0.0
         ns = self._surface_y(nx)
 
         if ns < cur_y - 1:
@@ -615,6 +620,7 @@ class BehaviorFSM:
                         ns = cur_y  # 窗底净空足够：钻过去，保持当前层
                     else:
                         # 走到边框就往上爬（贴撞入侧边线）
+                        self._vx = 0.0   # 攀爬为纵向运动，水平速度清零
                         self._enter_climb((hit[0], hit[1]), w)
                         return Action(ActionType.MOVE_TO, {"pos": self._pos})
             else:
@@ -631,6 +637,7 @@ class BehaviorFSM:
         if abs(tx - nx) <= stride or (tx > x) != (tx > nx):
             # 到达目标
             self._pos = (tx, ns)
+            self._vx = 0.0   # 行走收尾：速度归零（停步 tilt/hz 即刻回落）
             self._mode = _IDLE
             self._idle_left = self._new_idle()
         else:

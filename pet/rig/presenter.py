@@ -164,8 +164,6 @@ class RigWindow(WindowBase):
                              "period_ms": float(p.period_ms),
                              "phase_ms": float(p.phase_ms)},
                 })
-            w.rootContext().setContextProperty("partsModelInit", parts)
-
             qml = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "rig_scene.qml")
             w.setSource(QUrl.fromLocalFile(qml))
@@ -248,13 +246,18 @@ class RigWindow(WindowBase):
         # 文件名形如 {stage}_walk_0.png —— 阶段前缀在前，须用子串判定
         # v0.14.3：stretch/roll/fall 也硬切——伸懒腰等动作的姿态幅度大
         # （手臂扬起/抬脚），淡化=新旧两图肢体同时半透明（实机目检抓到
-        # 双臂双脚残影）；仅 blink（同姿态闭眼）保留交叉淡化。
+        # 双臂双脚残影）。
+        # 批次F/rM6（REVIEW-2026-08-28）：默认反转——名单外的新动作也
+        # 硬切（旧版默认淡化，任何未登记的大姿态动作都会回归"双臂残影"，
+        # 两轮实机事故同族）；只有已知的同姿态微变（blink 闭眼）保留淡化。
         if any(seg in first for seg in ("_walk_", "_chew_", "_eat_mouse_",
                                         "_stretch_", "_roll", "_fall_")):
-            self._fade_ms = 0          # 硬切
-        else:
+            self._fade_ms = 0          # 硬切（既有名单）
+        elif "_blink" in first:
             # 过渡时长 = 帧间隔的 ~45%，钳在 70–150ms（间隔过短也保底可读）
             self._fade_ms = int(min(max(interval_ms * 0.45, 70), 150))
+        else:
+            self._fade_ms = 0          # 未知动作默认硬切（宁可硬切不留残影）
         self._show_now(self._frames[0].path)
         if len(self._frames) > 1:
             self._frame_timer.setInterval(interval_ms)
@@ -294,8 +297,20 @@ class RigWindow(WindowBase):
         self._transition_to(nxt.path, self._fade_ms)
 
     def set_facing(self, d: int) -> None:
-        """镜像语义与基类相同；朝向同步写场景属性（即时翻转对齐旧行为）。"""
+        """镜像语义与基类相同；朝向同步写场景属性（即时翻转对齐旧行为）。
+
+        批次F/H4（REVIEW-2026-08-28）：行走覆盖/帧序列播放中不换图——
+        基类 set_facing 会 set_sprite(self._sprite)（mood 立绘）→
+        activeFigure 变为无 limb 的 figure → part_walk_active()=False →
+        隐藏的第三类帧回退（v0.14.4"只剩两类回退"承诺被破坏），且夹一拍
+        mood 图闪现。与 on_state_change 同款守卫：只落 _facing + 场景
+        facing 属性即时镜像，画面恢复交给既有收尾路径。
+        """
         if d not in (-1, 1) or d == getattr(self, "_facing", 1):
+            return
+        if self.rig_active and (self._walk_showing or self._frames):
+            self._facing = d
+            self._set_prop("facing", int(d))
             return
         super().set_facing(d)
         if self.rig_active:

@@ -27,7 +27,7 @@ import json
 import os
 import sys
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -101,6 +101,18 @@ def extract_component(alpha_img: Image.Image, seed: tuple[int, int],
     return seen
 
 
+def _parse_claim(expr: str):
+    """批次F/C1：归属分界式解析——x<N / x<=N / x>N / x>=N（单条）。"""
+    e = (expr or "").replace(" ", "")
+    for op in ("<=", ">=", "<", ">"):
+        if e.startswith("x" + op):
+            try:
+                return (op, float(e[1 + len(op):]))
+            except ValueError:
+                break
+    raise SystemExit(f"--claim 无法解析: {expr!r}（支持 x<N / x<=N / x>N / x>=N）")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
@@ -130,6 +142,15 @@ def main() -> int:
     ap.add_argument("--base-deg", type=float, default=0.0,
                     help="limb 单侧摆偏置：摆动范围 [base, base+2·amp]，"
                          "用于裙摆遮挡不对称时把摆动锁在安全方向")
+    ap.add_argument("--claim", default="",
+                    help="批次F/C1（REVIEW-2026-08-28）：归属分界比较式"
+                         "（x<N 或 x>N，单条）——连通域先按此过滤再切件。"
+                         "双腿粘连成单一连通域时，leg_l 用 x<N、leg_r 用"
+                         " x≥N 各取一半，根除\"同一双腿拆两遍、paperdoll"
+                         " 行走四腿重影\"的资产事故")
+    ap.add_argument("--skip-core", action="store_true",
+                    help="只重出部件图+manifest，不动核心图（核心已按全"
+                         "连通域挖除过的重切场景；保护带语义保持原样）")
     ap.add_argument("--qa-swing", type=float, default=0.0, metavar="DEG",
                     help=">0 时另出摆角条带 QA 图：部件绕 pivot 转 "
                          "[-DEG,-DEG/2,0,DEG/2,DEG] 叠核心图合成（预检接缝/出界）")
@@ -143,6 +164,20 @@ def main() -> int:
     barriers = _parse_protect(args.block)
     comp = extract_component(alpha, (args.seed[0], args.seed[1]), barriers)
     print(f"连通域像素数={len(comp)}")
+    if args.claim:
+        # 批次F/C1：归属过滤在 min/max 检查前——粘连连通域按 x 分界
+        # 各取一半（leg_l x<N / leg_r x>=N），根除"同一双腿拆两遍"
+        op, v = _parse_claim(args.claim)
+        before = len(comp)
+        comp = {(x, y) for (x, y) in comp
+                if ((x < v) if op == "<" else
+                    (x <= v) if op == "<=" else
+                    (x > v) if op == ">" else (x >= v))}
+        print(f"claim x{op}{v:g}: {before} → {len(comp)} 像素")
+        if not comp:
+            print("❌ claim 过滤后为空——分界线可能不在连通域范围内",
+                  file=sys.stderr)
+            return 2
     if not (args.min_px <= len(comp) <= args.max_px):
         print(f"❌ 像素数超出 [{args.min_px},{args.max_px}]——大概率误连到 "
               f"头发/裙子主体，请调整种子或保护带后再试", file=sys.stderr)
@@ -159,7 +194,17 @@ def main() -> int:
     ys = [p[1] for p in comp]
     bx0, by0, bx1, by1 = min(xs), min(ys), max(xs) + 1, max(ys) + 1
 
+    # 批次F/C1（REVIEW-2026-08-28）：部件按连通域掩模生成——旧版 bbox
+    # 直接 crop，bbox 内的非本件像素（claim 另一半腿/邻近构件）一并被
+    # 带入部件图，是"final/neglected 双腿件 100% 互含"事故的直接放大器。
+    # 掩模取全 comp（含保护带像素，与旧语义一致：部件层多带无害）。
+    mask = Image.new("L", im.size, 0)
+    mload = mask.load()
+    for (x, y) in comp:
+        mload[x, y] = 255
     part = im.crop((bx0, by0, bx1, by1))
+    part.putalpha(ImageChops.multiply(
+        part.getchannel("A"), mask.crop((bx0, by0, bx1, by1))))
     # 轻羽化切缘（仅软化 polygon 挖除直线感；外轮廓本就带原图抗锯齿边）
     a = part.getchannel("A").filter(ImageFilter.GaussianBlur(0.7))
     part.putalpha(a)
@@ -173,22 +218,28 @@ def main() -> int:
     part_path = os.path.join(parts_dir, f"{args.part}_{figure_key}.png")
     fig_path = os.path.join(figs_dir, f"{figure_key}.png")
 
-    core = im.copy()
-    # 多部件累计挖除：同 figure 已有派生核心图（先前切件产物）则在其上
-    # 继续挖，避免本件覆盖丢掉先前件的挖除（核心图残留烤死件=摆动双影）。
-    # 从头重切需先删 figs/{figure}.png。
-    if os.path.isfile(fig_path):
-        core = Image.open(fig_path).convert("RGBA")
-        if core.size != im.size:
-            raise SystemExit(f"已有核心图尺寸 {core.size} ≠ 源图 {im.size}，"
-                             f"请删除 {fig_path} 重切")
-    cpx = core.load()
-    for (x, y) in cutting:
-        r, g, b, _a = cpx[x, y]
-        cpx[x, y] = (r, g, b, 0)
+    if args.skip_core:
+        # 批次F/C1：只重出部件+manifest——核心图已按全连通域挖除过的
+        # 重切场景（claim 重切），保护带语义保持原样不动
+        if os.path.isfile(fig_path):
+            core = Image.open(fig_path).convert("RGBA")  # 仅供 QA 对照
+    else:
+        core = im.copy()
+        # 多部件累计挖除：同 figure 已有派生核心图（先前切件产物）则在其上
+        # 继续挖，避免本件覆盖丢掉先前件的挖除（核心图残留烤死件=摆动双影）。
+        # 从头重切需先删 figs/{figure}.png。
+        if os.path.isfile(fig_path):
+            core = Image.open(fig_path).convert("RGBA")
+            if core.size != im.size:
+                raise SystemExit(f"已有核心图尺寸 {core.size} ≠ 源图 {im.size}，"
+                                 f"请删除 {fig_path} 重切")
+        cpx = core.load()
+        for (x, y) in cutting:
+            r, g, b, _a = cpx[x, y]
+            cpx[x, y] = (r, g, b, 0)
+        core.save(fig_path)
 
     part.save(part_path)
-    core.save(fig_path)
 
     manifest_path = os.path.join(out_dir, "manifest.json")
     manifest = {}
@@ -196,7 +247,10 @@ def main() -> int:
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
     figures = manifest.setdefault("figures", {})
-    rel_fig = os.path.relpath(fig_path, out_dir).replace("\\\\", "/")
+    # 批次F/rM2（REVIEW-2026-08-28）：源码 "\\\\"=运行时两个反斜杠，
+    # relpath 产出单反斜杠 → 替换永不命中，manifest 混入 "figs\\x.png"。
+    # Windows 靠 normpath 兜住；非 Windows 端（mac 产线工具）静默弃件。
+    rel_fig = os.path.relpath(fig_path, out_dir).replace("\\", "/")
     figures[figure_key] = rel_fig           # 派生核心图取代整图入口
 
     part_id = f"{args.part}_{figure_key}"
@@ -204,7 +258,7 @@ def main() -> int:
              if p.get("id") != part_id]     # 同部件重复运行覆盖（顺清陈档）
     parts.append({
         "id": part_id,
-        "file": os.path.relpath(part_path, out_dir).replace("\\\\", "/"),
+        "file": os.path.relpath(part_path, out_dir).replace("\\", "/"),
         "source_figure": figure_key,
         "px_rect": [bx0, by0, bx1, by1],
         "pivot": list(args.pivot),

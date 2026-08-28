@@ -1,13 +1,13 @@
 {
   "figures": {
-    "neglected_neutral": "figs\\neglected_neutral.png",
-    "healthy_neutral": "figs\\healthy_neutral.png",
-    "healthy_side": "figs\\healthy_side.png"
+    "neglected_neutral": "figs/neglected_neutral.png",
+    "healthy_neutral": "figs/healthy_neutral.png",
+    "healthy_side": "figs/healthy_side.png"
   },
   "parts": [
     {
       "id": "tail_neglected_neutral",
-      "file": "parts\\tail_neglected_neutral.png",
+      "file": "parts/tail_neglected_neutral.png",
       "source_figure": "neglected_neutral",
       "px_rect": [
         770,
@@ -51,7 +51,7 @@
     },
     {
       "id": "leg_r_healthy_neutral",
-      "file": "parts\\leg_r_healthy_neutral.png",
+      "file": "parts/leg_r_healthy_neutral.png",
       "source_figure": "healthy_neutral",
       "px_rect": [
         505,
@@ -73,7 +73,7 @@
     },
     {
       "id": "leg_l_healthy_neutral",
-      "file": "parts\\leg_l_healthy_neutral.png",
+      "file": "parts/leg_l_healthy_neutral.png",
       "source_figure": "healthy_neutral",
       "px_rect": [
         437,
@@ -94,52 +94,8 @@
       }
     },
     {
-      "id": "leg_r_neglected_neutral",
-      "file": "parts\\leg_r_neglected_neutral.png",
-      "source_figure": "neglected_neutral",
-      "px_rect": [
-        437,
-        1271,
-        659,
-        1534
-      ],
-      "pivot": [
-        553.0,
-        1273.0
-      ],
-      "z": "under_core",
-      "kind": "limb",
-      "sway": {
-        "amp_deg": 7.0,
-        "period_ms": 2600.0,
-        "phase_ms": 1300.0
-      }
-    },
-    {
-      "id": "leg_l_neglected_neutral",
-      "file": "parts\\leg_l_neglected_neutral.png",
-      "source_figure": "neglected_neutral",
-      "px_rect": [
-        437,
-        1271,
-        658,
-        1528
-      ],
-      "pivot": [
-        474.0,
-        1273.0
-      ],
-      "z": "under_core",
-      "kind": "limb",
-      "sway": {
-        "amp_deg": 7.0,
-        "period_ms": 2600.0,
-        "phase_ms": 0.0
-      }
-    },
-    {
       "id": "leg_front_healthy_side",
-      "file": "parts\\leg_front_healthy_side.png",
+      "file": "parts/leg_front_healthy_side.png",
       "source_figure": "healthy_side",
       "px_rect": [
         664,
@@ -162,7 +118,7 @@
     },
     {
       "id": "leg_back_healthy_side",
-      "file": "parts\\leg_back_healthy_side.png",
+      "file": "parts/leg_back_healthy_side.png",
       "source_figure": "healthy_side",
       "px_rect": [
         341,
@@ -182,6 +138,50 @@
         "phase_ms": 0.0
       },
       "base_deg": 12.0
+    },
+    {
+      "id": "leg_l_neglected_neutral",
+      "file": "parts/leg_l_neglected_neutral.png",
+      "source_figure": "neglected_neutral",
+      "px_rect": [
+        437,
+        1271,
+        514,
+        1528
+      ],
+      "pivot": [
+        474.0,
+        1273.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 0.0
+      }
+    },
+    {
+      "id": "leg_r_neglected_neutral",
+      "file": "parts/leg_r_neglected_neutral.png",
+      "source_figure": "neglected_neutral",
+      "px_rect": [
+        514,
+        1271,
+        659,
+        1534
+      ],
+      "pivot": [
+        553.0,
+        1273.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 1300.0
+      }
     }
   ],
   "spec": 1

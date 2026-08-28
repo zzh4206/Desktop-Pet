@@ -215,6 +215,64 @@ def main() -> int:
     check("T5e-3 侧身前后腿 limb 成对", n_side_limbs == 2)
     win.set_motion_params(tilt_deg=0, walking=False, walk_hz=0.0)
 
+    # ---- T6 批次F/H4（REVIEW-2026-08-28）：行走中 set_facing 不翻回 mood ----
+    win.set_sprite(happy)
+    win.set_walk_figure(neutral)
+    win.set_motion_params(tilt_deg=0, walking=True, walk_hz=1.3)
+    win.set_facing(-1)
+    check("T6a 行走中翻转朝向不切 figure（守卫生效，第三类回退封堵）",
+          _usProp(win, "figASrc").endswith("figs/healthy_neutral.png")
+          and win._root.property("activeFigure") == "healthy_neutral"
+          and int(win._root.property("facing")) == -1
+          and win.part_walk_active() is True)
+    win.set_facing(1)
+    win.set_motion_params(tilt_deg=0, walking=False, walk_hz=0.0)
+    check("T6b 停步后恢复正常换图（happy 还原）",
+          _usProp(win, "figASrc").endswith("final_healthy_happy.png"))
+
+    # ---- T7 批次F/C1：部件两两 α 交叠门禁（静止合成对此失明）----
+    from importlib.util import module_from_spec, spec_from_file_location
+    _qa_spec = spec_from_file_location(
+        "qa_rig_gate", os.path.join(REPO, "tools", "qa_rig_composite.py"))
+    qa_gate = module_from_spec(_qa_spec)
+    _qa_spec.loader.exec_module(qa_gate)
+    worst = 0
+    worst_pair = ""
+    for st in ("young", "adult", "final"):
+        rd = os.path.join(REPO, "assets", "rig", st)
+        with open(os.path.join(rd, "manifest.json"), encoding="utf-8") as f:
+            mf = json.load(f)
+        for fig in mf["figures"]:
+            for (_a, _b, n) in qa_gate.part_overlap_px(rd, mf, fig):
+                if n > worst:
+                    worst, worst_pair = n, f"{st}/{fig}:{_a}×{_b}"
+    check(f"T7 全资产部件两两 α 交叠 ≤256px（峰値 {worst}px {worst_pair}）",
+          worst <= 256)
+
+    # ---- T8 批次F/rM2：manifest 路径已归一为正斜杠 ----
+    _paths_ok = True
+    for st in ("young", "adult", "final"):
+        with open(os.path.join(REPO, "assets", "rig", st, "manifest.json"),
+                  encoding="utf-8") as f:
+            mf = json.load(f)
+        _paths_ok &= all("\\" not in v for v in mf["figures"].values())
+        _paths_ok &= all("\\" not in p["file"] for p in mf["parts"])
+    check("T8 manifest 路径全部正斜杠（跨平台可解析）", _paths_ok)
+
+    # ---- T9 批次F/rM1：相位累加器——hz 变化只改斜率不瞬移 ----
+    win.set_sprite(base)
+    win.set_walk_figure(neutral)
+    win.set_motion_params(tilt_deg=0, walking=True, walk_hz=1.3)
+    QTest.qWait(400)
+    ph0 = float(win._root.property("gaitPhase"))
+    win.set_motion_params(tilt_deg=0, walking=True, walk_hz=2.0)
+    QTest.qWait(150)
+    ph1 = float(win._root.property("gaitPhase"))
+    adv = (ph1 - ph0) % 1.0
+    check(f"T9 相位累加器：hz 1.3→2.0 相位连续推进（150ms 实推 {adv:.2f} 周期）",
+          0.18 < adv < 0.45)
+    win.set_motion_params(tilt_deg=0, walking=False, walk_hz=0.0)
+
     win.set_walk_figure(None)
     win.set_sprite(base)
 

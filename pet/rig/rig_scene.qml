@@ -46,6 +46,12 @@ Item {
         property real t: 0
         onTriggered: {
             t += interval
+            // 批次F/rM1（REVIEW-2026-08-28）：步态相位=累加器 φ+=hz·dt——
+            // 旧版 sin(2π·t·hz/1000) 相位=绝对时间×瞬时频率，hz 一变相位
+            // 瞬移 t·Δhz 个整周期（跑 10min 后 0.05Hz 变化=30 个周期跳变，
+            // 腿瞬移任意角）；H3 接上真实速度映射后必然触发，先于此修
+            root.gaitPhase = (root.gaitPhase
+                + root.gaitHz * interval / 1000.0) % 1.0
             // 步态包络：walking↔静止 的平滑过渡（时间常数 ~150ms，起步
             // 渐入、停步缓收——limb 角度乘 gaitK，相位不跳变）
             const target = root.walking ? 1.0 : 0.0
@@ -63,9 +69,10 @@ Item {
     // 依赖 walking 硬开关，幅度随 gaitK 收敛，无相位突跳）
     readonly property real gaitHz: walkHz > 0 ? walkHz : 1.3
     property real gaitK: 0
-    readonly property real walkRot: gaitK * Math.sin(2 * Math.PI * clock.t * gaitHz / 1000.0) * 1.4
+    property real gaitPhase: 0   // rM1：周期数累加器（0..1）
+    readonly property real walkRot: gaitK * Math.sin(2 * Math.PI * gaitPhase) * 1.4
     readonly property real walkBob:
-        gaitK * -Math.abs(Math.sin(2 * Math.PI * clock.t * gaitHz / 1000.0)) * 2.2
+        gaitK * -Math.abs(Math.sin(2 * Math.PI * gaitPhase)) * 2.2
 
     SequentialAnimation {
         id: _sq
@@ -159,8 +166,15 @@ Item {
                         // v0.14 行走驱动肢体：gaitK 包络 × 步频正弦；
                         // base_deg=单侧摆偏置（遮挡不对称时锁安全方向，
                         // 摆动范围 [base, base+2·amp]，rest 恒 0 由包络保证）
-                        const hz = root.walkHz > 0
-                            ? root.walkHz : 1000.0 / s.period_ms
+                        // rM1：walkHz>0 走全局相位累加器（+本件固定周期
+                        // 偏移）；walkHz=0 的部件周期缺省分支 hz 恒定，
+                        // 绝对时间式无瞬移风险，保持原式
+                        if (root.walkHz > 0) {
+                            return root.gaitK * ((d.base_deg || 0) + s.amp_deg
+                                * Math.sin(2 * Math.PI * (root.gaitPhase
+                                    + (s.phase_ms || 0) / s.period_ms)))
+                        }
+                        const hz = 1000.0 / s.period_ms
                         return root.gaitK * ((d.base_deg || 0) + s.amp_deg
                             * Math.sin(2 * Math.PI * (clock.t * hz / 1000.0
                                 + (s.phase_ms || 0) / s.period_ms)))
