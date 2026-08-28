@@ -148,15 +148,19 @@ class PetApp:
             self.window = adapter.create_pet_window(sprite0)
         self._part_walk = presentation == "paperdoll"
         self.window.set_sprite_provider(self.provider)
-        # v0.14.4 行走覆盖：mood 图无腿部件，行走期间改显 neutral 核心
-        # （部件步态载体），停步还原 mood 立绘——否则行走静默回退 GPT 帧
-        # 环，帧间烤死的手臂摆动/尾巴位移/色调差即实机报告的观感问题。
-        # 帧行走只剩"无 rig 后端 / 无 neutral 资产"两类回退。
+        # v0.14.4 行走覆盖：行走期间改显部件步态载体 figure，停步还原
+        # mood 立绘——否则行走静默回退 GPT 帧环，帧间烤死的手臂摆动/
+        # 尾巴位移/色调差即实机报告的观感问题。
+        # v0.14.6 载体优先级：侧身部件立绘（walk_0 像素拷贝+前后腿拆件，
+        # 程序化侧身步态）→ 正面 neutral（正面踏步）→ None（帧行走回退）。
         def _walk_refresh(s) -> None:
-            self.window.set_walk_figure(
-                self.provider.neutral_static(s)
-                if (self._part_walk
-                    and hasattr(self.provider, "neutral_static")) else None)
+            fig = None
+            if self._part_walk:
+                prov = self.provider
+                if hasattr(prov, "side_walk_static"):
+                    fig = prov.side_walk_static(s) \
+                        or prov.neutral_static(s)
+            self.window.set_walk_figure(fig)
         _walk_refresh(self.store.get())
         self.store.on_change(_walk_refresh)
         # v0.3.12 真实身位高喂 FSM（净空钻行判定；阶段进化变尺寸时更新）
