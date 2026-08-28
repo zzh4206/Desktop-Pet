@@ -127,6 +127,9 @@ def main() -> int:
     ap.add_argument("--kind", choices=["sway", "limb"], default="sway",
                     help="sway=常驻正弦摆（尾/呆毛）；limb=行走驱动肢体（v0.14，"
                          "引擎按 kind 分驱动，旧引擎视 limb 为 sway 兼容）")
+    ap.add_argument("--base-deg", type=float, default=0.0,
+                    help="limb 单侧摆偏置：摆动范围 [base, base+2·amp]，"
+                         "用于裙摆遮挡不对称时把摆动锁在安全方向")
     ap.add_argument("--qa-swing", type=float, default=0.0, metavar="DEG",
                     help=">0 时另出摆角条带 QA 图：部件绕 pivot 转 "
                          "[-DEG,-DEG/2,0,DEG/2,DEG] 叠核心图合成（预检接缝/出界）")

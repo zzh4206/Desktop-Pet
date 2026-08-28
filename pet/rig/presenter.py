@@ -159,6 +159,7 @@ class RigWindow(WindowBase):
                     "pivot": [float(v) for v in p.pivot],
                     "z": p.z,
                     "kind": p.kind,
+                    "base_deg": float(p.base_deg),
                     "sway": {"amp_deg": float(p.amp_deg),
                              "period_ms": float(p.period_ms),
                              "phase_ms": float(p.phase_ms)},

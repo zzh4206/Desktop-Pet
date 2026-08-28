@@ -108,10 +108,11 @@ def main() -> int:
         rm = json.load(f)
     legs = [p for p in rm["parts"] if p.get("kind") == "limb"]
     legs_h = [p for p in legs if p["source_figure"] == "healthy_neutral"]
-    check("T2a real manifest 腿件 limb 成对（healthy 对 + neglected 对）",
-          len(legs) == 4 and len(legs_h) == 2
+    legs_side = [p for p in legs if p["source_figure"] == "healthy_side"]
+    check("T2a real manifest 腿件 limb 成对（正面对×2 + 侧身对）",
+          len(legs) == 6 and len(legs_h) == 2 and len(legs_side) == 2
           and sorted(p["sway"]["phase_ms"] for p in legs_h) == [0.0, 1300.0]
-          and all(abs(p["sway"]["amp_deg"] - 7.0) < 1e-6 for p in legs))
+          and all(abs(p["sway"]["amp_deg"] - 7.0) < 1e-6 for p in legs_h))
 
     base = SpriteRef(path=os.path.join(REPO, "assets", "ai",
                                        "final_healthy_neutral.png"),
@@ -196,6 +197,24 @@ def main() -> int:
     check("T5d 停步还原 mood 立绘",
           _usProp(win, "figASrc").endswith("final_healthy_happy.png")
           and win.part_walk_active() is False)
+
+    # ---- T5e 侧身行走载体（v0.14.6）：walk_0 拷贝 + 前后腿拆件 ----
+    prov = win._provider
+    side = prov.side_walk_static(types.SimpleNamespace(
+        stage=Stage.FINAL, branch=Branch.HEALTHY, mood=80, fullness=80))
+    check("T5e-1 side_walk_static 指向侧身拷贝",
+          side is not None and side.path.endswith("final_healthy_side.png"))
+    win.set_walk_figure(side)
+    win.set_motion_params(tilt_deg=0, walking=True, walk_hz=1.3)
+    check("T5e-2 walking 改显侧身核心且腿件就绪",
+          _usProp(win, "figASrc").endswith("figs/healthy_side.png")
+          and win._root.property("activeFigure") == "healthy_side"
+          and win.part_walk_active() is True)
+    n_side_limbs = sum(1 for p in win._spec.parts
+                       if p.kind == "limb" and p.source_figure == "healthy_side")
+    check("T5e-3 侧身前后腿 limb 成对", n_side_limbs == 2)
+    win.set_motion_params(tilt_deg=0, walking=False, walk_hz=0.0)
+
     win.set_walk_figure(None)
     win.set_sprite(base)
 

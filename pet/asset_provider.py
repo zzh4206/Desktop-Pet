@@ -229,6 +229,23 @@ class AIArtProvider:
         # 降级：emoji（不区分 miss 原因——缺文件/目录不存在/权限均可）
         return self._fallback.get_static(state, skin)
 
+    def side_walk_static(self, state: PetState,
+                         skin: str = "default") -> SpriteRef | None:
+        """侧身行走立绘（v0.14.6）—— 从已验收 {stage}_walk_0 帧像素拷贝，
+        拆出前后腿 limb 部件做程序化侧身步态；与帧行走同源零生成像素。
+
+        命名挂在 healthy 下仅为复用 {stage}_{branch}_{mood} 的 figure_key
+        反解规则；资产与分支无关（两分支共享，同帧行走约定）。缺失→None。
+        """
+        suffix = "" if skin == "default" else f"_{skin}"
+        filename = f"{state.stage.value}_healthy_side{suffix}.png"
+        path = os.path.join(self._dir, filename)
+        if os.path.isfile(path):
+            width, height = _STAGE_SIZE[state.stage]
+            return SpriteRef(path=path, width=width, height=height,
+                             anchor="bottom_center")
+        return None
+
     def neutral_static(self, state: PetState,
                        skin: str = "default") -> SpriteRef | None:
         """同阶段/分支的 neutral 立绘（v0.14.4 行走覆盖用）。

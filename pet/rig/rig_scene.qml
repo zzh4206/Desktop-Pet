@@ -157,12 +157,13 @@ Item {
                     if (!s || !s.amp_deg) return 0
                     if (d.kind === "limb") {
                         // v0.14 行走驱动肢体：gaitK 包络 × 步频正弦；
-                        // 相位取 phase_ms/period_ms 比例（双腿反相=0/0.5）
+                        // base_deg=单侧摆偏置（遮挡不对称时锁安全方向，
+                        // 摆动范围 [base, base+2·amp]，rest 恒 0 由包络保证）
                         const hz = root.walkHz > 0
                             ? root.walkHz : 1000.0 / s.period_ms
-                        return root.gaitK * s.amp_deg * Math.sin(
-                            2 * Math.PI * (clock.t * hz / 1000.0
-                                + (s.phase_ms || 0) / s.period_ms))
+                        return root.gaitK * ((d.base_deg || 0) + s.amp_deg
+                            * Math.sin(2 * Math.PI * (clock.t * hz / 1000.0
+                                + (s.phase_ms || 0) / s.period_ms)))
                     }
                     const ph = (clock.t + (s.phase_ms || 0)) % s.period_ms
                     return s.amp_deg * Math.sin(2 * Math.PI * ph / s.period_ms)

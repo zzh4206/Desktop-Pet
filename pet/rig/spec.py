@@ -61,6 +61,8 @@ _MANIFEST_SCHEMA: dict = {
                     },
                     "z": {"enum": ["under_core", "over_core"]},
                     "kind": {"enum": ["sway", "limb"]},
+                    "base_deg": {"type": "number", "minimum": -45,
+                                 "maximum": 45},
                     "sway": {
                         "type": "object",
                         "properties": {
@@ -99,6 +101,8 @@ class RigPart:
     pivot: tuple              # 源图坐标旋转轴
     z: str                    # under_core / over_core
     kind: str = "sway"        # sway=常驻正弦摆 / limb=行走驱动（v0.14）
+    base_deg: float = 0.0     # limb 摆动偏置（单侧摆：范围 [base, base+2·amp]，
+                              # 遮挡不对称时把摆动锁在安全方向）
     amp_deg: float = 0.0
     period_ms: float = 2600.0
     phase_ms: float = 0.0
@@ -163,6 +167,7 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
             pivot=tuple(float(v) for v in item["pivot"]),
             z=item["z"],
             kind=item.get("kind", "sway"),
+            base_deg=float(item.get("base_deg", 0.0)),
             amp_deg=float(sway.get("amp_deg", 0.0)),
             period_ms=float(sway.get("period_ms", 2600.0)),
             phase_ms=float(sway.get("phase_ms", 0.0)),
