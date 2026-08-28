@@ -378,3 +378,10 @@ class WindowBase(QWidget):
         frames 后端恒 False —— app 路由据此回退帧动画，无需判后端类型。
         """
         return False
+
+    def set_walk_figure(self, sprite) -> None:
+        """行走覆盖图（v0.14.4）：walking 期间改显该 figure（部件步态载体）。
+
+        frames 后端无此需求（行走播帧序列），基类 no-op 缺省。
+        """
+        return None

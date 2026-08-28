@@ -229,6 +229,23 @@ class AIArtProvider:
         # 降级：emoji（不区分 miss 原因——缺文件/目录不存在/权限均可）
         return self._fallback.get_static(state, skin)
 
+    def neutral_static(self, state: PetState,
+                       skin: str = "default") -> SpriteRef | None:
+        """同阶段/分支的 neutral 立绘（v0.14.4 行走覆盖用）。
+
+        paperdoll 行走时把画面切到 neutral 核心（唯一有 limb 腿部件的
+        figure），部件步态得以在任意 mood 下接管；文件缺失返回 None
+        （调用方维持帧回退）。"""
+        suffix = "" if skin == "default" else f"_{skin}"
+        filename = (f"{state.stage.value}_{state.branch.value}"
+                    f"_neutral{suffix}.png")
+        path = os.path.join(self._dir, filename)
+        if os.path.isfile(path):
+            width, height = _STAGE_SIZE[state.stage]
+            return SpriteRef(path=path, width=width, height=height,
+                             anchor="bottom_center")
+        return None
+
     # 动作 → 帧名模板（assets/frames/{stage}_{action}.png）与帧间隔
     # v0.13.5/0.13.7：walk 支持可选中间步姿渐进增强——
     #   4 帧: walk_0b(0→1), walk_1b(1→0)

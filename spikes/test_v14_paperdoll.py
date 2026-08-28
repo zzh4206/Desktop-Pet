@@ -56,6 +56,12 @@ def _qtest():
     return getattr(__import__("PySide6.QtTest", fromlist=["QTest"]), "QTest")
 
 
+def _usProp(win, name: str) -> str:
+    """root 属性(url 型)→ 纯字符串（QUrl 必须走 toString()）。"""
+    v = win._root.property(name)
+    return v.toString() if hasattr(v, "toString") else str(v)
+
+
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     QTest = _qtest()
@@ -161,6 +167,37 @@ def main() -> int:
     win.play_frames(_seq("idle_blink", 2), loop=True, interval_ms=300)
     check("T3e-3 blink 保留交叉淡化（>0）", win._fade_ms > 0)
     win.stop_frames()
+
+    # ---- T5 行走覆盖（v0.14.4）：mood 图行走改显 neutral 核心 ----
+    from pet.pet_state import Branch   # noqa: E402
+    from pet.asset_provider import AIArtProvider   # noqa: E402
+
+    happy = SpriteRef(os.path.join(REPO, "assets", "ai",
+                                   "final_healthy_happy.png"),
+                      width=320, height=320)
+    neutral = SpriteRef(os.path.join(REPO, "assets", "ai",
+                                     "final_healthy_neutral.png"),
+                        width=320, height=320)
+    win.set_sprite(happy)
+    check("T5a happy 图无腿部件（回退前提成立）",
+          win.part_walk_active() is False)
+    win.set_sprite_provider(AIArtProvider())
+    win.set_walk_figure(neutral)
+    win.set_motion_params(tilt_deg=0, walking=True, walk_hz=1.3)
+    check("T5b walking 沿改显 neutral 派生核心",
+          _usProp(win, "figASrc").endswith("figs/healthy_neutral.png")
+          and win._root.property("activeFigure") == "healthy_neutral"
+          and win.part_walk_active() is True)
+    win.on_state_change(types.SimpleNamespace(
+        stage=Stage.FINAL, branch=Branch.HEALTHY, mood=80, fullness=80))
+    check("T5c 覆盖期间衰减 tick 不翻回 mood 图",
+          _usProp(win, "figASrc").endswith("figs/healthy_neutral.png"))
+    win.set_motion_params(tilt_deg=0, walking=False, walk_hz=0.0)
+    check("T5d 停步还原 mood 立绘",
+          _usProp(win, "figASrc").endswith("final_healthy_happy.png")
+          and win.part_walk_active() is False)
+    win.set_walk_figure(None)
+    win.set_sprite(base)
 
     # ---- T4 app._frame_tick 路由（stub self，不起完整 PetApp）----
     import app as app_mod

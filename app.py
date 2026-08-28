@@ -148,6 +148,17 @@ class PetApp:
             self.window = adapter.create_pet_window(sprite0)
         self._part_walk = presentation == "paperdoll"
         self.window.set_sprite_provider(self.provider)
+        # v0.14.4 行走覆盖：mood 图无腿部件，行走期间改显 neutral 核心
+        # （部件步态载体），停步还原 mood 立绘——否则行走静默回退 GPT 帧
+        # 环，帧间烤死的手臂摆动/尾巴位移/色调差即实机报告的观感问题。
+        # 帧行走只剩"无 rig 后端 / 无 neutral 资产"两类回退。
+        def _walk_refresh(s) -> None:
+            self.window.set_walk_figure(
+                self.provider.neutral_static(s)
+                if (self._part_walk
+                    and hasattr(self.provider, "neutral_static")) else None)
+        _walk_refresh(self.store.get())
+        self.store.on_change(_walk_refresh)
         # v0.3.12 真实身位高喂 FSM（净空钻行判定；阶段进化变尺寸时更新）
         self.fsm.set_pet_height(self.window.height())
         self.store.on_change(lambda _s: self.fsm.set_pet_height(self.window.height()))
@@ -831,6 +842,21 @@ class PetApp:
         mode = self.fsm.mode
         if mode == "eat_mouse" and getattr(self, "_fsm_last_mode", "")                 != "eat_mouse":
             self._proactive.eat_mouse_arrived()
+        # v0.13 rig 呈现层运动参数：速度倾斜/行走律动/空中标志/步频（frames
+        # 后端的基类 no-op 缺省让该调用在旧模式下零成本旁路）。
+        # v0.14.4 刻意先于 _frame_tick：walking 上升沿在此改显 neutral 覆盖
+        # 图，_frame_tick 的 part_walk_active 查询才能当拍生效（否则首拍
+        # 误播 walk 帧、下一拍再停）。
+        if getattr(self.window, "rig_active", False):
+            vx, _vy = self.fsm.velocity
+            tilt = max(-9.0, min(9.0, vx / 140.0))
+            walking = (mode == "walk"
+                       or (mode == "idle" and self.fsm.motion_mode == "follow"))
+            # v0.14 步频随速度：walk_speed 120px/s≈1.2Hz、follow 600≈2Hz 上限
+            hz = max(0.9, min(2.0, 0.9 + abs(vx) / 400.0))
+            self.window.set_motion_params(
+                tilt_deg=tilt, walking=walking, walk_hz=hz,
+                airborne=mode in ("fall", "thrown", "drag"))
         # v0.10.15 状态驱动帧动画（行走交替/下落/落地瞬帧/咀嚼循环）
         self._frame_tick(action, mode, getattr(self, "_fsm_last_mode", ""))
         self._fsm_last_mode = mode
@@ -850,18 +876,6 @@ class PetApp:
             if abs(dx) > 0.4:
                 self.window.set_facing(1 if dx > 0 else -1)
         self._last_facing_x = self.fsm.pos[0]
-        # v0.13 rig 呈现层运动参数：速度倾斜/行走律动/空中标志/步频（frames
-        # 后端的基类 no-op 缺省让该调用在旧模式下零成本旁路）
-        if getattr(self.window, "rig_active", False):
-            vx, _vy = self.fsm.velocity
-            tilt = max(-9.0, min(9.0, vx / 140.0))
-            walking = (mode == "walk"
-                       or (mode == "idle" and self.fsm.motion_mode == "follow"))
-            # v0.14 步频随速度：walk_speed 120px/s≈1.2Hz、follow 600≈2Hz 上限
-            hz = max(0.9, min(2.0, 0.9 + abs(vx) / 400.0))
-            self.window.set_motion_params(
-                tilt_deg=tilt, walking=walking, walk_hz=hz,
-                airborne=mode in ("fall", "thrown", "drag"))
 
     # ---- v0.3 动画 ----
     # H1 修（REVIEW-2026-08-25）：随机小动作 key 集——_frame_tick 的兜底停

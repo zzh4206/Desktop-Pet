@@ -117,6 +117,8 @@ class RigWindow(WindowBase):
         self._fade_ms = 110
         self._src_size_cache: dict[str, tuple[int, int]] = {}
         self._air_prev = False            # 空中标志边沿检测（落地压扁）
+        self._walk_sprite = None          # v0.14.4 行走覆盖图（neutral 核心）
+        self._walk_showing = False
         if spec is not None:
             if defer_quick:
                 # 引擎延至事件循环首拍（见 build_rig_window docstring：
@@ -264,7 +266,15 @@ class RigWindow(WindowBase):
         if self._frames:
             self._frames = []
             self._frame_timer.stop()
-            self.set_sprite(getattr(self, "_static_sprite", self._sprite))
+            self._restore_after_sequence()
+
+    def _restore_after_sequence(self) -> None:
+        """序列收尾恢复：walking 覆盖期间回覆盖图（否则 mood 图在行进中
+        闪现一拍，等下一个 walking 沿才被纠正）。"""
+        if self._walk_showing and self._walk_sprite is not None:
+            self._show_now(self._walk_sprite.path)
+            return
+        self.set_sprite(getattr(self, "_static_sprite", self._sprite))
 
     def _advance_frame(self) -> None:
         if not self.rig_active:
@@ -277,8 +287,7 @@ class RigWindow(WindowBase):
             else:
                 self._frame_timer.stop()
                 self._frames = []
-                self.set_sprite(
-                    getattr(self, "_static_sprite", self._sprite))
+                self._restore_after_sequence()
                 return
         nxt = self._frames[self._frame_idx]
         self._transition_to(nxt.path, self._fade_ms)
@@ -303,9 +312,45 @@ class RigWindow(WindowBase):
         if bool(walking) != bool(self._root.property("walking")):
             self._set_prop("walking", bool(walking))
         self._set_prop("walkHz", float(walk_hz))
+        self._walk_edge(bool(walking))
         if (not airborne) and self._air_prev:
             self._root.squash()           # 空中→地面 边沿触发压扁回弹
         self._air_prev = bool(airborne)
+
+    def set_walk_figure(self, sprite) -> None:
+        """行走覆盖图（v0.14.4）：walking 期间改显该 figure。
+
+        paperdoll 的部件步态载体是 neutral 核心（唯一有 limb 腿部件）；
+        mood 图（happy 跳姿/hungry 等）无腿部件，不覆盖则行走静默回退
+        GPT 帧环——帧间烤死的手臂摆动/尾巴位移/色调差即实机报告的
+        "手臂未遮挡 + 尾巴形态颜色微变"。walking 上升沿改显、下降沿还原。
+        """
+        self._walk_sprite = sprite
+        if self._walk_showing and self.rig_active and sprite is not None:
+            self._show_now(sprite.path)   # 覆盖图热替换（阶段进化换档）
+
+    def _walk_edge(self, walking: bool) -> None:
+        if not self.rig_active or self._walk_sprite is None:
+            return
+        if walking and not self._walk_showing:
+            self._walk_showing = True
+            self._show_now(self._walk_sprite.path)
+        elif not walking and self._walk_showing:
+            self._walk_showing = False
+            # 序列播放中（如 blink 尾巴）只落标志，恢复交给既有收尾路径
+            if not self._frames:
+                self.set_sprite(getattr(self, "_static_sprite", self._sprite))
+
+    def on_state_change(self, state) -> None:
+        """行走覆盖期间只更新恢复目标、不动当前画面——否则衰减 tick 每 1s
+        把 neutral 覆盖图翻回 mood 图，与下一拍 _walk_edge 打架=闪烁。"""
+        if self._provider is None:
+            return
+        sprite = self._provider.get_static(state)
+        if self._walk_showing or self._frames:
+            self._static_sprite = sprite
+            return
+        self.set_sprite(sprite)
 
     def part_walk_active(self) -> bool:
         """当前展示 figure 是否挂有 limb 部件（部件驱动步态可用，v0.14）。
