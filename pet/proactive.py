@@ -158,6 +158,8 @@ class ProactiveScheduler:
         accessibility_fn=None,           # callable() -> bool Accessibility 已授权
         fsm_event_fn=None,               # callable(event: str) -> None 切 EAT_MOUSE
         prompt_accessibility_fn=None,     # callable() -> None 深链系统设置
+        fullscreen_fn=None,              # 批次C（REVIEW-2026-08-28 H2）：
+        #   callable() -> bool 前台全屏/演示（win adapter.is_fullscreen_active）
     ) -> None:
         self._store = store
         self._bubble = bubble_fn
@@ -190,6 +192,7 @@ class ProactiveScheduler:
         self._accessibility_fn = accessibility_fn
         self._fsm_event_fn = fsm_event_fn
         self._prompt_accessibility_fn = prompt_accessibility_fn
+        self._fullscreen_fn = fullscreen_fn
         self._eat_session = EatMouseSession(
             mouse_lock=mouse_lock, fsm_event_fn=fsm_event_fn
         )
@@ -277,6 +280,18 @@ class ProactiveScheduler:
             except Exception:
                 _log.warning("[吃鼠标] active_content_fn 异常，放行不抑制",
                              exc_info=True)
+        # 批次C/H2 第五门禁：前台全屏（演示/放映/全屏视频）→ 不吃。
+        # 放映中 5min 无输入完全正常（idle 门禁必过），宠物本体虽已隐藏，
+        # 吞掉演示者鼠标 10s 是事故级观感——sensor_win 注释自 v0.3 就宣称
+        # "全屏禁吃"但从未接线。
+        if self._fullscreen_fn is not None:
+            try:
+                if self._fullscreen_fn():
+                    _log.info("[吃鼠标] 前台全屏（演示/播放），不抑制")
+                    return sess
+            except Exception:
+                _log.warning("[吃鼠标] fullscreen_fn 异常，放行不抑制",
+                             exc_info=True)
         # T9 Accessibility：未授权 → 提示 + 深链，不抑制
         if self._accessibility_fn is not None:
             try:
@@ -316,6 +331,19 @@ class ProactiveScheduler:
         """FSM 到达光标 → 真正抑制 + 气泡 + 回血（幂等：无 pending no-op）。"""
         if self._eat_pending is None:
             return
+        # 批次C/H2：到达复查——门禁通过后 ≤6s 追赶窗口内可能切入全屏
+        # （用户按 F5 开讲），此时仍抑制就正吞在演示者头上
+        if self._fullscreen_fn is not None:
+            try:
+                if self._fullscreen_fn():
+                    _log.info("[吃鼠标] 追赶途中前台转全屏，放弃抑制")
+                    self._eat_pending = None
+                    if self._fsm_event_fn is not None:
+                        self._fsm_event_fn("eat_mouse_off")
+                    return
+            except Exception:
+                _log.warning("[吃鼠标] 到达复查 fullscreen_fn 异常，放行",
+                             exc_info=True)
         duration_s, _dl = self._eat_pending
         self._eat_pending = None
         sess = self._eat_session

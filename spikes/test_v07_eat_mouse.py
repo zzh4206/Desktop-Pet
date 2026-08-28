@@ -86,7 +86,7 @@ def section_structural() -> None:
 
 def _make(fake_lock, idle_s=999.0, cfg=None, dnd_fn=None,
           active_content_fn=None, accessibility_fn=None,
-          fsm_events=None, prompt=None):
+          fsm_events=None, prompt=None, fullscreen_fn=None):
     """建 ProactiveScheduler + 注入 fake mouse_lock / 各门禁 fn。"""
     from datetime import datetime
     from pet.proactive import ProactiveScheduler
@@ -112,6 +112,7 @@ def _make(fake_lock, idle_s=999.0, cfg=None, dnd_fn=None,
         accessibility_fn=accessibility_fn,
         fsm_event_fn=(lambda ev: fsm_events.append(ev)) if fsm_events is not None else None,
         prompt_accessibility_fn=prompt,
+        fullscreen_fn=fullscreen_fn,
     )
     return s, bubbles
 
@@ -210,6 +211,30 @@ def section_gates() -> None:
     check("G6b 启动失败补发 eat_mouse_off（FSM 退出吃鼠标态）",
           evs == ["eat_mouse", "eat_mouse_off"]
           and any("没管住" in b for b in bubbles2))
+
+    # G6c 批次C（REVIEW-2026-08-28 H2）：第五门禁——前台全屏 → 不抑制
+    lock = FakeMouseLock()
+    evs = []
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
+                 accessibility_fn=lambda: True, fsm_events=evs,
+                 fullscreen_fn=lambda: True)
+    s.eat_mouse(10)
+    check("G6c 前台全屏 不抑制（starts=0 且不发 approach 事件）",
+          lock.starts == 0 and evs == [] and s._eat_pending is None)
+
+    # G6d 批次C：追赶途中转全屏 → 到达复查放弃抑制 + eat_mouse_off 收场
+    lock = FakeMouseLock()
+    evs = []
+    fs_state = {"on": False}
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
+                 accessibility_fn=lambda: True, fsm_events=evs,
+                 fullscreen_fn=lambda: fs_state["on"])
+    s.eat_mouse(10)            # 门禁时未全屏：发 approach + pending
+    fs_state["on"] = True      # 用户在 6s 追赶窗口内开始放映
+    s.eat_mouse_arrived()      # 到达复查 → 放弃抑制
+    check("G6d 追赶途中转全屏 到达放弃抑制（starts=0, off 收场）",
+          lock.starts == 0 and evs == ["eat_mouse", "eat_mouse_off"]
+          and s._eat_pending is None)
 
     # G7 force_spit → 吐出 + FSM eat_mouse_off 回 idle
     lock = FakeMouseLock()

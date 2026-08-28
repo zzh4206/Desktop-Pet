@@ -233,6 +233,9 @@ class PetApp:
             accessibility_fn=self.adapter.is_accessibility_trusted,
             fsm_event_fn=lambda ev: self.fsm.handle_event(ev),
             prompt_accessibility_fn=self.adapter.prompt_accessibility,
+            # 批次C（REVIEW-2026-08-28 H2）：吃鼠标第五门禁——前台全屏
+            # （演示/放映）不抑制；到达点复查同函数
+            fullscreen_fn=self.adapter.is_fullscreen_active,
         )
         # v0.7 托盘「强制吐出」→ EatMouseSession.force_spit（停 CGEventTap + 回 idle）
         self.tray.set_spit_callback(self._proactive.force_spit)
@@ -778,7 +781,12 @@ class PetApp:
             self.logger.exception("存档失败")
 
     def _refresh_sensors(self) -> None:
-        self.sensors = self.adapter.get_sensors()
+        # 批次C/L10：传感器链（EnumWindows 回调等）任何异常不能从 timer 槽
+        # 冒泡——每 2s 刷一条 traceback 不致死但污染日志
+        try:
+            self.sensors = self.adapter.get_sensors()
+        except Exception:
+            self.logger.warning("传感器刷新异常", exc_info=True)
 
     def _check_fullscreen(self) -> None:
         """v0.3 全屏/演示检测（1s 轮询，双次确认去抖）：
@@ -787,6 +795,11 @@ class PetApp:
             fs = self.adapter.is_fullscreen_active()
         except NotImplementedError:
             fs = False  # 平台未实现（mac 待补）不抑制
+        except Exception:
+            # 批次C/L10：win 路径 ctypes 失败会抛其他类型——旧版只兜
+            # NotImplementedError，其余每秒刷 traceback
+            self.logger.warning("全屏检测异常", exc_info=True)
+            fs = False
         if fs:
             self._fs_hits = getattr(self, "_fs_hits", 0) + 1
         else:
@@ -798,7 +811,10 @@ class PetApp:
             self._fullscreen = True
             self.fsm.handle_event("fullscreen_on")
             self.window.hide()
-            self.logger.info("全屏检测：隐藏宠物")
+            # 批次C/H2：气泡是独立 Tool|StaysOnTop 窗，不随 window.hide()
+            # 收——不藏则久坐提醒/链式唤醒照样盖在全屏演示上
+            self.bubble.hide()
+            self.logger.info("全屏检测：隐藏宠物（含气泡）")
         elif was and not fs:
             self._fullscreen = False
             self.fsm.handle_event("fullscreen_off")
