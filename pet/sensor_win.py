@@ -129,30 +129,41 @@ def _is_cloaked(hwnd) -> bool:
     return bool(hr == 0 and cloaked.value)
 
 
-def _hwnd_to_rect(hwnd) -> dict | None:
-    """物理像素窗口框 → Qt 逻辑坐标 {x,y,width,height}（高 DPI 缩放换算）。"""
+def _hwnd_to_rect(hwnd, screens=None) -> dict | None:
+    """物理像素窗口框 → Qt 逻辑坐标 {x,y,width,height}（高 DPI 缩放换算）。
+
+    批次E/M3/M6（REVIEW-2026-08-28）：
+    - M3 正确变换 = 逻辑原点 + (物理 - 物理原点)/dpr——旧版直接 phys/dpr
+      漏掉屏原点项，只在"全屏同 dpr"时碰巧成立；混合缩放多屏（主 1.5×
+      副 1.0×）下副屏窗口坐标偏移数百 px，归属判定失败时更把物理像素
+      当逻辑坐标返回（偏 1.5 倍），FSM 攀爬/站顶全建立在错位数据上。
+    - M6 screens 列表由调用方传入（枚举 30 窗不再每窗调一次
+      QGuiApplication.screens()）。
+    """
     from PySide6.QtCore import QPoint
     from PySide6.QtGui import QGuiApplication
 
     rc = _RECT()
     if not _user32.GetWindowRect(hwnd, ctypes.byref(rc)):
         return None
+    if screens is None:
+        screens = QGuiApplication.screens()
     tl = QPoint(rc.left, rc.top)
     br = QPoint(rc.right, rc.bottom)
     # 物理像素→逻辑像素：借屏幕的 devicePixelRatio 换算（Win32 坐标是物理系，
     # Qt 工作区/FSM 是逻辑系；跨屏不同缩放率时按窗口所在屏的 DPI 换算）
-    for screen in QGuiApplication.screens():
+    for screen in screens:
         sg = screen.geometry()  # 逻辑坐标
-        # 用物理区判断归属：geometry*dpr 即该屏物理区
         dpr = screen.devicePixelRatio()
-        phys = (
-            int(sg.x() * dpr), int(sg.y() * dpr),
-            int((sg.x() + sg.width()) * dpr),
-            int((sg.y() + sg.height()) * dpr),
-        )
-        if rc.left >= phys[0] - 8 and rc.left < phys[2] and rc.top >= phys[1] - 8 and rc.top < phys[3]:
-            tl = QPoint(int(rc.left / dpr), int(rc.top / dpr))
-            br = QPoint(int(rc.right / dpr), int(rc.bottom / dpr))
+        # 物理原点 ≈ 逻辑原点×dpr（主屏恒成立；Qt 逻辑布局下副屏近似成立，
+        # 混合 DPI 的出入由 ±8 容差与跨屏兜底吸收）
+        px0, py0 = int(sg.x() * dpr), int(sg.y() * dpr)
+        if (rc.left >= px0 - 8 and rc.left < px0 + sg.width() * dpr
+                and rc.top >= py0 - 8 and rc.top < py0 + sg.height() * dpr):
+            tl = QPoint(int(sg.x() + (rc.left - px0) / dpr),
+                        int(sg.y() + (rc.top - py0) / dpr))
+            br = QPoint(int(sg.x() + (rc.right - px0) / dpr),
+                        int(sg.y() + (rc.bottom - py0) / dpr))
             break
     return {
         "x": tl.x(), "y": tl.y(),
@@ -178,6 +189,11 @@ def visible_windows(refresh: bool = False) -> list[dict]:
         return _windows_cache
 
     found: list[dict] = []
+    # 批次E/M6：screens 单次取用（旧版每窗在 _hwnd_to_rect 里各调一次
+    # QGuiApplication.screens() 并遍历全部屏——30 窗 × N 屏的 Python 循环
+    # 每 2s 在主线程脉冲执行）
+    from PySide6.QtGui import QGuiApplication
+    screens = QGuiApplication.screens()
 
     @_WNDENUMPROC
     def _on_hwnd(hwnd, _lparam):
@@ -188,7 +204,7 @@ def visible_windows(refresh: bool = False) -> list[dict]:
             return True
         if _is_cloaked(hwnd):
             return True
-        rect = _hwnd_to_rect(hwnd)
+        rect = _hwnd_to_rect(hwnd, screens)
         if rect and rect["width"] > 40 and rect["height"] > 40:
             rect["hwnd"] = int(hwnd)
             found.append(rect)

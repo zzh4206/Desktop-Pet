@@ -173,11 +173,22 @@ def _video_app_match(proc_name: str, video_apps) -> bool:
     def _forms(s) -> set:
         u = str(s).upper()
         return {u, u[:-4] if u.endswith(".EXE") else u + ".EXE"}
-
     allowed: set = set()
     for a in video_apps:
         allowed |= _forms(a)
     return bool(_forms(proc_name) & allowed)
+
+
+# 批次E/M5（REVIEW-2026-08-28）：win 内置视频白名单兜底——mac 端空名单
+# 回退 mouse_lock_mac.VIDEO_APPS（IINA/Safari 等 9 项），win 端此前空名单
+# 恒 False：同一份默认 config（video_apps: []），mac 有视频保护、win 门禁
+# 静默失效。config 显式给 [] 想关掉保护的用户可填 ["none"] 占位（不会命中
+# 任何进程）。形态用裸名（_forms 会补 .EXE 两形态）。
+_WIN_VIDEO_APPS_DEFAULT = (
+    "chrome", "msedge", "firefox", "brave", "opera",
+    "vlc", "potplayermini64", "potplayermini", "mpc-hc64", "mpc-hc",
+    "mpv", "wmplayer", "iina",
+)
 
 
 def _mac_paths() -> dict:
@@ -512,6 +523,11 @@ elif sys.platform == "win32":
         def acquire_single_instance_lock(self) -> bool:
             fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR)
             try:
+                # 批次E/M2（REVIEW-2026-08-28）：只锁字节 [0,1)，pid 写在
+                # 偏移 1 起——LockFile 语义下其他句柄对重叠区域的 ReadFile
+                # 直接 ERROR_LOCK_VIOLATION，旧版 pid 也在 [0,) → 二次实例
+                # _read_pid 必抛 PermissionError 被吞 → "唤醒已有实例"
+                # 在 win 上从未生效过
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             except OSError:
                 pid = self._read_pid(fd)
@@ -519,15 +535,15 @@ elif sys.platform == "win32":
                 self._activate_existing(pid)
                 return False
             os.ftruncate(fd, 0)
+            os.lseek(fd, 1, os.SEEK_SET)   # pid 写在锁区之外
             os.write(fd, str(os.getpid()).encode())
-            os.lseek(fd, 0, os.SEEK_SET)  # 解锁/再锁从文件头开始
             self._lock_fd = fd  # 进程存活期间保持锁
             return True
 
         @staticmethod
         def _read_pid(fd: int) -> int | None:
             try:
-                os.lseek(fd, 0, os.SEEK_SET)
+                os.lseek(fd, 1, os.SEEK_SET)
                 data = os.read(fd, 64).strip()
                 return int(data) if data else None
             except (OSError, ValueError):
@@ -655,16 +671,15 @@ elif sys.platform == "win32":
 
         def is_active_content(self, video_apps) -> bool:
             # 活跃内容检测：前台进程名 ∈ 视频白名单（复用 v0.3 全屏检测的
-            # 进程名管道；None apps → False）
-            if not video_apps:
-                return False
+            # 进程名管道；空名单 → 内置兜底，与 mac 语义对齐）
+            apps = tuple(video_apps) if video_apps else _WIN_VIDEO_APPS_DEFAULT
             # M8 修：不依赖全屏（旧版窗口化播放视频漏检白名单豁免）
             # M7 修：exe 名归一化比对（旧版 mac 显示名/裸名 vs CHROME.EXE
             # 恒不命中，门禁被配置漂移抵消）
             name = sensor_win.foreground_process_name()
             if not name:
                 return False
-            return _video_app_match(name, video_apps)
+            return _video_app_match(name, apps)
 
         # ---- v0.4.15 多 provider key（凭据管理器按 provider 名存取） ----
         def get_llm_key(self, provider: str, env_var: str) -> str | None:

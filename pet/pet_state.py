@@ -174,7 +174,9 @@ class PetStateStore:
             observers = list(self._observers)
         for cb in observers:
             try:
-                cb(self._state)
+                # 批次E/L11：传本次提交的 new_state——锁外再读 self._state
+                # 可能拿到比本次更新的状态，观察者视角语义混乱
+                cb(new_state)
             except Exception:
                 log.exception("on_change 回调异常")
 
@@ -394,9 +396,12 @@ class PetStateStore:
         """v0.5 重置：清内存状态回 default（YOUNG/HEALTHY/age=0/数值默认），
         重置 last_update，触发 observer。存档文件由 app 侧删除（避免单实例
         锁下 execv 自锁死，故走 in-process 复位而非重启进程）。
-        """
-        self._state = PetState.default()
-        self._last_update = time.time()
+
+        批次E/L11（REVIEW-2026-08-28）：状态变更收进锁——类内明确带 _lock
+        自称线程安全，旧版 reset 绕锁直写。"""
+        with self._lock:
+            self._state = PetState.default()
+            self._last_update = time.time()
         self._notify()
 
     @property

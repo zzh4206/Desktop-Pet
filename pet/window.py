@@ -25,6 +25,27 @@ _CLICK_MAX_PX = 5          # 位移 < 5px 才算点击
 _CLICK_MAX_MS = 300        # 时长 < 300ms 才算点击
 _DOUBLE_CLICK_MS = 500     # 双击间隔 < 500ms
 
+# 批次E/L6（REVIEW-2026-08-28）：isfile+getmtime 结果按 path 短缓存——
+# 动画帧 150ms/帧的 set_sprite 每次做两次主线程磁盘 stat；帧资产极少
+# 热替换，5s 复查粒度足够（与 _miss_cache"新增文件需重启"的既有语义同族）。
+_MTIME_TTL_S = 5.0
+_mtime_memo: dict = {}     # path -> (monotonic 采样时刻, mtime；不存在=0.0)
+
+
+def _mtime_cached(path: str) -> float:
+    import os
+    import time
+
+    now = time.monotonic()
+    hit = _mtime_memo.get(path)
+    if hit is not None and now - hit[0] < _MTIME_TTL_S:
+        return hit[1]
+    mt = os.path.getmtime(path) if os.path.isfile(path) else 0.0
+    if len(_mtime_memo) > 256:
+        _mtime_memo.clear()
+    _mtime_memo[path] = (now, mt)
+    return mt
+
 
 class WindowBase(QWidget):
     """透明置顶浮窗薄基类（纯 Qt，无平台库）。mac/win 继承后做平台 polish。"""
@@ -101,15 +122,16 @@ class WindowBase(QWidget):
         的小图（旧版存 1024×1536 全分辨率镜像图，64 条≈400MiB；且每次换帧
         都从全图 SmoothTransformation 缩放，CPU 持续消耗）——显示档单条
         <0.6MiB，键含尺寸防不同档混用。"""
-        import os
-
         self._sprite = sprite
-        if os.path.isfile(sprite.path):
+        mt = _mtime_cached(sprite.path)
+        if mt:
             from PySide6.QtGui import QPixmap
 
             # v0.10.18：key 含 mtime——帧文件被热替换时缓存自动失效
+            # （批次E/L6：mtime 结果 5s 短缓存，动画帧 150ms/帧不再每次
+            # isfile+getmtime 两次主线程磁盘 stat）
             key = (sprite.path, self._facing, sprite.width, sprite.height,
-                   os.path.getmtime(sprite.path))
+                   mt)
             pm = self._pix_cache.get(key)
             if pm is not None:
                 self._pix_cache.move_to_end(key)   # 真 LRU：命中刷新热度
@@ -220,26 +242,67 @@ class WindowBase(QWidget):
         """(x, y) = bottom_center 点 → 算 top-left 后 move。
 
         Qt 层防御钳制：无论 FSM 给出什么坐标，窗口整体保持在屏幕合集内
-        （FSM 已钳制作区，这里兜底多屏/异常值，防偶发消失）。"""
+        （FSM 已钳制作区，这里兜底多屏/异常值，防偶发消失）。
+
+        批次E/L5（REVIEW-2026-08-28）：screens/几何 5s 缓存 + QScreen 变更
+        时失效——本方法每 50ms tick 调一次，旧版每次取
+        QGuiApplication.screens() 并构建几何列表，常驻空闲功耗偏高；
+        钳制退化（窗口比屏还宽时 min>max 钉 max_x 半出屏）改取合集中心。
+        """
         from PySide6.QtGui import QGuiApplication
 
-        screens = QGuiApplication.screens()
-        if screens:
-            # M10 修：横向用 availableGeometry（排除任务栏，与 FSM _clamp_x
-            # 语义一致——旧版用 geometry 差一个任务栏宽度，任务栏停靠
-            # 左/右时宠物到不了工作区边缘）。纵向保留整屏范围。
-            avail = [s.availableGeometry() for s in screens]
-            full = [s.geometry() for s in screens]
-            min_x = min(g.x() for g in avail)
-            max_x = max(g.x() + g.width() for g in avail)
-            min_y = min(g.y() for g in full)
-            max_y = max(g.y() + g.height() for g in full)
-            x = min(max(x, min_x + self.width() / 2), max_x - self.width() / 2)
+        bounds = self._screen_bounds()
+        if bounds is not None:
+            min_x, max_x, min_y, max_y = bounds
+            if min_x + self.width() / 2 > max_x - self.width() / 2:
+                # 窗口比工作区还宽（极端小屏/超大档）：钉合集水平中心
+                x = (min_x + max_x) / 2
+            else:
+                x = min(max(x, min_x + self.width() / 2),
+                        max_x - self.width() / 2)
             y = min(max(y, min_y + self.height()), max_y)
         tx = int(x - self.width() / 2)
         ty = int(y - self.height())
         self.move(tx, ty)
         self.petMoved.emit(x, y, self.height())
+
+    # L5 缓存：QScreen 添加/移除时由 _on_screens_changed 置空
+    _SCREEN_CACHE_TTL_S = 5.0
+
+    def _screen_bounds(self) -> tuple | None:
+        import time as _time
+
+        cache = getattr(self, "_screen_bounds_cache", None)
+        now = _time.monotonic()
+        if cache is not None and now - cache[0] < self._SCREEN_CACHE_TTL_S:
+            return cache[1]
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            return None
+        # M10 修：横向用 availableGeometry（排除任务栏，与 FSM _clamp_x
+        # 语义一致——旧版用 geometry 差一个任务栏宽度，任务栏停靠
+        # 左/右时宠物到不了工作区边缘）。纵向保留整屏范围。
+        avail = [s.availableGeometry() for s in screens]
+        full = [s.geometry() for s in screens]
+        bounds = (
+            min(g.x() for g in avail),
+            max(g.x() + g.width() for g in avail),
+            min(g.y() for g in full),
+            max(g.y() + g.height() for g in full),
+        )
+        if getattr(self, "_screen_conn", None) is None:
+            app_scr = QGuiApplication.instance().screenAdded
+            rem = QGuiApplication.instance().screenRemoved
+            app_scr.connect(self._on_screens_changed)
+            rem.connect(self._on_screens_changed)
+            self._screen_conn = True
+        self._screen_bounds_cache = (now, bounds)
+        return bounds
+
+    def _on_screens_changed(self, *args) -> None:
+        self._screen_bounds_cache = None   # 热插拔/改 DPI 即刻失效
 
     # ---- v0.2/v0.3 交互入口：手势消解（§2.3）+ 拖拽 ----
     def _bottom_center_global(self) -> tuple:

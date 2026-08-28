@@ -535,6 +535,10 @@ class PetApp:
         from PySide6.QtCore import QTimer
 
         hotkey_bridge = None
+        # 批次E/L1：预定义——旧版只在 try 内赋值，ImportError 分支后若
+        # start_hotkeys 成功会在下方 bubble 引用 NameError；except 也只抓
+        # ImportError，抓不到模块级 WinDLL 加载失败的真实形态（OSError）
+        _hk_hint = ""
         try:
             if sys.platform == "darwin":
                 from pet.hotkey_mac import _HotkeySignalBridge
@@ -549,8 +553,9 @@ class PetApp:
             conflict_sig = getattr(hotkey_bridge, "conflict", None)
             if conflict_sig is not None:
                 conflict_sig.connect(on_conflict)
-        except ImportError:
-            pass  # 平台热键模块不可用 → bridge=None，回调直调
+        except (ImportError, OSError, AttributeError):
+            # 平台热键模块不可用/平台库加载失败 → bridge=None，回调直调
+            pass
 
         ok = self.adapter.start_hotkeys(
             self.cfg,
@@ -770,9 +775,12 @@ class PetApp:
                          kind=BubbleType.WARNING, anchor=self._pet_anchor())
 
     def _on_state_changed_persist(self, _state) -> None:
-        # debounce：500ms 内多次变更只存一次
-        if not self._save_timer.isActive():
-            self._save_timer.start(_SAVE_DEBOUNCE_MS)
+        # debounce：500ms 内多次变更只存一次。批次E/M1（REVIEW-2026-08-28）：
+        # 变更即重启定时器（QTimer.start 对活跃的单发定时器=重置到期点）——
+        # 旧版 isActive 不重启，衰减默认 2-6.5/h 让 1s tick 每秒判"实际
+        # 变化"，恰好每 ~1.05s 全量落盘一次（json dump+fsync+bak+replace）
+        # 持续 ~27h 直到三项触底，防抖名存实亡
+        self._save_timer.start(_SAVE_DEBOUNCE_MS)
 
     def _save_now(self) -> None:
         try:
@@ -859,7 +867,15 @@ class PetApp:
         # 每 50ms tick 实时取 QCursor 塞 sensors.mouse_pos，跟随即跟当前指针
         mp = QCursor.pos()
         self.sensors.mouse_pos = (mp.x(), mp.y())
-        action = self.fsm.step(self.store.get(), self.sensors, 0.05)
+        # 批次E/L12：实测间隔喂物理（钳 [0.01, 0.25]s）——旧版硬编码 0.05，
+        # 右键菜单/QInputDialog 等模态期间 QTimer 暂停，恢复后一拍仍只走
+        # 0.05s 物理时间（挂起 10s 宠物只老 0.05s），与衰减的 wall-clock
+        # 策略不一致；钳上限防恢复瞬间 dt 过大把宠物瞬移/穿墙
+        import time as _time
+        now = _time.monotonic()
+        dt = min(0.25, max(0.01, now - getattr(self, "_last_tick_at", now)))
+        self._last_tick_at = now
+        action = self.fsm.step(self.store.get(), self.sensors, dt)
         if action.type == ActionType.ANIMATE and action.params.get("name"):
             self._play_animate(action.params["name"])
         # v0.7.3 两段式吃鼠标：FSM 奔到光标（EAT_APPROACH→EAT_MOUSE 转换）

@@ -17,6 +17,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import logging
 import threading
+import time
 
 _log = logging.getLogger("pet")
 
@@ -167,11 +168,20 @@ class HotkeyManager:
             return self._active
 
     def stop(self) -> None:
-        """注销热键 + 结束线程（shutdown 用；幂等）。"""
+        """注销热键 + 结束线程（shutdown 用；幂等）。
+
+        批次E/L2（REVIEW-2026-08-28）：线程 id 由子线程首行写入——stop
+        早于赋值时旧版 PostThreadMessageW(0,...) 静默失败，线程永远停在
+        GetMessage，join(timeout=2.0) 把 shutdown 卡满 2s。先短暂等 id
+        就位再投递退出消息。"""
         with self._lock:
             if not self._active and not self._thread:
                 return
             self._active = False
+        if self._thread is not None and self._thread.is_alive():
+            deadline = time.monotonic() + 0.5
+            while not self._thread_id and time.monotonic() < deadline:
+                time.sleep(0.01)   # 子线程首行就会写 id，微秒级
         if self._thread_id:
             _user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
         if self._thread:

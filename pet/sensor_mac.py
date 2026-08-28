@@ -333,14 +333,20 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
 
 
 def alive_at(ref: dict) -> bool:
-    """窗口存活可见——按 wid 单窗查询（kCGWindowListOptionIncludingWindow），
-    O(1) 不枚举（win IsWindow+IsIconic 等价）。返空=已关闭/最小化。
-    无 Quartz/无 wid → True（不否决）。"""
+    """窗口存活可见——按 wid 单窗查询，O(1) 不枚举（win IsWindow+IsIconic
+    等价）。返空=已关闭/最小化。无 Quartz/无 wid → True（不否决）。
+
+    批次E/M4（REVIEW-2026-08-28）：补 OnScreenOnly——旧版仅
+    IncludingWindow，其语义恰是"即使 off-screen 也包含指定窗"，最小化窗
+    照样返回 → 支撑窗最小化后 alive 仍 True、宠物骑幽灵窗悬空（win 端
+    IsIconic 检查是对的，双端行为分叉）。"""
     wid = (ref or {}).get("wid")
     if not wid or not _HAS_QUARTZ:
         return True
     try:
-        wins = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, int(wid))
+        wins = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionIncludingWindow | kCGWindowListOptionOnScreenOnly,
+            int(wid))
     except Exception:
         log.warning("alive_at 查询失败", exc_info=True)
         return True  # 查询失败 → 不否决
@@ -398,7 +404,9 @@ def rect_at(ref: dict) -> dict | None:
     if not wid or not _HAS_QUARTZ:
         return None
     try:
-        wins = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, int(wid))
+        wins = CGWindowListCopyWindowInfo(
+            kCGWindowListOptionIncludingWindow | kCGWindowListOptionOnScreenOnly,
+            int(wid))
     except Exception:
         log.warning("rect_at 查询失败", exc_info=True)
         return None
