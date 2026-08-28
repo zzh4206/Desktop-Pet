@@ -104,17 +104,17 @@
         1534
       ],
       "pivot": [
-        700.0,
-        1238.0
+        595.0,
+        1237.0
       ],
       "z": "under_core",
       "kind": "limb",
       "sway": {
-        "amp_deg": 6.0,
+        "amp_deg": 9.0,
         "period_ms": 2600.0,
         "phase_ms": 0.0
       },
-      "base_deg": -6.0
+      "base_deg": 9.0
     },
     {
       "id": "leg_back_healthy_side",
@@ -135,7 +135,7 @@
       "sway": {
         "amp_deg": 12.0,
         "period_ms": 2600.0,
-        "phase_ms": 0.0
+        "phase_ms": 1300.0
       },
       "base_deg": 12.0
     },
