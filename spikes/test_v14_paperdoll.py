@@ -144,6 +144,24 @@ def main() -> int:
     QTest.qWait(200)
     win.set_motion_params(tilt_deg=0, walking=False, walk_hz=0.0)
 
+    # ---- T3e 淡化策略（v0.14.3）：大姿态动作硬切、blink 保留淡化 ----
+    def _seq(name, n):
+        return [SpriteRef(os.path.join(
+            REPO, "assets", "frames", f"final_{name}_{i}.png"),
+            320, 320) for i in range(n)]
+
+    win.play_frames(_seq("stretch", 3), loop=False, interval_ms=260)
+    check("T3e-1 stretch 硬切（防双臂残影）", win._fade_ms == 0)
+    win.stop_frames()
+    land = [SpriteRef(os.path.join(REPO, "assets", "frames",
+                                   "final_fall_land.png"), 320, 320)]
+    win.play_frames(land, loop=False, interval_ms=200)
+    check("T3e-2 land 瞬帧硬切", win._fade_ms == 0)
+    win.stop_frames()
+    win.play_frames(_seq("idle_blink", 2), loop=True, interval_ms=300)
+    check("T3e-3 blink 保留交叉淡化（>0）", win._fade_ms > 0)
+    win.stop_frames()
+
     # ---- T4 app._frame_tick 路由（stub self，不起完整 PetApp）----
     import app as app_mod
 

@@ -144,7 +144,11 @@ Item {
             width: (d.px_rect[2] - d.px_rect[0]) * root.fitScale
             height: (d.px_rect[3] - d.px_rect[1]) * root.fitScale
             fillMode: Image.Stretch          // 包围盒即内容框
-            mipmap: true; smooth: true
+            smooth: true
+            // mipmap 刻意关闭：GPU 三线性在部件持续旋转（sway/步频）下
+            // 逐帧跳 LOD 层=颜色微弱呼吸（实机 D3D11 目检；软件后端无 mip
+            // 采样复现不了）。0.31 缩放的双线性锐化噪远轻于色移。
+            mipmap: false
             transform: Rotation {
                 origin.x: (d.pivot[0] - d.px_rect[0]) * root.fitScale
                 origin.y: (d.pivot[1] - d.px_rect[1]) * root.fitScale

@@ -243,7 +243,11 @@ class RigWindow(WindowBase):
         self._frame_loop = bool(loop)
         first = os.path.basename(self._frames[0].path)
         # 文件名形如 {stage}_walk_0.png —— 阶段前缀在前，须用子串判定
-        if any(seg in first for seg in ("_walk_", "_chew_", "_eat_mouse_")):
+        # v0.14.3：stretch/roll/fall 也硬切——伸懒腰等动作的姿态幅度大
+        # （手臂扬起/抬脚），淡化=新旧两图肢体同时半透明（实机目检抓到
+        # 双臂双脚残影）；仅 blink（同姿态闭眼）保留交叉淡化。
+        if any(seg in first for seg in ("_walk_", "_chew_", "_eat_mouse_",
+                                        "_stretch_", "_roll", "_fall_")):
             self._fade_ms = 0          # 硬切
         else:
             # 过渡时长 = 帧间隔的 ~45%，钳在 70–150ms（间隔过短也保底可读）
