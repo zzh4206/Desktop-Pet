@@ -134,3 +134,52 @@ assert text == appended[-1].content
 print("  ✅ F14: 触顶空文本补终答 turn（text=终答非中间轮）")
 
 print(f"\n真客户端冒烟：9/9 通过")
+
+# ---- 批次G/F29（REVIEW-2026-08-28）：可选真 API 冒烟 ----
+# 历史教训（REVIEW-08-25/27 H1/H2）：mock 掩盖真客户端问题——SSE 聚合/
+# [DONE]/续轮回灌/400 降级从未被真实数据验证过。默认跳过；设
+# DESKTOP_PET_REAL_SMOKE=1 且提供 key 时跑一轮含 tool_call 的真实
+# chat_once（几百分钱 token），CI/手动周期性跑。
+import os
+if os.environ.get("DESKTOP_PET_REAL_SMOKE") == "1":
+    key = (os.environ.get("DEEPSEEK_API_KEY")
+           or os.environ.get("DS_API_KEY"))
+    if not key:
+        print("⏭ DESKTOP_PET_REAL_SMOKE=1 但无 DEEPSEEK_API_KEY，跳过")
+    else:
+        import pet.llm as _lm
+
+        class _EchoReg:
+            """真 tool_call 闭环：第一个声明的工具原样成功回灌。"""
+            def schemas(self):
+                return [{
+                    "type": "function",
+                    "function": {
+                        "name": "echo_tool",
+                        "description": "把 text 原样返回（冒烟用）",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"text": {"type": "string"}},
+                            "required": ["text"],
+                        },
+                    },
+                }]
+
+            def dispatch(self, name, args, ctx):
+                from pet.tools_schema import ToolResult
+                return ToolResult(True, f"echo: {args.get('text', '')}")
+
+        rc = _lm.OpenAICompatibleClient(
+            api_key=key, registry=_EchoReg())
+        text, appended = rc.chat_once(
+            [_lm.ChatTurn("user",
+                          "调用 echo_tool 传文本'冒烟'，然后用一句话确认。")],
+            None)
+        used_tool = any(t.role == "tool" for t in appended)
+        ok = bool(text.strip()) and used_tool
+        print(f"  {'✅' if ok else '❌'} F29 真API冒烟："
+              f"回复 {len(text)} 字，tool 轮 {'有' if used_tool else '无'}，"
+              f"usage={rc.usage.total_tokens}t")
+        assert ok, "真 API 冒烟失败"
+else:
+    print("⏭ 真API冒烟未启用（DESKTOP_PET_REAL_SMOKE=1 + DEEPSEEK_API_KEY）")

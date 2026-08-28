@@ -1,5 +1,14 @@
 """v0.10 立绘后处理（mac 版）—— 832×1216 白底 RGBA → 入仓透明成品。
 
+⚠️ 已废弃（REVIEW-2026-08-28 T6，勿再直接运行）：
+  · rembg(u2net) 去背管线已被云端 BiRefNet/ToonOut 抠图取代（见
+    《本地LoRA产线方案》与 ai-art-pipeline 记录）；
+  · STAGE_SIZE 64/96/128 是 v0.10.12 之前的旧档——现行显示档为
+    young 192 / adult 256 / final 320（pet/asset_provider._STAGE_SIZE），
+    今天重跑会把成品缩到旧尺寸=放大 3 倍发糊（当年用户投诉的回归）；
+  · DST 是 mac 专用路径。留档仅作历史工艺参考；如需复刻流程，参照
+    tools/split_parts.py + 云端产线重写。
+
 忠实复刻 win 端 `pet_v2_postprocess.py` + `pet_v2_gap_fix.py`（交接文档§四）：
 rembg(u2net) 去背 → 连通背景白填充(两轮 flood) → 1px alpha 腐蚀 →
 alpha bbox 裁切 → gap_fix(腿间/袜间灰白净化) → 长边 LANCZOS 缩到
