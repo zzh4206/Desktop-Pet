@@ -94,52 +94,6 @@
       }
     },
     {
-      "id": "leg_front_healthy_side",
-      "file": "parts/leg_front_healthy_side.png",
-      "source_figure": "healthy_side",
-      "px_rect": [
-        664,
-        1235,
-        1017,
-        1534
-      ],
-      "pivot": [
-        595.0,
-        1237.0
-      ],
-      "z": "under_core",
-      "kind": "limb",
-      "sway": {
-        "amp_deg": 9.0,
-        "period_ms": 2600.0,
-        "phase_ms": 0.0
-      },
-      "base_deg": 9.0
-    },
-    {
-      "id": "leg_back_healthy_side",
-      "file": "parts/leg_back_healthy_side.png",
-      "source_figure": "healthy_side",
-      "px_rect": [
-        341,
-        1198,
-        563,
-        1496
-      ],
-      "pivot": [
-        500.0,
-        1200.0
-      ],
-      "z": "under_core",
-      "kind": "limb",
-      "sway": {
-        "amp_deg": 12.0,
-        "period_ms": 2600.0,
-        "phase_ms": 1300.0
-      },
-      "base_deg": 12.0
-    },
-    {
       "id": "leg_l_neglected_neutral",
       "file": "parts/leg_l_neglected_neutral.png",
       "source_figure": "neglected_neutral",
@@ -179,6 +133,50 @@
       "kind": "limb",
       "sway": {
         "amp_deg": 7.0,
+        "period_ms": 2600.0,
+        "phase_ms": 1300.0
+      }
+    },
+    {
+      "id": "leg_front_healthy_side",
+      "file": "parts/leg_front_healthy_side.png",
+      "source_figure": "healthy_side",
+      "px_rect": [
+        664,
+        1145,
+        1017,
+        1534
+      ],
+      "pivot": [
+        595.0,
+        1237.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 9.0,
+        "period_ms": 2600.0,
+        "phase_ms": 0.0
+      }
+    },
+    {
+      "id": "leg_back_healthy_side",
+      "file": "parts/leg_back_healthy_side.png",
+      "source_figure": "healthy_side",
+      "px_rect": [
+        341,
+        1108,
+        563,
+        1496
+      ],
+      "pivot": [
+        500.0,
+        1200.0
+      ],
+      "z": "under_core",
+      "kind": "limb",
+      "sway": {
+        "amp_deg": 12.0,
         "period_ms": 2600.0,
         "phase_ms": 1300.0
       }
