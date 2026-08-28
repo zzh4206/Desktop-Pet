@@ -35,6 +35,19 @@ _TIMEOUT = (10, 120)  # (connect, read)；read 长，流式 chunk 间隔短
 FALLBACK_REPLY = "我开小差了～一会儿再问我吧。"
 OFFLINE_REPLY = "当前离线，聊天暂时不可用。"
 
+# 批次A（REVIEW-2026-08-28 F12）：回灌 DS 的工具结果上限——clipboard get
+# 等可返回任意大文本，一次打爆上下文/费用；截断只影响回灌消息，data 全量。
+_TOOL_RESULT_MAX_CHARS = 4000
+
+
+def truncate_tool_result(content: str,
+                         limit: int = _TOOL_RESULT_MAX_CHARS) -> str:
+    """工具结果回灌前截断（纯函数便于单测）。"""
+    if len(content) <= limit:
+        return content
+    return (content[:limit]
+            + f"\n[工具结果过长，已截断（原文 {len(content)} 字符）]")
+
 
 class OfflineError(Exception):
     """无网络连接——app 应气泡提示且不阻塞宠物。"""
@@ -270,9 +283,9 @@ class OpenAICompatibleClient(LLMClient):
             if log.isEnabledFor(logging.INFO):
                 log.info("DS 工具调用 %s args=%s", name, args)
             res = self._registry.dispatch(name, args, ctx)
-            content = res.message
+            content = truncate_tool_result(res.message)
             if not getattr(res, "success", True):
-                content = f"[工具失败] {res.message}"
+                content = f"[工具失败] {content}"
             results.append(_tool_result_message(tc_id, content))
         return results
 

@@ -25,6 +25,15 @@ _APP_NAME = re.compile(r"^(?![.\s]+$)[A-Za-z0-9 .\-]+$")
 _HTTP_URL = re.compile(r"^https?://", re.IGNORECASE)
 # 进程名：xxx.exe（taskkill /IM 格式）
 _PROC_NAME = re.compile(r"^[A-Za-z0-9 _\-.]+\.exe$", re.IGNORECASE)
+# 批次A/F6（REVIEW-2026-08-28）：系统关键进程硬拒——explorer/dwm 一杀黑屏，
+# csrss/winlogon/lsass 等系统进程任务管理器都不该碰。mac 端早有
+# _PROC_DENYLIST，win 端此前只靠确认框（一键"继续"即杀），双端对齐。
+_PROC_DENYLIST = frozenset({
+    "explorer.exe", "dwm.exe", "csrss.exe", "winlogon.exe", "lsass.exe",
+    "services.exe", "svchost.exe", "smss.exe", "wininit.exe", "logonui.exe",
+    "sihost.exe", "ctfmon.exe", "fontdrvhost.exe", "searchhost.exe",
+    "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+})
 
 OPEN_APP_SCHEMA = ToolSchema(
     name="open_app",
@@ -47,7 +56,10 @@ OPEN_APP_SCHEMA = ToolSchema(
         },
         "additionalProperties": False,
     },
+    # 批次A（REVIEW-2026-08-28 H4/F4）：url 可被注入驱向钓鱼页（含经记忆
+    # 通道的存储型注入），与纯 app 名不同，按参数走确认框
     dangerous=False,
+    dangerous_when=lambda a: bool((a.get("url") or "").strip()),
 )
 
 
@@ -114,7 +126,9 @@ CLIPBOARD_SCHEMA = ToolSchema(
         "required": ["action"],
         "additionalProperties": False,
     },
-    dangerous=False,
+    # 批次A（REVIEW-2026-08-28 H5）：剪贴板常含密码/token 等敏感内容，
+    # get 整段回灌 LLM=直送第三方 API、set 覆盖用户数据——读写都过确认框
+    dangerous=True,
     # L10：text 是任意用户文本载荷，跳过路径/命令黑名单扫描
     text_fields=("text",),
 )
@@ -169,6 +183,17 @@ _PATTERN_BAD = set("<>|:$'\"")
 _SCOPE_BAD = set("<>|:$'\"/\\") | {".."}
 
 
+def _ps_sq(s: str) -> str:
+    """PowerShell 单引号字符串转义（批次A/H6）：``'`` → ``''``。
+
+    root 取自 expanduser("~")（Windows 用户名可含 ``'``，如 O'Brien），
+    pattern/scope 是 LLM 可控串——任何一处裸 ``'`` 都会提前闭合引号，
+    让后续 -Filter 内容脱离引号上下文成为独立语句（任意命令执行）。
+    pattern 虽已禁 ``'``，这里对三处统一转义做纵深防御。
+    """
+    return s.replace("'", "''")
+
+
 class FileSearchHandler:
     """Get-ChildItem -Recurse -Filter，根限定 %USERPROFILE%（防全盘扫）。"""
 
@@ -185,7 +210,8 @@ class FileSearchHandler:
             if not os.path.isdir(root):
                 return ToolResult(False, f"目录不存在: {scope}")
         ok, out = _ps_run(
-            [f"Get-ChildItem -Path '{root}' -Recurse -Filter '{pattern}' "
+            [f"Get-ChildItem -Path '{_ps_sq(root)}' -Recurse "
+             f"-Filter '{_ps_sq(pattern)}' "
              f"-File -ErrorAction SilentlyContinue "
              f"| Select-Object -First 20 -ExpandProperty FullName"],
             timeout=15.0,
@@ -355,6 +381,9 @@ class ProcessHandler:
         elif name:
             if not _PROC_NAME.match(name):
                 return ToolResult(False, f"进程名不合法: {name!r}")
+            if name.lower() in _PROC_DENYLIST:
+                return ToolResult(
+                    False, f"{name} 是系统关键进程，不允许通过宠物结束。")
             argv += ["/IM", name]
             label = name
         else:

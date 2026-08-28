@@ -94,7 +94,7 @@ def main() -> int:
         MEMORY_SAVE_SCHEMA, MEMORY_SEARCH_SCHEMA,
     )
 
-    reg5 = ToolRegistry()
+    reg5 = ToolRegistry(confirm_fn=lambda *a: True)  # 批次A：clipboard 已 dangerous，豁免测试需放行 confirm
     # 用 dispatch 层验证豁免（handler 用 Stub 不真写剪贴板）
     reg5.register(CLIPBOARD_SCHEMA, StubHandler(ToolResult(True, "copied")))
     r5 = reg5.dispatch(
@@ -128,6 +128,58 @@ def main() -> int:
     # 重复注册应 warn（不崩，覆盖）
     reg4.register(safe_schema, StubHandler(ToolResult(True, "b")))
     check("register 同名覆盖不崩", reg4._handlers["safe_tool"]._result.message == "b")
+
+    # ---- 批次A（REVIEW-2026-08-28 H5/F4/H6/F6/F12）----
+    # H5：clipboard 读写都走确认框——无 confirm_fn 的 registry 必 fail-closed
+    reg6 = ToolRegistry()
+    reg6.register(CLIPBOARD_SCHEMA, StubHandler(ToolResult(True, "leak")))
+    r8 = reg6.dispatch("clipboard", {"action": "get"},
+                       ToolContext(pet_state=None, user_name="x", config={}))
+    check("批次A clipboard dangerous：无 confirm_fn fail-closed 不执行",
+          r8.success is False and "取消" in r8.message)
+
+    # F4：open_app 按 dangerous_when 分流——url 走确认、纯 app 名不走
+    reg6.register(WIN_SCHEMA, StubHandler(ToolResult(True, "opened")))
+    r9 = reg6.dispatch("open_app", {"url": "https://example.com"},
+                       ToolContext(pet_state=None, user_name="x", config={}))
+    check("批次A open_app url 无 confirm_fn fail-closed",
+          r9.success is False and "取消" in r9.message)
+    r10 = reg6.dispatch("open_app", {"app": "notepad"},
+                        ToolContext(pet_state=None, user_name="x", config={}))
+    check("批次A open_app 纯 app 名不走 confirm_fn（dangerous_when 分流）",
+          r10.success is True)
+    from pet.tools_mac import CLIPBOARD_SCHEMA as MAC_CLIP
+    check("批次A mac clipboard 同步 dangerous + text_fields 对齐",
+          MAC_CLIP.dangerous is True and MAC_CLIP.text_fields == ("text",))
+
+    # H6：PowerShell 单引号转义
+    from pet.tools_win import _ps_sq
+    check("批次A _ps_sq 单引号翻倍转义", _ps_sq("C:\\Users\\O'Brien") ==
+          "C:\\Users\\O''Brien")
+    check("批次A _ps_sq 无引号原样返回", _ps_sq("C:\\Users\\lenovo") ==
+          "C:\\Users\\lenovo")
+
+    # F6：win process 系统关键进程硬拒（直接调 handler，不真跑 taskkill）
+    from pet.tools_win import ProcessHandler
+    r11 = ProcessHandler().execute(
+        {"name": "explorer.exe"},
+        ToolContext(pet_state=None, user_name="x", config={}))
+    check("批次A process 硬拒 explorer.exe",
+          r11.success is False and "关键进程" in r11.message)
+    r12 = ProcessHandler().execute(
+        {"name": "EXPLORER.EXE"},
+        ToolContext(pet_state=None, user_name="x", config={}))
+    check("批次A process 硬拒大小写不敏感", r12.success is False)
+
+    # F12：工具结果回灌截断
+    from pet.llm import truncate_tool_result, _TOOL_RESULT_MAX_CHARS
+    long_text = "x" * (_TOOL_RESULT_MAX_CHARS + 500)
+    cut = truncate_tool_result(long_text)
+    check("批次A 超限工具结果被截断且带标注",
+          len(cut) < _TOOL_RESULT_MAX_CHARS + 100
+          and "已截断" in cut and str(_TOOL_RESULT_MAX_CHARS + 500) in cut)
+    check("批次A 未超限结果原样返回",
+          truncate_tool_result("short") == "short")
 
     # ---- _APP_NAME 禁纯点号串（v0.8.1，win/mac 双端）----
     from pet.tools_win import _APP_NAME as WIN_APP

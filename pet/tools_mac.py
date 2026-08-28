@@ -61,6 +61,8 @@ OPEN_APP_SCHEMA = ToolSchema(
         "additionalProperties": False,
     },
     dangerous=False,
+    # 批次A（REVIEW-2026-08-28 H4/F4）：url 可被注入驱向钓鱼页，按参数确认
+    dangerous_when=lambda a: bool((a.get("url") or "").strip()),
 )
 
 
@@ -167,7 +169,11 @@ CLIPBOARD_SCHEMA = ToolSchema(
         "required": ["action"],
         "additionalProperties": False,
     },
-    dangerous=False,
+    # 批次A（REVIEW-2026-08-28 H5）：剪贴板敏感内容回灌 LLM/覆盖用户数据，
+    # 读写都过确认框（与 win 对齐）；并补 L10 text_fields——mac 端此前缺失，
+    # 含 ".." 字样的正常文本会被黑名单误拒（双端行为分叉）
+    dangerous=True,
+    text_fields=("text",),
 )
 
 

@@ -60,6 +60,10 @@ class ToolSchema:
     description: str
     parameters: dict
     dangerous: bool = False  # True→dispatch 先走 confirm_fn
+    # 批次A（REVIEW-2026-08-28 H4/F4）：按参数判定危险的谓词——如 open_app
+    # 带 url（钓鱼面）时需确认、纯 app 名不需要。dangerous=True 或
+    # dangerous_when(args) 为真，任一即走 confirm_fn。
+    dangerous_when: Optional[Callable[[dict], bool]] = None
     # L10 修（REVIEW-2026-08-25）：纯文本载荷字段名——这些字段的值跳过
     # 路径/命令黑名单扫描（旧版一刀切：复制含 ".." 的文本、记忆存
     # "..." 事实全被拒）。文件路径类字段（file_search.pattern 等）不列。
@@ -191,8 +195,11 @@ class ToolRegistry:
             log.warning("工具 %s 参数命中黑名单: %r", name, bad)
             return ToolResult(False, "参数包含不安全的路径或命令。")
 
-        # 危险操作确认（v0.4 open_app 不危险，框架就位）
-        if schema.dangerous:
+        # 危险操作确认（v0.4 open_app 不危险，框架就位；批次A 补
+        # dangerous_when 按参数判定：open_app url 这类"部分参数危险"）
+        if schema.dangerous or (
+            schema.dangerous_when is not None and schema.dangerous_when(args or {})
+        ):
             cmd_repr = f"{name}({args})"
             ok = self._confirm_on_main("危险操作确认", cmd_repr, "该操作不可撤销。")
             if not ok:
