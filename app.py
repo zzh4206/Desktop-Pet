@@ -148,6 +148,21 @@ class PetApp:
             self.window = adapter.create_pet_window(sprite0)
         self._part_walk = presentation == "paperdoll"
         self.window.set_sprite_provider(self.provider)
+        # 批次A/H1（REVIEW-2026-08-31）：进化换档重载 rig spec——三阶段
+        # manifest 共用 figure 键，spec 终生绑启动阶段会把新阶段 neutral
+        # 映射回旧阶段派生核心图（宠物在 rig/paperdoll 档"长不大"直到重启）。
+        # 订阅须先于 window.on_state_change（后者换图即按新 spec 解析）
+        self._rig_stage = self.store.get().stage.value
+
+        def _on_stage_maybe_changed(s) -> None:
+            if s.stage.value == self._rig_stage:
+                return
+            self._rig_stage = s.stage.value
+            set_stage = getattr(self.window, "set_stage", None)
+            if callable(set_stage):
+                set_stage(s.stage.value)
+
+        self.store.on_change(_on_stage_maybe_changed)
         # v0.14.4 行走覆盖：行走期间改显部件步态载体 figure，停步还原
         # mood 立绘——否则行走静默回退 GPT 帧环，帧间烤死的手臂摆动/
         # 尾巴位移/色调差即实机报告的观感问题。

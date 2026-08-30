@@ -89,6 +89,7 @@ def build_rig_window(base_cls, sprite: SpriteRef, stage: str,
         return base_cls(sprite)
 
     win = RigWindow(sprite, spec, defer_quick=defer_quick)
+    win._rig_root = rig_root   # 进化换档重载用（set_stage）
     if not (win.rig_active or getattr(win, "_rig_pending", False)):
         win.deleteLater()                 # 场景加载失败 → 换干净基类实例
         return base_cls(sprite)
@@ -105,6 +106,7 @@ class RigWindow(WindowBase):
     _quick = None
     _root = None
     _rig_pending = False
+    _rig_root = ""             # build_rig_window 注入（set_stage 重载用）
 
     def __init__(self, sprite: SpriteRef, spec: RigSpec | None = None,
                  defer_quick: bool = False):
@@ -129,6 +131,27 @@ class RigWindow(WindowBase):
             else:
                 self._init_quick()
 
+    @staticmethod
+    def _parts_model(spec: RigSpec) -> list:
+        """spec.parts → QML partsModel（dict 列表）。_init_quick 与
+        set_stage（进化换档重建）共用。"""
+        parts = []
+        for p in spec.parts:
+            parts.append({
+                "id": p.id,
+                "_url": _file_url(p.path),
+                "source_figure": p.source_figure,
+                "px_rect": [float(v) for v in p.px_rect],
+                "pivot": [float(v) for v in p.pivot],
+                "z": p.z,
+                "kind": p.kind,
+                "base_deg": float(p.base_deg),
+                "sway": {"amp_deg": float(p.amp_deg),
+                         "period_ms": float(p.period_ms),
+                         "phase_ms": float(p.phase_ms)},
+            })
+        return parts
+
     # ---------------- 场景初始化 ----------------
     def _init_quick(self) -> None:
         try:
@@ -149,21 +172,7 @@ class RigWindow(WindowBase):
             # 0×0（P0 spike 实测，spikes/spike_rig_qtquick.py）
             w.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
 
-            parts = []
-            for p in self._spec.parts:
-                parts.append({
-                    "id": p.id,
-                    "_url": _file_url(p.path),
-                    "source_figure": p.source_figure,
-                    "px_rect": [float(v) for v in p.px_rect],
-                    "pivot": [float(v) for v in p.pivot],
-                    "z": p.z,
-                    "kind": p.kind,
-                    "base_deg": float(p.base_deg),
-                    "sway": {"amp_deg": float(p.amp_deg),
-                             "period_ms": float(p.period_ms),
-                             "phase_ms": float(p.phase_ms)},
-                })
+            parts = self._parts_model(self._spec)
             qml = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "rig_scene.qml")
             w.setSource(QUrl.fromLocalFile(qml))
@@ -195,6 +204,36 @@ class RigWindow(WindowBase):
     def rig_active(self) -> bool:
         """场景是否在驱动画面（降级判定统一入口）。"""
         return self._quick_ok and self._root is not None
+
+    def set_stage(self, stage: str) -> None:
+        """进化换档（REVIEW-2026-08-31 H1）：重载该阶段清单 + 重建部件模型
+        + 当前画面按新 spec 重解析。
+
+        三阶段 manifest 共用 figure 键（healthy_neutral 等）——不换档则
+        ``_resolve_display`` 把新阶段立绘映射回启动阶段的派生核心图，
+        宠物在 rig/paperdoll 档视觉上"长不大"直到重启。新阶段清单缺失/
+        非法 → 保持旧 spec（降级铁律：展示层永不因换档崩）。"""
+        if self._spec is not None and stage == self._spec.stage:
+            return
+        root = self._rig_root or default_rig_root()
+        spec = load_rig_spec(os.path.join(root, stage), stage)
+        if spec is None:
+            log.warning("rig 阶段 %s 清单缺失/非法，spec 保持 %s 不变",
+                        stage, self._spec.stage if self._spec else None)
+            return
+        old = self._spec.stage if self._spec else None
+        self._spec = spec
+        self._src_size_cache.clear()
+        log.info("rig 换档 %s → %s：%d figures / %d parts",
+                 old, stage, len(spec.figures), len(spec.parts))
+        if not self.rig_active:
+            return
+        self._root.setProperty("partsModel", self._parts_model(spec))
+        # 当前画面按新 spec 重解析（帧序列播放中不动——收尾路径自然重解）
+        if self._walk_showing and self._walk_sprite is not None:
+            self._show_now(self._walk_sprite.path)
+        elif not self._frames and os.path.isfile(self._sprite.path):
+            self._show_now(self._sprite.path)
 
     # ---------------- 渲染主路径（基类语义的场景版） ----------------
     def set_sprite(self, sprite: SpriteRef) -> None:

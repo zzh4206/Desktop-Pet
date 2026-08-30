@@ -262,6 +262,37 @@ def main() -> int:
         win_d.stop_frames()
         win_d._frame_timer.stop()
 
+    # ---- T11 批次A/H1（REVIEW-2026-08-31）：进化换档 spec 重载 ----
+    # 三阶段 manifest 共用 figure 键——旧版 spec 终生绑启动阶段，进化后
+    # neutral 被 _resolve_display 映射回启动阶段的派生核心图（"长不大"）
+    src_h_neutral = os.path.join(
+        REPO, "assets", "ai", "final_healthy_neutral.png")
+    win2 = build_rig_window(WindowBase, SpriteRef(
+        path=src_h_neutral, width=320, height=320), "final",
+        rig_root=os.path.join(REPO, "assets", "rig"))
+    check("T11a final 档 neutral → final 派生核心",
+          isinstance(win2, RigWindow) and win2.rig_active
+          and _usProp(win2, "figASrc").endswith(
+              "rig/final/figs/healthy_neutral.png"))
+    n_final_parts = len(win2._root.property("partsModel") or [])
+    check("T11b final 部件模型 8 件（2 尾 + 4 正腿 + 2 侧腿）",
+          n_final_parts == 8)
+    win2.set_stage("young")
+    young_neutral = os.path.join(
+        REPO, "assets", "ai", "young_healthy_neutral.png")
+    win2.set_sprite(SpriteRef(path=young_neutral, width=192, height=192))
+    check("T11c 换档后 young neutral → young 派生核心（不再错档 final）",
+          _usProp(win2, "figASrc").endswith(
+              "rig/young/figs/healthy_neutral.png"))
+    check("T11d 换档后部件模型同步 young（4 件腿件）",
+          len(win2._root.property("partsModel") or []) == 4)
+    # 降级铁律：新阶段清单缺失 → 保持当前 spec（不崩不清空）
+    win2._rig_root = tempfile.mkdtemp()
+    win2.set_stage("adult")
+    check("T11e 新阶段无清单 → spec 保持 young 不变",
+          win2._spec.stage == "young")
+    win2.stop_frames()
+
     # 收尾清理定时器，防 Qt teardown 抖（对齐 v04 教训）
     win.stop_frames()
     win._frame_timer.stop()

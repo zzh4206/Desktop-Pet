@@ -174,7 +174,11 @@ Item {
                                 * Math.sin(2 * Math.PI * (root.gaitPhase
                                     + (s.phase_ms || 0) / s.period_ms)))
                         }
-                        const hz = 1000.0 / s.period_ms
+                        // rL1（REVIEW-2026-08-31）：缺省频率与 bob/rot 同源
+                        // （gaitHz 在 walkHz=0 时恒 1.3Hz）——旧版
+                        // 1000/period_ms=0.385Hz 与身体律动不同拍；
+                        // hz 恒定故绝对时间式无瞬移风险
+                        const hz = root.gaitHz
                         return root.gaitK * ((d.base_deg || 0) + s.amp_deg
                             * Math.sin(2 * Math.PI * (clock.t * hz / 1000.0
                                 + (s.phase_ms || 0) / s.period_ms)))
