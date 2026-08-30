@@ -94,6 +94,12 @@ class MemoryStore:
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                # 批次B/M3（REVIEW-2026-08-31）：顶层非 dict（如 "[]"）旧版
+                # data.get 直接 AttributeError 崩 _setup_chat——对齐
+                # pet_state.load 的 isinstance 守卫，跳档不崩
+                if not isinstance(data, dict):
+                    _log.warning("记忆档 %s 顶层非 dict，跳过", p)
+                    continue
                 if isinstance(data.get("memories"), list):
                     store._mem = []
                     for m in data["memories"]:

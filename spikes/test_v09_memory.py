@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tempfile
@@ -230,6 +231,50 @@ def main() -> int:
     )
     win.dropEvent(ev_drop)
     check("T12 dropEvent 发 fileDropped", dropped == ["C:/tmp/test.txt"])
+
+    # ---- T13 批次B/M3（REVIEW-2026-08-31）：损坏记忆档守卫 ----
+    # 顶层非 dict（合法 JSON 如 []）旧版 data.get AttributeError 崩 _setup_chat
+    bad = os.path.join(tempfile.gettempdir(), "dp_test_v09_bad.json")
+    with open(bad, "w", encoding="utf-8") as f:
+        f.write("[]")
+    m_bad = MemoryStore.load(bad)
+    check("T13 顶层非 dict 记忆档 → 空库不崩",
+          isinstance(m_bad, MemoryStore) and len(m_bad) == 0)
+    os.remove(bad)
+
+    # ---- T14 批次B/H2（REVIEW-2026-08-31）：无 LLM key 记忆仍可用 ----
+    # 旧版 _setup_chat 无 key 提前 return，MemoryStore/singleton 全部跳过，
+    # 托盘"记忆管理"→ QML 无 PetMem singleton → 永不加载
+    import types as _types
+
+    import app as app_mod
+
+    fake = app_mod.PetApp.__new__(app_mod.PetApp)
+    fake.logger = logging.getLogger("pet")
+    fake.cfg = {"llm": {"providers": {}}}
+    fake._paths = {"data_dir": tempfile.mkdtemp()}
+    fake.adapter = _types.SimpleNamespace(
+        confirm_dangerous=lambda *a: False,
+        get_llm_key=lambda *a: None,
+        get_paths=lambda: fake._paths,
+    )
+    fake._ensure_llm_key = lambda *a, **k: None   # 不弹 QInputDialog
+    from pet.bubble import BubbleWidget
+    fake.bubble = BubbleWidget()
+    fake._pet_anchor = lambda: (0, 0, 96)
+    fake.tray = _types.SimpleNamespace(set_chat_callback=lambda cb: None)
+    fake._mem_window = None
+    fake._mem_engine = None
+    fake._setup_chat()
+    check("T14a 无 key 路径 MemoryStore 已加载",
+          getattr(fake, "memory", None) is not None)
+    check("T14b 无 key 路径 mem bridge 已建",
+          getattr(fake, "_mem_bridge", None) is not None)
+    fake._show_mem()
+    check("T14c 无 key 路径记忆页可打开（singleton 已预注册）",
+          fake._mem_window is not None)
+    if fake._mem_window is not None:
+        fake._mem_window.hide()
 
     # 平台 open_path：目录+文件
     from pet.platform import get_platform_adapter

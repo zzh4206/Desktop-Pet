@@ -331,40 +331,21 @@ class PetApp:
 
         无 key → 气泡提示首次引导（QInputDialog）；仍无 key → 聊天禁用，宠物仍跑。
         目前只 deepseek（首批验证中间层）；后续加 claude/openai 只在 create_client
-        工厂加分支 + config providers 段加条目。"""
-        providers_cfg = self.cfg.get("llm", {}).get("providers", {})
-        # 扫描已注入 key 的 provider（Keychain + env）
-        available = []
-        for name, pcfg in providers_cfg.items():
-            env_var = pcfg.get("api_key_env", "")
-            key = self.adapter.get_llm_key(name, env_var)
-            if key:
-                available.append((name, key))
+        工厂加分支 + config providers 段加条目。
 
-        if not available:
-            # 首次引导：默认 deepseek（config 里有的第一个）
-            default_name = next(iter(providers_cfg), "deepseek")
-            default_env = providers_cfg.get(default_name, {}).get("api_key_env", "DEEPSEEK_API_KEY")
-            key = self._ensure_llm_key(default_name, default_env)
-            if not key:
-                self.logger.warning("LLM key 未设置，聊天禁用（宠物仍跑）")
-                QTimer.singleShot(
-                    1500,
-                    lambda: self.bubble.show(
-                        "还没设置 API key，聊天暂时不可用～",
-                        anchor=self._pet_anchor(),
-                    ),
-                )
-                return
-            available = [(default_name, key)]
+        批次B/H2（REVIEW-2026-08-31）：记忆库加载 + 工具注册表 + mem/perm
+        singleton 预注册全部**先于** key 判定——旧版无 key 提前 return，
+        记忆管理页 QML 因 singleton 未注册永不加载、MemoryStore 从不读盘，
+        v0.9"UI 查看/删除/清空"Must 对无 key 用户整体失效。"""
+        # v0.9 长期记忆（共享，与平台工具并列；加工具不改 llm.py）
+        from pet.memory import MemoryStore
+        from pet.memory_tools import build_memory_tools
 
-        # 多 provider 时弹选（每次启动都弹）
-        if len(available) == 1:
-            selected, key = available[0]
-        else:
-            selected, key = self._select_provider(available)
+        self._memory_path = os.path.join(self._paths["data_dir"],
+                                         "memory.json")
+        self.memory = MemoryStore.load(self._memory_path)
 
-        # 工具注册表
+        # 工具注册表（无 key 也建：记忆工具随注册表常驻，key 补设后即可用）
         registry = ToolRegistry(confirm_fn=self.adapter.confirm_dangerous)
         if sys.platform == "darwin":
             from pet.tools_mac import build_mac_tools
@@ -376,13 +357,6 @@ class PetApp:
 
             for schema, handler in build_win_tools():
                 registry.register(schema, handler)
-        # v0.9 长期记忆工具（共享，与平台工具并列；加工具不改 llm.py）
-        from pet.memory import MemoryStore
-        from pet.memory_tools import build_memory_tools
-
-        self._memory_path = os.path.join(self._paths["data_dir"],
-                                         "memory.json")
-        self.memory = MemoryStore.load(self._memory_path)
         for schema, handler in build_memory_tools(self.memory):
             registry.register(schema, handler)
 
@@ -405,6 +379,40 @@ class PetApp:
             )
             self._perm_bridge = PermBridge(self.adapter)
             register_perm_singleton(self._perm_bridge)
+
+        providers_cfg = self.cfg.get("llm", {}).get("providers", {})
+        # 扫描已注入 key 的 provider（Keychain + env）
+        available = []
+        for name, pcfg in providers_cfg.items():
+            env_var = pcfg.get("api_key_env", "")
+            key = self.adapter.get_llm_key(name, env_var)
+            if key:
+                available.append((name, key))
+
+        if not available:
+            # 首次引导：默认 deepseek（config 里有的第一个）
+            default_name = next(iter(providers_cfg), "deepseek")
+            default_env = providers_cfg.get(default_name, {}).get("api_key_env", "DEEPSEEK_API_KEY")
+            key = self._ensure_llm_key(default_name, default_env)
+            if not key:
+                self.logger.warning("LLM key 未设置，聊天禁用（宠物仍跑）")
+                # 托盘聊天 fallback 也注册——点击有反馈（气泡提示）而非静默
+                self.tray.set_chat_callback(self._show_chat)
+                QTimer.singleShot(
+                    1500,
+                    lambda: self.bubble.show(
+                        "还没设置 API key，聊天暂时不可用～",
+                        anchor=self._pet_anchor(),
+                    ),
+                )
+                return
+            available = [(default_name, key)]
+
+        # 多 provider 时弹选（每次启动都弹）
+        if len(available) == 1:
+            selected, key = available[0]
+        else:
+            selected, key = self._select_provider(available)
 
         # v0.4.15 工厂实例化（不再硬编码 DeepSeekClient）
         from pet.llm import create_client
