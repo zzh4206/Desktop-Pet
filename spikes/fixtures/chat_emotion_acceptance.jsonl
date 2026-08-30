@@ -1,0 +1,15 @@
+{"text":"我真的特别开心，今天的努力有结果了","label":"happy","source":"manual_acceptance"}
+{"text":"我不开心，但我会慢慢处理","label":"sad","source":"manual_acceptance"}
+{"text":"我很难过","label":"sad","source":"manual_acceptance"}
+{"text":"我不难过，刚才只是开玩笑","label":"neutral","source":"manual_acceptance"}
+{"text":"有点难过，不过现在好多了","label":"sad","source":"manual_acceptance"}
+{"text":"我好饿，想马上吃饭","label":"hungry","source":"manual_acceptance"}
+{"text":"我不饿了，刚吃完","label":"neutral","source":"manual_acceptance"}
+{"text":"我困得睁不开眼","label":"sleepy","source":"manual_acceptance"}
+{"text":"我不困，今晚还能再看一会儿","label":"neutral","source":"manual_acceptance"}
+{"text":"今天没什么特别的","label":"neutral","source":"manual_acceptance"}
+{"text":"考试通过了，我太高兴了","label":"happy","source":"manual_acceptance"}
+{"text":"事情搞砸了，我很失落","label":"sad","source":"manual_acceptance"}
+{"text":"开心是开心，不过我现在要睡了","label":"sleepy","source":"manual_acceptance"}
+{"text":"我不是饿，是有点馋","label":"neutral","source":"manual_acceptance"}
+{"text":"终于下班了，虽然累但很开心","label":"happy","source":"manual_acceptance"}

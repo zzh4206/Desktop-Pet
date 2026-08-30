@@ -137,8 +137,9 @@ class PetApp:
                 os.path.join(paths["data_dir"], "chat_emotion.json"),
                 self._chat_emotion_cfg.get("retention_hours", 48),
             )
-            model_path = os.path.join(os.path.dirname(__file__), "pet", "models",
-                                      "chat_emotion_v1.npz")
+            model_root = os.path.join(os.path.dirname(__file__), "pet", "models")
+            v2_path = os.path.join(model_root, "chat_emotion_v2")
+            model_path = v2_path if os.path.isdir(v2_path) else os.path.join(model_root, "chat_emotion_v1.npz")
             self._chat_emotion_engine = ChatEmotionEngine(
                 model_path, self._chat_emotion_cfg.get("confidence_threshold", .55))
 

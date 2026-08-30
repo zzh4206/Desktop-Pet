@@ -20,6 +20,12 @@ try:
 except ImportError:  # 让主程序在可选依赖未安装时安全降级
     np = None
 
+try:
+    import onnxruntime as ort
+    from tokenizers import Tokenizer
+except ImportError:  # v1 仍可在未安装 v2 运行时依赖的环境中安全降级
+    ort = None; Tokenizer = None
+
 log = logging.getLogger("pet")
 
 LABELS = ("happy", "neutral", "sad", "sleepy", "hungry")
@@ -168,10 +174,14 @@ class ChatEmotionEngine:
     def __init__(self, model_path: str, threshold: float = .55, feature_dim: int = FEATURE_DIM) -> None:
         self.threshold = float(threshold); self.feature_dim = int(feature_dim)
         self.weights = None; self.version = None
+        self.session = None; self.tokenizer = None; self.classifier = None
         if np is None:
             log.warning("未安装 numpy，聊天情绪功能降级")
             return
         try:
+            if os.path.isdir(model_path):
+                self._load_v2(model_path)
+                return
             raw = np.load(model_path, allow_pickle=False)
             if int(raw["feature_dim"]) != self.feature_dim or tuple(raw["labels"].tolist()) != LABELS:
                 raise ValueError("模型元数据不兼容")
@@ -179,6 +189,20 @@ class ChatEmotionEngine:
             self.version = int(raw["model_version"])
         except Exception as exc:
             log.warning("聊天情绪模型不可用，将使用时段回退：%s", exc)
+
+    def _load_v2(self, model_dir: str) -> None:
+        """加载量化 ONNX 编码器和线性分类头；不触碰任何平台 API。"""
+        if ort is None or Tokenizer is None:
+            raise RuntimeError("v2 需要 onnxruntime 和 tokenizers")
+        raw = np.load(os.path.join(model_dir, "classifier.npz"), allow_pickle=False)
+        if tuple(raw["labels"].tolist()) != LABELS or int(raw["version"]) != 2:
+            raise ValueError("v2 模型元数据不兼容")
+        self.classifier = (raw["weight"].astype(np.float32), raw["bias"].astype(np.float32), int(raw["max_length"]))
+        self.tokenizer = Tokenizer.from_file(os.path.join(model_dir, "tokenizer", "tokenizer.json"))
+        self.tokenizer.enable_truncation(max_length=self.classifier[2])
+        self.tokenizer.enable_padding()
+        self.session = ort.InferenceSession(os.path.join(model_dir, "encoder.int8.onnx"), providers=["CPUExecutionProvider"])
+        self.version = 2
 
     def _features(self, messages: Iterable[dict], now: float) -> "np.ndarray":
         vec = np.zeros(self.feature_dim, dtype=np.float32)
@@ -197,6 +221,22 @@ class ChatEmotionEngine:
     def evaluate(self, messages: Iterable[dict], scheduled_time: str | None = None,
                  now: float | None = None) -> EmotionResult:
         fallback = fallback_for_slot(scheduled_time)
+        messages = list(messages)
+        if self.session is not None:
+            text = "\n".join(str(x.get("text", "")) for x in messages[-3:]).strip()
+            if not text: return EmotionResult(fallback, 0., True, self.version)
+            encoded = self.tokenizer.encode_batch([text])
+            ids = np.asarray([x.ids for x in encoded], dtype=np.int64)
+            mask = np.asarray([x.attention_mask for x in encoded], dtype=np.int64)
+            types = np.asarray([x.type_ids for x in encoded], dtype=np.int64)
+            emb = self.session.run(["embedding"], {"input_ids": ids, "attention_mask": mask,
+                                                     "token_type_ids": types})[0]
+            weight, bias, _ = self.classifier; logits = emb @ weight + bias
+            logits -= logits.max(); probs = np.exp(logits); probs /= probs.sum()
+            idx = int(np.argmax(probs)); confidence = float(probs[0, idx])
+            if confidence < self.threshold:
+                return EmotionResult(fallback, confidence, True, self.version)
+            return EmotionResult(LABELS[idx], confidence, False, self.version)
         if self.weights is None:
             return EmotionResult(fallback, 0., True, self.version)
         x = self._features(messages, float(now if now is not None else time.time()))
