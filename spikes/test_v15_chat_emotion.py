@@ -40,6 +40,7 @@ with tempfile.TemporaryDirectory() as d:
     check("高置信非中性消息立即触发", is_significant(result, .75))
     check("中性消息不立即触发", not is_significant(EmotionResult("neutral", .99), .75))
     check("明确难过词即时兜底", obvious_emotion("我好难过") == EmotionResult("sad", 1.0, False, 1))
+    check("英文标签可作为测试输入", obvious_emotion("sad") == EmotionResult("sad", 1.0, False, 1))
     store.mark_slot("22:00", now)
     check("每日时段只运行一次", store.due_slots(["09:00", "22:00"], now) == ["09:00"])
     store.set_current(result, now + 10)

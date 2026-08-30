@@ -48,16 +48,18 @@ def is_significant(result: EmotionResult, threshold: float) -> bool:
 # 这是模型的保守护栏，不是对话内容上传或 LLM 调用。它只处理极直白、
 # 无歧义的自述，避免小样本首版模型把“我好难过”一类话错当成 neutral。
 _OBVIOUS_SIGNALS = {
-    "happy": ("好高兴", "很高兴", "太高兴", "好开心", "很开心", "太开心", "好快乐", "太快乐", "太棒了", "真棒"),
-    "sad": ("好难过", "很难过", "太难过", "好伤心", "很伤心", "太伤心", "想哭", "崩溃了", "不开心"),
-    "sleepy": ("好困", "很困", "太困", "想睡觉", "要睡觉", "困死了"),
-    "hungry": ("好饿", "很饿", "太饿", "饿死了", "想吃东西", "想吃饭"),
+    "happy": ("好高兴", "很高兴", "太高兴", "好开心", "很开心", "太开心", "好快乐", "太快乐", "太棒了", "真棒", "happy"),
+    "sad": ("好难过", "很难过", "太难过", "好伤心", "很伤心", "太伤心", "想哭", "崩溃了", "不开心", "sad"),
+    "sleepy": ("好困", "很困", "太困", "想睡觉", "要睡觉", "困死了", "sleepy"),
+    "hungry": ("好饿", "很饿", "太饿", "饿死了", "想吃东西", "想吃饭", "hungry"),
 }
 
 
 def obvious_emotion(text: str) -> EmotionResult | None:
     """识别最新一条消息中的明确情绪词，供即时交互作可靠兜底。"""
     compact = "".join((text or "").split()).lower()
+    if compact == "neutral":
+        return EmotionResult("neutral", 1.0, False, MODEL_VERSION)
     for label, signals in _OBVIOUS_SIGNALS.items():
         if any(signal in compact for signal in signals):
             return EmotionResult(label, 1.0, False, MODEL_VERSION)
