@@ -46,5 +46,7 @@ with tempfile.TemporaryDirectory() as d:
     store.set_current(result, now + 10)
     check("短时表情可读取", store.active_label(now) == "happy")
     check("短时表情过期清除", store.active_label(now + 11) is None)
+    store.set_current(result, None)
+    check("即时状态保持至下一条消息", store.active_label(now + 365 * 86400) == "happy")
 
 print("聊天情绪检查完成")

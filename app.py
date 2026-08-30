@@ -549,12 +549,13 @@ class PetApp:
         # 先处理最新一句中的明确情绪词；其余情况仍按最近上下文的 MLP 判断。
         result = obvious_emotion(messages[-1]["text"]) if messages else None
         if result is None:
-            result = engine.evaluate(messages[-5:])
+            # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
+            result = engine.evaluate(messages[-1:])
         if not is_significant(result, self._chat_emotion_cfg.get(
                 "event_confidence_threshold", .75)):
             return
-        hours = float(self._chat_emotion_cfg.get("expression_hours", 2))
-        store.set_current(result, __import__("time").time() + hours * 3600)
+        # 即时情绪在下一条明确情绪出现前保持，避免表情在状态间横跳。
+        store.set_current(result, None)
         self._apply_chat_emotion(result.label, result.confidence)
 
     def _poll_chat_emotion(self) -> None:

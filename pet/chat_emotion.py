@@ -142,14 +142,15 @@ class ConversationEmotionStore:
         day = datetime.fromtimestamp(now if now is not None else time.time()).date().isoformat()
         self.ran_slots.setdefault(day, []).append(slot); self.save()
 
-    def set_current(self, result: EmotionResult, expires_at: float) -> None:
+    def set_current(self, result: EmotionResult, expires_at: float | None) -> None:
         self.current = {"label": result.label, "confidence": result.confidence,
                         "expires_at": expires_at, "model_version": result.model_version}
         self.save()
 
     def active_label(self, now: float | None = None) -> str | None:
         if not self.current: return None
-        if float(self.current.get("expires_at", 0)) <= float(now if now is not None else time.time()):
+        expires_at = self.current.get("expires_at")
+        if expires_at is not None and float(expires_at) <= float(now if now is not None else time.time()):
             self.current = None; self.save(); return None
         label = self.current.get("label")
         return label if label in LABELS else None
