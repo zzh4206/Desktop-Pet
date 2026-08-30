@@ -302,6 +302,7 @@ tests/
 
 # macOS Finder 元数据
 .DS_Store
+data/
 v0.3.0测试样例.md
 v0.4.0测试样例.md
 v0.5.0测试样例.md
