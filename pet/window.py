@@ -23,7 +23,8 @@ from .asset_provider import SpriteRef
 # 手势消解阈值（设计思路.md §2.3）
 _CLICK_MAX_PX = 5          # 位移 < 5px 才算点击
 _CLICK_MAX_MS = 300        # 时长 < 300ms 才算点击
-_DOUBLE_CLICK_MS = 500     # 双击间隔 < 500ms
+_DOUBLE_CLICK_MS = 500     # 双击间隔回退值（批次J/L5：运行期取系统
+                           # mouseDoubleClickInterval，此为无 app 兜底）
 
 # 批次E/L6（REVIEW-2026-08-28）：isfile+getmtime 结果按 path 短缓存——
 # 动画帧 150ms/帧的 set_sprite 每次做两次主线程磁盘 stat；帧资产极少
@@ -101,7 +102,14 @@ class WindowBase(QWidget):
         # 单击消歧：release 后延迟触发，期间来了双击则取消
         self._single_shot = QTimer(self)
         self._single_shot.setSingleShot(True)
-        self._single_shot.setInterval(400)  # <500ms 双击窗口
+        # 批次J/L5（REVIEW-2026-08-31）：延迟跟随系统双击间隔——旧版固定
+        # 400ms < 双击窗口 500ms，慢双击（400-500ms 间隔）会先触发摸头
+        # 再触发喂食；_DOUBLE_CLICK_MS 死常量收为回退值
+        from PySide6.QtGui import QGuiApplication as _QGA
+        _si = _QGA.styleHints()
+        _dbl = (_si.mouseDoubleClickInterval() if _si is not None
+                else _DOUBLE_CLICK_MS)
+        self._single_shot.setInterval(int(_dbl) + 50)
         self._single_shot.timeout.connect(self.patRequested.emit)
         self.setAcceptDrops(True)   # v0.9 拖放文件给它打开
 

@@ -93,10 +93,12 @@ class EatMouseSession:
         v0.7.4 两段式：``eat_mouse`` 事件由 scheduler 两段式入口发（FSM 先
         奔向光标），本方法在到达后才被调——只做系统层 start + 记
         ``_was_active`` 供 ``sync_release`` 的 active→False 释放检测；不再
-        自发 FSM 事件（会在到达后重复触发追赶）。失败（权限/系统拒绝）
-        返 False，由 ``eat_mouse_arrived`` 的失败分支处理（M4：补发
-        ``eat_mouse_off`` 让 FSM 退出 EAT_MOUSE）。
-        """
+        自发 FSM 事件（会在到达后重复触发追赶）。失败（权限/系统拒绝）由
+        调用方读 ``sess.active`` 判定（``eat_mouse_arrived`` 的失败分支
+        补发 ``eat_mouse_off`` 让 FSM 退出 EAT_MOUSE，M4）。
+
+        批次J/L9（REVIEW-2026-08-31）：docstring 修正——旧版误写"失败返
+        False"，本方法恒返 None（冻结签名）。"""
         if self._lock is None:
             return
         ok = self._lock.start(duration_s)
@@ -301,17 +303,22 @@ class ProactiveScheduler:
                              exc_info=True)
                 trusted = False
             if not trusted:
-                self._emit_bubble(
-                    "需要辅助功能权限，我才能帮你管住鼠标哦～"
-                    "（系统设置→隐私与安全→辅助功能）",
-                    self._now(),
-                )
-                if self._prompt_accessibility_fn is not None:
-                    try:
-                        self._prompt_accessibility_fn()
-                    except Exception:
-                        _log.warning("[吃鼠标] 引导辅助功能设置异常",
-                                     exc_info=True)
+                # 批次J/L8（REVIEW-2026-08-31）：权限引导每会话至多一次——
+                # 旧版每次久坐轮（30min）都弹气泡+深链开系统设置页，用户
+                # 离开时被连环打扰
+                if not getattr(self, "_accessibility_nagged", False):
+                    self._accessibility_nagged = True
+                    self._emit_bubble(
+                        "需要辅助功能权限，我才能帮你管住鼠标哦～"
+                        "（系统设置→隐私与安全→辅助功能）",
+                        self._now(),
+                    )
+                    if self._prompt_accessibility_fn is not None:
+                        try:
+                            self._prompt_accessibility_fn()
+                        except Exception:
+                            _log.warning("[吃鼠标] 引导辅助功能设置异常",
+                                         exc_info=True)
                 return sess
         # 全门禁通过 → 两段式：先直线奔向光标（FSM EAT_APPROACH），
         # 到达（eat_mouse_arrived）或 6s 兜底（eat_mouse_tick）才抑制

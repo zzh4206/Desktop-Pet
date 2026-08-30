@@ -83,7 +83,10 @@ _MOD_MAP = {
 
 
 def parse_hotkey(s: str) -> tuple:
-    """解析 "cmd+option+p" → (modifier_bits, keycode)；不合法返 (0, 0)。"""
+    """解析 "cmd+option+p" → (modifier_bits, keycode)；不合法返 (0, 0)。
+
+    批次J/L6（REVIEW-2026-08-31）：必须含至少一个修饰键（裸字母注册
+    全局热键会挡正常打字；与 win 端 parse_hotkey 同守卫）。"""
     parts = [p.strip().lower() for p in (s or "").split("+") if p.strip()]
     if not parts:
         return (0, 0)
@@ -95,7 +98,7 @@ def parse_hotkey(s: str) -> tuple:
             code = _VK[p]
         else:
             return (0, 0)
-    return (mods, code) if code else (0, 0)
+    return (mods, code) if (code and mods) else (0, 0)
 
 
 # ---- Carbon 符号探测 ----

@@ -55,6 +55,52 @@ def main() -> int:
     check("T9 空串 → (0,0)", parse_hotkey("") == (0, 0))
     check("T10 只有修饰无主键 → (0,0)", parse_hotkey("ctrl+alt") == (0, 0))
     check("T11 未知 token → (0,0)", parse_hotkey("fn+a") == (0, 0))
+    # 批次J/L6（REVIEW-2026-08-31）：裸字母（无修饰键）拒收——注册全局
+    # 单键热键会挡住正常打字（win/mac 双端同守卫）
+    check("T11b 裸字母（无修饰键）→ (0,0)", parse_hotkey("p") == (0, 0))
+    from pet.hotkey_mac import parse_hotkey as mac_parse
+    check("T11c mac 端裸字母同样拒收", mac_parse("p") == (0, 0))
+
+    # ---- 批次J/L14（F21/F23）：config schema 扩面 + safe defaults 终检 ----
+    import copy
+
+    from pet.config import _SAFE_DEFAULTS, _SECTION_SCHEMAS, load_config
+
+    # 新收段：非法值回退默认
+    import tempfile
+    bad_cfg = os.path.join(tempfile.gettempdir(), "dp_test_v11_cfg.json")
+    with open(bad_cfg, "w", encoding="utf-8") as f:
+        json.dump({"presentation": "paperdolll",   # 拼错
+                   "log_level": "CHATTY",            # 非法枚举
+                   "hotkeys": {"chat": 42}}, f)      # 类型错
+    got = load_config(bad_cfg)
+    check("T13a 非法 presentation 回退默认 frames",
+          got["presentation"] == "frames")
+    check("T13b 非法 log_level 回退默认 INFO", got["log_level"] == "INFO")
+    check("T13c 非法 hotkeys 段回退默认（example 值）",
+          isinstance(got["hotkeys"], dict)
+          and isinstance(got["hotkeys"].get("chat"), str))
+    # 合法值原样通过
+    with open(bad_cfg, "w", encoding="utf-8") as f:
+        json.dump({"presentation": "paperdoll", "log_level": "DEBUG"}, f)
+    got2 = load_config(bad_cfg)
+    check("T13d 合法新段原样通过",
+          got2["presentation"] == "paperdoll"
+          and got2["log_level"] == "DEBUG")
+    os.remove(bad_cfg)
+    # safe defaults 过同名 schema 终检（F21）
+    import jsonschema as _js
+    uncheckable = []
+    for key, safe in _SAFE_DEFAULTS.items():
+        schema = _SECTION_SCHEMAS.get(key)
+        if schema is None:
+            uncheckable.append(key)
+            continue
+        try:
+            _js.Draft7Validator(schema).validate(copy.deepcopy(safe))
+        except _js.ValidationError:
+            uncheckable.append(key + "(校验失败)")
+    check("T14 _SAFE_DEFAULTS 全部过同名 schema 终检", not uncheckable)
 
     # ---- 入库 example 实际值端到端（读文件，不跑线程） ----
     ex_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),

@@ -309,7 +309,11 @@ class ChatBridge(QAbstractListModel):
 
     @Slot()
     def cancel(self) -> None:
-        """关面板时调，真中断流式 + 等待 worker 退出 + 断信号（不泄漏线程）。
+        """shutdown 收口用：真中断流式 + 等待 worker 退出 + 断信号。
+
+        批次J/L10（REVIEW-2026-08-31）：调用点对齐——实际仅
+        ``app.shutdown`` 调用；关面板**不**调（隐藏不中断在飞回复，
+        重开可见完整消息——旧 docstring 误写"关面板时调"）。
 
         v0.4.12：cancel() 调 worker.cancel()（关 resp socket 真中断，非旧版只置
         标志跑满 120s）；wait(2000) 等 worker 退出；断 done 信号防"幽灵回复"

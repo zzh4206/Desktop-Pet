@@ -29,7 +29,9 @@ _DEFAULTS_PATH = os.path.normpath(
 CONFIG_VERSION = 1
 
 # 回退到默认仍非法时的硬编码安全默认（防 example.json 本身被改坏）
-_SAFE_DEFAULTS: dict[str, dict] = {
+# 批次J/L14（REVIEW-2026-08-31 F21）：safe defaults 必须过同名 schema
+# 终检（spikes/test_v11_hotkey_parse_win.py 锁定）；新增段须同步补此表
+_SAFE_DEFAULTS: dict = {
     "decay_per_hour": {"mood": 2.0, "fullness": 3.0, "cleanliness": 1.5},
     "interaction_gain": {"pet": 5, "feed": 20, "clean": 15, "poke": -8},
     "score": {
@@ -60,6 +62,13 @@ _SAFE_DEFAULTS: dict[str, dict] = {
         "video_apps": [],
         "eat_mouse_gain": {"fullness": 5, "mood": 3},
     },
+    # 批次J/L14（F23）：以下段补 schema 校验，safe defaults 同步补齐
+    "provider": "emoji",
+    "presentation": "frames",
+    "log_level": "INFO",
+    "sleepy_idle_minutes": 10,
+    "hotkeys": {},
+    "llm": {"providers": {}},
 }
 
 # 需校验的数值子段 schema（其余键 v0.2 不强校验）
@@ -169,6 +178,32 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             },
         },
         "additionalProperties": False,
+    },
+    # 批次J/L14（REVIEW-2026-08-31 F23）：此前这些段无 schema——
+    # 非法值（如 presentation 拼错）静默漏过，行为与预期脱节无告警
+    "provider": {"enum": ["emoji", "ai", "commission"]},
+    "presentation": {"enum": ["frames", "rig", "paperdoll"]},
+    "log_level": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+    "sleepy_idle_minutes": {"type": "number", "minimum": 0,
+                            "maximum": 1440},
+    "hotkeys": {
+        "type": "object",
+        "properties": {
+            "chat": {"type": "string", "minLength": 1},
+            "spit": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    },
+    "llm": {
+        "type": "object",
+        "properties": {
+            "providers": {"type": "object"},
+            "max_tokens": {"type": "number", "minimum": 256,
+                           "maximum": 128000},
+            "stream_total_s": {"type": "number", "minimum": 10,
+                               "maximum": 3600},
+        },
+        "additionalProperties": True,
     },
 }
 

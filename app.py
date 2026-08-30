@@ -615,10 +615,12 @@ class PetApp:
 
     def _toggle_autostart(self, enabled: bool) -> None:
         """v0.11 托盘自启切换。L6 修：设置失败回滚托盘勾选（旧版失败只弹
-        气泡，勾选态与真实状态脱节到重启）。"""
+        气泡，勾选态与真实状态脱节到重启）。
+        批次J/L1（REVIEW-2026-08-31）：回滚到操作**前**状态（not enabled）
+        ——旧版恒回滚 False，"关闭失败"时勾选态与实际脱节方向相反。"""
         ok = self.adapter.set_autostart(enabled)
         if not ok:
-            self.tray.set_autostart_state(False)
+            self.tray.set_autostart_state(not enabled)
         self.bubble.show(
             "开机自启已开启～" if ok and enabled else
             "开机自启已关闭" if ok else "自启设置失败",

@@ -437,7 +437,8 @@ class ChatWorker(QThread):
 
     def cancel(self) -> None:
         """中断流式：置标志 + 关闭底层 resp socket（iter_lines 抛 ConnectionError
-        → OfflineError 退出），而非旧版只置标志让流式跑满 120s read 超时。"""
+        → OfflineError 退出），而非旧版只置标志让流式跑满 120s read 超时。
+        （批次J/L10：调用点=ChatBridge.cancel，即 shutdown 收口路径）"""
         self._cancelled = True
         # 关闭流式响应 socket——_stream_once 的 iter_lines 会抛 ConnectionError
         try:

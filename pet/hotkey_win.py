@@ -70,7 +70,10 @@ _kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 
 def parse_hotkey(s: str) -> tuple:
-    """解析 "ctrl+alt+p" → (mods, vk)；不合法返 (0, 0)。"""
+    """解析 "ctrl+alt+p" → (mods, vk)；不合法返 (0, 0)。
+
+    批次J/L6（REVIEW-2026-08-31）：必须含至少一个修饰键——裸字母
+    （如 config 误写 "p"）会注册全局单键热键，挡住正常打字。"""
     parts = [p.strip().lower() for p in (s or "").split("+") if p.strip()]
     if not parts:
         return (0, 0)
@@ -82,7 +85,7 @@ def parse_hotkey(s: str) -> tuple:
             vk = _VK_MAP[p]
         else:
             return (0, 0)
-    return (mods, vk) if vk else (0, 0)
+    return (mods, vk) if (vk and mods) else (0, 0)
 
 
 class _HotkeySignalBridge:
