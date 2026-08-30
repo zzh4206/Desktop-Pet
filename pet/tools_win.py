@@ -98,11 +98,16 @@ class OpenAppHandler:
 
 
 def _ps_run(args: list, timeout: float = 10.0) -> tuple[bool, str]:
-    """跑 PowerShell，返回 (ok, stdout/err)。"""
+    """跑 PowerShell，返回 (ok, stdout/err)。
+
+    批次C/M2（REVIEW-2026-08-31）：命令前缀强制 UTF-8 输出——PS 5.1 管道
+    输出默认系统 OEM 代码页（zh-CN=936），旧版按 utf-8 解码致中文路径/
+    剪贴板内容全成替换符（本机实证）。``errors="replace"`` 保留兜底。
+    """
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-             *args],
+             "[Console]::OutputEncoding=[Text.Encoding]::UTF8;", *args],
             capture_output=True, text=True, timeout=timeout,
             encoding="utf-8", errors="replace",
         )
@@ -141,11 +146,21 @@ class ClipboardHandler:
             text = args.get("text")
             if not isinstance(text, str) or not text:
                 return ToolResult(False, "set 需要 text 参数。")
+            # 批次C/M2（REVIEW-2026-08-31）：弃 clip.exe——clip 按 OEM
+            # 代码页读 stdin，UTF-8 写入的中文进剪贴板即乱码（本机实证
+            # "中文剪贴板测试"→"中文剪贴板测?"）。改 PowerShell：
+            # InputEncoding=UTF8 后从 stdin 读全文写剪贴板。
             try:
-                subprocess.run(
-                    ["clip"], input=text, text=True, timeout=10,
-                    encoding="utf-8",
+                r = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     "[Console]::InputEncoding=[Text.Encoding]::UTF8; "
+                     "[Console]::In.ReadToEnd() | Set-Clipboard"],
+                    input=text, text=True, timeout=10, encoding="utf-8",
+                    errors="replace", capture_output=True,
                 )
+                if r.returncode != 0:
+                    return ToolResult(
+                        False, f"写剪贴板失败: {(r.stderr or '').strip()[:120]}")
             except (OSError, subprocess.TimeoutExpired) as e:
                 return ToolResult(False, f"写剪贴板失败: {e}")
             log.info("clipboard set %d 字符", len(text))
