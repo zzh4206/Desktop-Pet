@@ -36,7 +36,13 @@ class EmotionResult:
 
 
 def fallback_for_slot(slot: str | None) -> str:
-    return "sleepy" if slot == "20:00" else "neutral"
+    return "sleepy" if slot == "22:00" else "neutral"
+
+
+def is_significant(result: EmotionResult, threshold: float) -> bool:
+    """消息到来时只响应明确、非中性的情绪，避免普通聊天频繁换脸。"""
+    return (not result.used_fallback and result.label != "neutral"
+            and result.confidence >= float(threshold))
 
 
 class ConversationEmotionStore:

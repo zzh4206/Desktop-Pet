@@ -535,8 +535,23 @@ class PetApp:
         if self._chat_emotion_store is not None:
             try:
                 self._chat_emotion_store.add_user_message(text)
+                self._evaluate_message_emotion()
             except Exception:
                 self.logger.warning("聊天情绪上下文写入失败", exc_info=True)
+
+    def _evaluate_message_emotion(self) -> None:
+        """每条新用户消息只在检测到明显情绪波动时立即换表情。"""
+        from pet.chat_emotion import is_significant
+        store, engine = self._chat_emotion_store, self._chat_emotion_engine
+        if store is None or engine is None:
+            return
+        result = engine.evaluate(store.recent_messages()[-5:])
+        if not is_significant(result, self._chat_emotion_cfg.get(
+                "event_confidence_threshold", .75)):
+            return
+        hours = float(self._chat_emotion_cfg.get("expression_hours", 2))
+        store.set_current(result, __import__("time").time() + hours * 3600)
+        self._apply_chat_emotion(result.label, result.confidence)
 
     def _poll_chat_emotion(self) -> None:
         """执行到期时段。模型/存档故障都只降级，不影响桌宠主循环。"""
@@ -548,8 +563,13 @@ class PetApp:
             if active != self._chat_emotion_active:
                 self._chat_emotion_active = active
                 self.window.set_conversation_mood(Mood(active) if active else None)
+            from pet.chat_emotion import EmotionResult, is_significant
             for slot in store.due_slots(self._chat_emotion_cfg.get("schedule", [])):
                 result = engine.evaluate(store.recent_messages(), slot)
+                # 22:00 是休息提醒：只有明确的非中性情绪才覆盖 sleepy。
+                if slot == "22:00" and not is_significant(
+                        result, self._chat_emotion_cfg.get("event_confidence_threshold", .75)):
+                    result = EmotionResult("sleepy", 0.0, True, result.model_version)
                 hours = float(self._chat_emotion_cfg.get("expression_hours", 2))
                 store.set_current(result, __import__("time").time() + hours * 3600)
                 store.mark_slot(slot)
@@ -700,8 +720,8 @@ class PetApp:
         layout = QFormLayout(dialog)
         enabled = QCheckBox("启用本地聊天情绪推理")
         enabled.setChecked(bool(self._chat_emotion_cfg.get("enabled", True)))
-        schedule = QLineEdit(", ".join(self._chat_emotion_cfg.get("schedule", ["09:00", "20:00"])))
-        schedule.setPlaceholderText("例如：09:00, 20:00")
+        schedule = QLineEdit(", ".join(self._chat_emotion_cfg.get("schedule", ["22:00"])))
+        schedule.setPlaceholderText("例如：22:00")
         layout.addRow(enabled); layout.addRow("每天推理时段：", schedule)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         layout.addRow(buttons); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
@@ -710,7 +730,7 @@ class PetApp:
         slots = [part.strip() for part in schedule.text().replace("，", ",").split(",") if part.strip()]
         import re
         if not slots or any(not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", slot) for slot in slots):
-            QMessageBox.warning(dialog, "聊天情绪设置", "时段请填写 HH:MM，例如 09:00, 20:00。")
+            QMessageBox.warning(dialog, "聊天情绪设置", "时段请填写 HH:MM，例如 22:00。")
             return
         new_cfg = dict(self._chat_emotion_cfg); new_cfg["enabled"] = enabled.isChecked(); new_cfg["schedule"] = slots
         try:

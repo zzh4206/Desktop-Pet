@@ -72,10 +72,11 @@
   },
   "chat_emotion": {
     "enabled": true,
-    "schedule": ["09:00", "20:00"],
+    "schedule": ["22:00"],
     "retention_hours": 48,
     "expression_hours": 2,
     "confidence_threshold": 0.55,
+    "event_confidence_threshold": 0.75,
     "mood_delta": {
       "happy": 4,
       "neutral": 0,

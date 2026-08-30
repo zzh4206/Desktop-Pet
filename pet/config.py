@@ -61,9 +61,9 @@ _SAFE_DEFAULTS: dict[str, dict] = {
         "eat_mouse_gain": {"fullness": 5, "mood": 3},
     },
     "chat_emotion": {
-        "enabled": True, "schedule": ["09:00", "20:00"],
+        "enabled": True, "schedule": ["22:00"],
         "retention_hours": 48, "expression_hours": 2,
-        "confidence_threshold": 0.55,
+        "confidence_threshold": 0.55, "event_confidence_threshold": 0.75,
         "mood_delta": {"happy": 4, "neutral": 0, "sad": -3,
                         "sleepy": -1, "hungry": -2},
     },
@@ -186,6 +186,7 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "retention_hours": {"type": "number", "minimum": 1, "maximum": 168},
             "expression_hours": {"type": "number", "minimum": 0.1, "maximum": 24},
             "confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+            "event_confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
             "mood_delta": {"type": "object", "properties": {
                 "happy": {"type": "number", "minimum": -20, "maximum": 20},
                 "neutral": {"type": "number", "minimum": -20, "maximum": 20},
