@@ -248,8 +248,10 @@ class MdfindHandler:
             root = os.path.join(root, scope)
             if not os.path.isdir(root):
                 return ToolResult(False, f"目录不存在: {scope}")
+        # 批次I/T-3（REVIEW-2026-08-31）：``--`` 分隔——pattern 以 ``-``
+        # 开头时旧版被 mdfind 当选项解析（-literal/-interpret 改变语义）
         ok, out = _run(
-            ["mdfind", "-onlyin", root, pattern], timeout=15.0
+            ["mdfind", "-onlyin", root, "--", pattern], timeout=15.0
         )
         if not ok:
             return ToolResult(False, f"搜索失败: {out}")

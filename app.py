@@ -890,6 +890,18 @@ class PetApp:
         if not getattr(self, "_fullscreen", False) and not self.window.isVisible():
             self.window.show()
             self.logger.warning("宠物窗口异常隐藏，看门狗已恢复")
+        # 批次I/M6（REVIEW-2026-08-31）：mac 上气泡 show 前 view.window()
+        # 为 None——启动时登记自身窗口缺气泡 wid，图层探针会把气泡误判为
+        # 遮挡（宠物站窗顶+气泡弹出时支撑被误否决）。气泡首次可见时补登记
+        # （win 端 winId 随时有效，补登记幂等无害）
+        if not getattr(self, "_bubble_wid_registered", False) \
+                and self.bubble.isVisible():
+            self._bubble_wid_registered = True
+            try:
+                self.adapter.register_own_windows(self.window, self.bubble)
+            except Exception:
+                self._bubble_wid_registered = False
+                self.logger.warning("气泡窗口补登记失败", exc_info=True)
         # 实时鼠标：sensors.mouse_pos 走 2s 缓存会致跟随按旧位置走（A→B→C 折返路径感）；
         # 每 50ms tick 实时取 QCursor 塞 sensors.mouse_pos，跟随即跟当前指针
         mp = QCursor.pos()

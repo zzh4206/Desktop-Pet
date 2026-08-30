@@ -225,6 +225,11 @@ class HotkeyManager:
         if not _HAS_CARBON:
             _log.warning("[热键] Carbon 不可用，跳过")
             return False
+        if bridge is None:
+            # 批次I/H-3（REVIEW-2026-08-31）：无 bridge 时回调在 Carbon
+            # 事件线程直调（假设=主线程）——明示兜底路径，防静默 UB
+            _log.warning("[热键] 无 signal bridge，回调将在线程内直调"
+                         "（生产路径应注入 bridge 转主线程）")
         with self._lock:
             if self._active:
                 return True  # 幂等
@@ -241,6 +246,10 @@ class HotkeyManager:
             if not self._install_handler():
                 return False
 
+            # 批次I/H-4（REVIEW-2026-08-31）：冲突回调收集后锁外触发——
+            # 旧版持锁调 on_conflict，回调若重入 HotkeyManager（如设置页
+            # 触发 stop）即非可重入锁死锁
+            conflicts = []
             for hid, (mods, code) in keys.items():
                 if (mods, code) == (0, 0):
                     _log.warning("[热键] 无效组合 %s", keystrs[hid])
@@ -254,18 +263,19 @@ class HotkeyManager:
                 if status != noErr:
                     _log.warning("[热键] %s 注册失败(被占用?) status=%d",
                                  keystrs[hid], status)
-                    if self._on_conflict:
-                        try:
-                            self._on_conflict(names[hid], keystrs[hid])
-                        except Exception:
-                            pass
+                    conflicts.append((names[hid], keystrs[hid]))
                 else:
                     self._refs[hid] = ref
                     _log.info("[热键] %s 注册成功 (%s)",
                               names[hid], keystrs[hid])
-
-            self._active = bool(self._refs)
-            return self._active
+        if conflicts and self._on_conflict:
+            for _name, _key in conflicts:
+                try:
+                    self._on_conflict(_name, _key)
+                except Exception:
+                    pass
+        self._active = bool(self._refs)
+        return self._active
 
     def _install_handler(self) -> bool:
         """装 kEventHotKeyPressed 处理器于应用事件目标。返 False=装失败。"""

@@ -170,9 +170,17 @@ def frontmost_app_name() -> str:
     except Exception:
         log.warning("frontmost 查询失败", exc_info=True)
         return ""
+    import os as _os
+
+    my_pid = _os.getpid()
     for w in wins or []:
         try:
             if int(w.get("kCGWindowLayer", 0)) != 0:
+                continue
+            # 批次I/H3（REVIEW-2026-08-31）：跳过宠物自身窗口——宠物浮窗
+            # NSFloatingWindowLevel 恒为 layer-0 最前，旧版恒返回自身
+            # 进程名，活跃内容门禁（T8 视频白名单）在 mac 从未生效
+            if int(w.get("kCGWindowOwnerPID", -1)) == my_pid:
                 continue
         except (TypeError, ValueError):
             continue

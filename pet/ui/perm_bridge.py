@@ -91,6 +91,11 @@ class PermBridge(QObject):
 
     @Slot(object)
     def _on_checks_done(self, items: list) -> None:
+        # 批次I/P-1（REVIEW-2026-08-31）：陈旧 worker 的迟到 done 不覆盖
+        # 新轮（win 版同 mac 竞态——run 结束 done 未送达时 refresh 起新
+        # worker，旧 done 会错清引用）
+        if self.sender() is not self._worker:
+            return
         self._items = items
         self.itemsChanged.emit()
         self._worker = None
@@ -213,7 +218,14 @@ def load_perm_panel(adapter) -> tuple:
     """载入权限自检 QML。返回 (engine, window|None, bridge)。
 
     兼容一次性载入；app 主路径已预注册时 register_perm_singleton no-op，
-    主路径用 register_perm_singleton + load_perm_qml 复用同一 bridge。"""
+    主路径用 register_perm_singleton + load_perm_qml 复用同一 bridge。
+
+    ⚠️ 批次I/P-2（REVIEW-2026-08-31）：singleton 已注册时本函数新建的
+    bridge 与 QML 界面**断开**（QML 绑的是首个 bridge）——重复调用仅
+    测试场景可用，生产勿用。"""
+    if _SINGLETON_REGISTERED:
+        _log.warning("load_perm_panel 重复调用：QML 绑定首个 bridge，"
+                     "新 bridge 与界面断开（生产路径勿用本函数）")
     bridge = PermBridge(adapter)
     register_perm_singleton(bridge)
     engine, win = load_perm_qml()

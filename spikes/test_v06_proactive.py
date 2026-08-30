@@ -215,8 +215,9 @@ def main() -> int:
     _qapp = QCoreApplication.instance() or QCoreApplication(sys.argv)
 
     def _pump(ms: int) -> None:
-        """跨线程信号投递要泵事件循环——QTest.qWait 不 processEvents
-        （批次H 实测踩坑），必须显式泵"""
+        """跨线程信号投递泵事件循环。实测（批次H）：QTest.qWait 在
+        QCoreApplication 下不投递 queued 信号，QApplication 下可——
+        显式泵两态通吃，不再依赖该差异"""
         import time as _t
         t0 = _t.monotonic()
         while (_t.monotonic() - t0) * 1000 < ms:

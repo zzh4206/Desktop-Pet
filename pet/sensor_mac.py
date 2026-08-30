@@ -203,7 +203,12 @@ def _is_fullscreen_bounds(b, screen_frames) -> bool:
 
 def _filter_window(w) -> bool:
     """普通实体窗过滤（_enumerate_windows_uncached / _solid_windows 共用）：
-    layer==0、非桌面 owner、bounds 可解析且 w/h>=40。不通过 → False。"""
+    layer==0、非桌面 owner、bounds 可解析且 w/h>=40。不通过 → False。
+
+    批次I/M7（REVIEW-2026-08-31）：Finder 只排"覆盖整屏的桌面背景窗"——
+    旧版按 owner 全排，普通 Finder 文件窗口被误排（宠物无法站其顶，
+    solid_at 探针也失明）。全屏判定路径（fullscreen_status）保持原排除。
+    """
     try:
         layer = int(w.get("kCGWindowLayer", 0))
     except (TypeError, ValueError):
@@ -211,11 +216,14 @@ def _filter_window(w) -> bool:
     if layer != 0:
         # 菜单栏/Dock/桌面层（正层）与负层都不算普通窗口
         return False
-    if w.get("kCGWindowOwnerName", "") in _DESKTOP_OWNERS:
+    owner = w.get("kCGWindowOwnerName", "")
+    if owner in (_DESKTOP_OWNERS - {"Finder"}):
         return False
     b = w.get("kCGWindowBounds")
     if not b:
         return False
+    if owner == "Finder" and _is_fullscreen_bounds(b, _screen_full_frames()):
+        return False   # Finder 桌面背景窗（覆盖整屏）才排除
     try:
         ww, hh = int(b["Width"]), int(b["Height"])
     except (KeyError, TypeError, ValueError):
@@ -259,7 +267,9 @@ def _solid_windows() -> list[dict]:
     缓存查，不重复枚举）。无 Quartz → []。"""
     global _SOLID_CACHE, _SOLID_CACHE_TS
     now = time.monotonic()
-    if _SOLID_CACHE and (now - _SOLID_CACHE_TS) < _SOLID_TTL:
+    # 批次I/S-1（REVIEW-2026-08-31）：按时间戳判缓存有效性——旧版
+    # ``if _SOLID_CACHE`` 空结果恒判失效，零窗口环境每次探针都全枚举
+    if _SOLID_CACHE_TS and (now - _SOLID_CACHE_TS) < _SOLID_TTL:
         return _SOLID_CACHE
     out: list[dict] = []
     if _HAS_QUARTZ:
@@ -357,7 +367,8 @@ def enumerate_windows() -> list[dict]:
     """窗口框枚举（缓存 ≤2s；app 2s 调 build_sensors，绝不每帧）。"""
     global _WINDOWS_CACHE, _WINDOWS_CACHE_TS
     now = time.monotonic()
-    if _WINDOWS_CACHE and (now - _WINDOWS_CACHE_TS) < _WINDOWS_TTL:
+    # 批次I/S-1：同 _solid_windows——空结果也按时间戳缓存
+    if _WINDOWS_CACHE_TS and (now - _WINDOWS_CACHE_TS) < _WINDOWS_TTL:
         return _WINDOWS_CACHE
     _WINDOWS_CACHE = _enumerate_windows_uncached()
     _WINDOWS_CACHE_TS = now

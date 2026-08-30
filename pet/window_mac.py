@@ -30,13 +30,16 @@ class PetWindow(WindowBase):
     def showEvent(self, event):
         super().showEvent(event)
         if not self._polished:
-            self._polished = True
-            self._polish_mac_window()
+            # 批次I/W-1（REVIEW-2026-08-31）：polish 成功才置位——旧版先
+            # 置 True 再试，首次 show 时 NSWindow 未就绪（罕见时序）会
+            # 静默丢失 floating-level 且永不重试
+            self._polished = bool(self._polish_mac_window())
 
-    def _polish_mac_window(self) -> None:
-        """置顶到所有空间、不随 app 失活隐藏。无 pyobjc 则退化。"""
+    def _polish_mac_window(self) -> bool:
+        """置顶到所有空间、不随 app 失活隐藏。无 pyobjc/未就绪 → False
+        （调用方下次 showEvent 重试）。"""
         if not _HAS_PYOBJC:
-            return
+            return False
         try:
             from ctypes import c_void_p
 
@@ -49,6 +52,8 @@ class PetWindow(WindowBase):
                     nswin = maybe
             except Exception:
                 pass
+            if nswin is None:
+                return False
 
             # NSFloatingWindowLevel = 3
             nswin.setLevel_(3)
@@ -58,7 +63,9 @@ class PetWindow(WindowBase):
             )
             nswin.setHidesOnDeactivate_(False)
             nswin.setMovableByWindowBackground_(False)
+            return True
         except Exception as exc:
             # 无 pyobjc / 句柄异常时退化为纯 Qt 行为，仍可上屏
             import logging
             logging.getLogger("pet").warning("window_mac polish 失败: %s", exc)
+            return False
