@@ -8,7 +8,8 @@ import numpy as np
 sys.path.insert(0, ".")
 
 from pet.chat_emotion import (ChatEmotionEngine, ConversationEmotionStore,
-                              EmotionResult, FEATURE_DIM, LABELS, is_significant)
+                              EmotionResult, FEATURE_DIM, LABELS, is_significant,
+                              obvious_emotion)
 
 
 def check(name, ok):
@@ -38,6 +39,7 @@ with tempfile.TemporaryDirectory() as d:
     check("高置信模型结果覆盖夜间默认", result.label == "happy" and not result.used_fallback)
     check("高置信非中性消息立即触发", is_significant(result, .75))
     check("中性消息不立即触发", not is_significant(EmotionResult("neutral", .99), .75))
+    check("明确难过词即时兜底", obvious_emotion("我好难过") == EmotionResult("sad", 1.0, False, 1))
     store.mark_slot("22:00", now)
     check("每日时段只运行一次", store.due_slots(["09:00", "22:00"], now) == ["09:00"])
     store.set_current(result, now + 10)

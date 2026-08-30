@@ -541,11 +541,15 @@ class PetApp:
 
     def _evaluate_message_emotion(self) -> None:
         """每条新用户消息只在检测到明显情绪波动时立即换表情。"""
-        from pet.chat_emotion import is_significant
+        from pet.chat_emotion import is_significant, obvious_emotion
         store, engine = self._chat_emotion_store, self._chat_emotion_engine
         if store is None or engine is None:
             return
-        result = engine.evaluate(store.recent_messages()[-5:])
+        messages = store.recent_messages()
+        # 先处理最新一句中的明确情绪词；其余情况仍按最近上下文的 MLP 判断。
+        result = obvious_emotion(messages[-1]["text"]) if messages else None
+        if result is None:
+            result = engine.evaluate(messages[-5:])
         if not is_significant(result, self._chat_emotion_cfg.get(
                 "event_confidence_threshold", .75)):
             return
