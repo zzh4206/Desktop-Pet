@@ -67,6 +67,24 @@ def main() -> int:
     )
     check("T-f 窗口框与工作区同坐标系(逻辑px)", sane)
 
+    # T-g 批次F/M1（REVIEW-2026-08-31）：监视器配对表 + 精确 DPI 变换
+    # （offscreen 平台 QScreen.name()='' 是假屏，无配对意义——跳过）
+    from PySide6.QtGui import QGuiApplication
+    if QGuiApplication.platformName() == "offscreen":
+        check("T-g 监视器配对（offscreen 假屏跳过，真桌面跑）", True)
+    else:
+        mons = sw._monitor_map()
+        check("T-g 监视器配对表非空且 QScreen 全配上", len(mons) >= 1
+              and all(s.name() for s, _r in mons))
+        prim = [m for m in mons if m[1][0] == 0 and m[1][1] == 0]
+        check("T-g 主屏物理原点 (0,0)", len(prim) == 1)
+        if prim:
+            s0, (pl, pt, pr, pb) = prim[0]
+            dpr_meas = (pr - pl) / max(1, s0.geometry().width())
+            check("T-g 实测 dpr（物理/逻辑宽）与 Qt devicePixelRatio "
+                  "偏差<0.05",
+                  abs(dpr_meas - s0.devicePixelRatio()) < 0.05)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

@@ -72,6 +72,66 @@ class _MONITORINFO(ctypes.Structure):
     ]
 
 
+class _MONITORINFOEX(ctypes.Structure):
+    """批次F/M1（REVIEW-2026-08-31）：带 szDevice 的监视器信息——
+    与 QScreen.name() 精确配对（混合 DPI 多屏坐标变换用）。"""
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", _RECT),
+        ("rcWork", _RECT),
+        ("dwFlags", wintypes.DWORD),
+        ("szDevice", wintypes.WCHAR * 32),
+    ]
+
+
+_MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    wintypes.BOOL, wintypes.HANDLE, wintypes.HANDLE,
+    ctypes.POINTER(_RECT), wintypes.LPARAM,
+)
+_user32.EnumDisplayMonitors.argtypes = [
+    wintypes.HANDLE, ctypes.POINTER(_RECT), _MONITORENUMPROC,
+    wintypes.LPARAM,
+]
+_user32.EnumDisplayMonitors.restype = wintypes.BOOL
+
+
+def _monitor_map(screens=None) -> list:
+    """每屏 (QScreen, 物理 rcMonitor 矩形) 配对列表。
+
+    批次F/M1（REVIEW-2026-08-31）：旧版物理原点按 ``sg.x()*dpr`` 近似，
+    仅主屏/同 DPR 成立——混合缩放多屏（主 1.5× 副 1.0×）下副屏物理原点
+    是主屏**物理**宽度（如 3840），近似式给出 2560，窗口逻辑坐标偏出
+    数百 px。Win32 侧 EnumDisplayMonitors 的 rcMonitor 是物理像素真值，
+    按 szDevice == QScreen.name() 精确配对后逐屏变换。
+    配对失败/为空 → 返回 []（调用方回退旧近似，行为不劣化）。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    if screens is None:
+        screens = QGuiApplication.screens()
+    by_name = {}
+    for s in screens:
+        by_name.setdefault(s.name(), s)
+    out = []
+
+    @_MONITORENUMPROC
+    def _cb(hmon, _hdc, _rect, _data):
+        mi = _MONITORINFOEX()
+        mi.cbSize = ctypes.sizeof(_MONITORINFOEX)
+        if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            scr = by_name.get(mi.szDevice)
+            if scr is not None:
+                out.append((scr, (mi.rcMonitor.left, mi.rcMonitor.top,
+                                  mi.rcMonitor.right, mi.rcMonitor.bottom)))
+        return True
+
+    try:
+        _user32.EnumDisplayMonitors(None, None, _cb, 0)
+    except Exception:
+        return []
+    return out
+
+
 _WNDENUMPROC = ctypes.WINFUNCTYPE(
     wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
 )
@@ -85,7 +145,7 @@ _user32.GetForegroundWindow.restype = wintypes.HWND
 _user32.MonitorFromWindow.restype = wintypes.HANDLE
 _user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
 _user32.GetMonitorInfoW.argtypes = [
-    wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)
+    wintypes.HANDLE, ctypes.c_void_p   # _MONITORINFO/_MONITORINFOEX 通吃
 ]
 _user32.WindowFromPoint.argtypes = [_POINT]
 _user32.WindowFromPoint.restype = wintypes.HWND
@@ -129,16 +189,15 @@ def _is_cloaked(hwnd) -> bool:
     return bool(hr == 0 and cloaked.value)
 
 
-def _hwnd_to_rect(hwnd, screens=None) -> dict | None:
+def _hwnd_to_rect(hwnd, screens=None, mons=None) -> dict | None:
     """物理像素窗口框 → Qt 逻辑坐标 {x,y,width,height}（高 DPI 缩放换算）。
 
-    批次E/M3/M6（REVIEW-2026-08-28）：
-    - M3 正确变换 = 逻辑原点 + (物理 - 物理原点)/dpr——旧版直接 phys/dpr
-      漏掉屏原点项，只在"全屏同 dpr"时碰巧成立；混合缩放多屏（主 1.5×
-      副 1.0×）下副屏窗口坐标偏移数百 px，归属判定失败时更把物理像素
-      当逻辑坐标返回（偏 1.5 倍），FSM 攀爬/站顶全建立在错位数据上。
-    - M6 screens 列表由调用方传入（枚举 30 窗不再每窗调一次
-      QGuiApplication.screens()）。
+    批次E/M6（REVIEW-2026-08-28）：screens 列表由调用方传入（枚举 30 窗
+    不再每窗调一次 QGuiApplication.screens()）。
+    批次F/M1（REVIEW-2026-08-31）：mons（_monitor_map 配对表）传入时用
+    Win32 物理 rcMonitor 真值逐屏精确变换——旧版物理原点按 sg.x()*dpr
+    近似，混合缩放多屏（主 1.5× 副 1.0×）下副屏偏移数百 px；dpr 取
+    物理宽/逻辑宽实测比值（自洽于 Win32 物理坐标系，不受 Qt 取整影响）。
     """
     from PySide6.QtCore import QPoint
     from PySide6.QtGui import QGuiApplication
@@ -148,15 +207,29 @@ def _hwnd_to_rect(hwnd, screens=None) -> dict | None:
         return None
     if screens is None:
         screens = QGuiApplication.screens()
+    if mons is None:
+        mons = _monitor_map(screens)
     tl = QPoint(rc.left, rc.top)
     br = QPoint(rc.right, rc.bottom)
-    # 物理像素→逻辑像素：借屏幕的 devicePixelRatio 换算（Win32 坐标是物理系，
-    # Qt 工作区/FSM 是逻辑系；跨屏不同缩放率时按窗口所在屏的 DPI 换算）
+    # 物理像素→逻辑像素（Win32 坐标是物理系，Qt 工作区/FSM 是逻辑系）；
+    # 按窗口中心点归属监视器（跨屏窗取中心所在屏）
+    cx, cy = (rc.left + rc.right) // 2, (rc.top + rc.bottom) // 2
+    for screen, (pl, pt, pr, pb) in mons:
+        if pl - 8 <= cx < pr + 8 and pt - 8 <= cy < pb + 8:
+            sg = screen.geometry()  # 逻辑坐标
+            dpr = (pr - pl) / max(1, sg.width())
+            tl = QPoint(int(sg.x() + (rc.left - pl) / dpr),
+                        int(sg.y() + (rc.top - pt) / dpr))
+            br = QPoint(int(sg.x() + (rc.right - pl) / dpr),
+                        int(sg.y() + (rc.bottom - pt) / dpr))
+            return {
+                "x": tl.x(), "y": tl.y(),
+                "width": br.x() - tl.x(), "height": br.y() - tl.y(),
+            }
+    # 回退：旧近似（配对失败时行为不劣化；主屏/同 DPR 场景与原式等价）
     for screen in screens:
-        sg = screen.geometry()  # 逻辑坐标
+        sg = screen.geometry()
         dpr = screen.devicePixelRatio()
-        # 物理原点 ≈ 逻辑原点×dpr（主屏恒成立；Qt 逻辑布局下副屏近似成立，
-        # 混合 DPI 的出入由 ±8 容差与跨屏兜底吸收）
         px0, py0 = int(sg.x() * dpr), int(sg.y() * dpr)
         if (rc.left >= px0 - 8 and rc.left < px0 + sg.width() * dpr
                 and rc.top >= py0 - 8 and rc.top < py0 + sg.height() * dpr):
@@ -194,6 +267,8 @@ def visible_windows(refresh: bool = False) -> list[dict]:
     # 每 2s 在主线程脉冲执行）
     from PySide6.QtGui import QGuiApplication
     screens = QGuiApplication.screens()
+    # 批次F/M1：监视器物理矩形配对表同样单次取用（混合 DPI 精确变换）
+    mons = _monitor_map(screens)
 
     @_WNDENUMPROC
     def _on_hwnd(hwnd, _lparam):
@@ -204,7 +279,7 @@ def visible_windows(refresh: bool = False) -> list[dict]:
             return True
         if _is_cloaked(hwnd):
             return True
-        rect = _hwnd_to_rect(hwnd, screens)
+        rect = _hwnd_to_rect(hwnd, screens, mons)
         if rect and rect["width"] > 40 and rect["height"] > 40:
             rect["hwnd"] = int(hwnd)
             found.append(rect)
@@ -266,14 +341,28 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     """
     from PySide6.QtGui import QGuiApplication
 
-    dpr = 1.0
-    for screen in QGuiApplication.screens():
+    screens = QGuiApplication.screens()
+    pt = None
+    # 批次F/M1：逻辑→物理同样按监视器配对表精确变换——旧版 x*dpr 默认
+    # 原点 (0,0)，副屏（逻辑原点非零）探针点系统性错位
+    for screen, (pl, pt_, pr, pb) in _monitor_map(screens):
         sg = screen.geometry()
         if (sg.x() <= x < sg.x() + sg.width()
                 and sg.y() <= y < sg.y() + sg.height()):
-            dpr = screen.devicePixelRatio()
+            dpr = (pr - pl) / max(1, sg.width())
+            pt = _POINT(int(pl + (x - sg.x()) * dpr),
+                        int(pt_ + (y - sg.y()) * dpr))
             break
-    pt = _POINT(int(x * dpr), int(y * dpr))
+    if pt is None:
+        # 回退：旧近似（配对失败/点在屏外）
+        dpr = 1.0
+        for screen in screens:
+            sg = screen.geometry()
+            if (sg.x() <= x < sg.x() + sg.width()
+                    and sg.y() <= y < sg.y() + sg.height()):
+                dpr = screen.devicePixelRatio()
+                break
+        pt = _POINT(int(x * dpr), int(y * dpr))
     hwnd = _user32.WindowFromPoint(pt)
     if not hwnd:
         return False
