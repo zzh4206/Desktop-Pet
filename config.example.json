@@ -70,6 +70,20 @@
       "mood": 3
     }
   },
+  "chat_emotion": {
+    "enabled": true,
+    "schedule": ["09:00", "20:00"],
+    "retention_hours": 48,
+    "expression_hours": 2,
+    "confidence_threshold": 0.55,
+    "mood_delta": {
+      "happy": 4,
+      "neutral": 0,
+      "sad": -3,
+      "sleepy": -1,
+      "hungry": -2
+    }
+  },
   "decay_per_hour": {
     "mood": 2,
     "fullness": 3,

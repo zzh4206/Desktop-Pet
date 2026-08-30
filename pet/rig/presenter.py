@@ -362,7 +362,9 @@ class RigWindow(WindowBase):
         把 neutral 覆盖图翻回 mood 图，与下一拍 _walk_edge 打架=闪烁。"""
         if self._provider is None:
             return
-        sprite = self._provider.get_static(state)
+        self._last_state = state
+        sprite = self._provider.get_static(
+            state, mood_override=getattr(self, "_conversation_mood", None))
         if self._walk_showing or self._frames:
             self._static_sprite = sprite
             return

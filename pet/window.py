@@ -171,6 +171,12 @@ class WindowBase(QWidget):
         """注入 AssetProvider；on_state_change 据此换 sprite。"""
         self._provider = provider
 
+    def set_conversation_mood(self, mood) -> None:
+        """设置短时聊天表情；None 恢复养成状态决定的立绘。"""
+        self._conversation_mood = mood
+        if self._provider is not None:
+            self.on_state_change(getattr(self, "_last_state", None))
+
     def set_facing(self, d: int) -> None:
         """v0.10.16 移动朝向：d=-1 左、1 右（0/未知忽略）；变化即镜像重绘。
         （帧素材统一面朝右，向左移动时水平翻转显示，行走方向与朝向一致）"""
@@ -230,9 +236,11 @@ class WindowBase(QWidget):
         ``_static_sprite`` 恢复目标、不换当前画面——旧版每 1s 衰减 on_change
         无条件 set_sprite 静帧，动画期间周期性闪一帧静帧（持续到下一帧
         tick 换回）。动画自然结束/stop_frames 恢复时即用最新静帧。"""
-        if self._provider is None:
+        if state is None or self._provider is None:
             return
-        sprite = self._provider.get_static(state)
+        self._last_state = state
+        sprite = self._provider.get_static(
+            state, mood_override=getattr(self, "_conversation_mood", None))
         if self._frames:
             self._static_sprite = sprite
             return
