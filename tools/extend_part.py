@@ -64,6 +64,10 @@ def main() -> int:
 
     out.save(part_path)
     info["px_rect"][1] -= args.up
+    # 批次G/rL5（REVIEW-2026-08-31）：延伸量留痕（累计）——重切/复验
+    # 不再依赖逆向 px_rect 差值
+    sp = info.setdefault("split", {})
+    sp["extended_up"] = int(sp.get("extended_up", 0)) + args.up
     json.dump(manifest, open(manifest_path, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
     print(f"✅ {args.part} 顶延 {args.up}px（px_rect.y0→{info['px_rect'][1]}，"

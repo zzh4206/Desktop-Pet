@@ -218,6 +218,7 @@ def main() -> int:
     part_path = os.path.join(parts_dir, f"{args.part}_{figure_key}.png")
     fig_path = os.path.join(figs_dir, f"{figure_key}.png")
 
+    core = None
     if args.skip_core:
         # 批次F/C1：只重出部件+manifest——核心图已按全连通域挖除过的
         # 重切场景（claim 重切），保护带语义保持原样不动
@@ -266,6 +267,16 @@ def main() -> int:
         "kind": args.kind,
         "sway": {"amp_deg": args.amp_deg, "period_ms": args.period_ms,
                  "phase_ms": args.phase_ms},
+        # 批次G/rL5（REVIEW-2026-08-31）：拆件参数留痕——重切不再依赖
+        # 逆向工程（上轮 C1 重切即靠逆向重建屏障踩坑）。运行期不消费
+        "split": {k: v for k, v in {
+            "seed": [args.seed[0], args.seed[1]],
+            "block": args.block or None,
+            "protect": args.protect or None,
+            "claim": args.claim or None,
+            "min_px": args.min_px,
+            "max_px": args.max_px,
+        }.items() if v is not None},
     })
     manifest["spec"] = 1
     manifest["parts"] = parts
@@ -275,16 +286,23 @@ def main() -> int:
     # ---- QA 对照图 ----
     qa_dir = os.path.join(REPO, "spikes", "_qa")
     os.makedirs(qa_dir, exist_ok=True)
-    panel = Image.new("RGBA", (im.width * 2 // 3 * 3, im.height),
-                      (24, 24, 28, 255))
-    th = im.resize((im.width // 3, im.height // 3))
-    co = core.resize((im.width // 3, im.height // 3))
+    # 批次G/rL2（REVIEW-2026-08-31）：面板宽旧版 w*2//3*3 放不下三张
+    # 1/3 缩略图（第三张被截）；pivot 连线旧版拿全分辨率坐标画在 1/3
+    # 缩略图上（线飞出面板）。按缩略图坐标系缩放绘制
+    tw3, th3 = im.width // 3, im.height // 3
+    panel = Image.new("RGBA", (tw3 * 3 + 16, th3), (24, 24, 28, 255))
+    th = im.resize((tw3, th3))
+    # skip-core 且无既有核心图时 core=None——QA 对照以原图代位
+    co_src = core if core is not None else im
+    co = co_src.resize((tw3, th3))
     pt = part.resize((max(1, (bx1 - bx0) // 3), max(1, (by1 - by0) // 3)))
     panel.paste(th, (0, 0), th)
-    panel.paste(co, (th.width + 8, 0), co)
-    panel.paste(pt, ((th.width + 8) * 2, 0), pt)
+    panel.paste(co, (tw3 + 8, 0), co)
+    panel.paste(pt, ((tw3 + 8) * 2, 0), pt)
     d = ImageDraw.Draw(panel)
-    d.line([args.pivot, (bx0, by0)], fill=(255, 80, 80, 255), width=2)
+    d.line([(args.pivot[0] / 3 + (tw3 + 8) * 2, args.pivot[1] / 3),
+            ((bx0) / 3 + (tw3 + 8) * 2, (by0) / 3)],
+           fill=(255, 80, 80, 255), width=2)
     qa_path = os.path.join(
         qa_dir, f"split_{args.stage}_{figure_key}_{args.part}.png")
     panel.save(qa_path)
@@ -292,7 +310,7 @@ def main() -> int:
     # ---- QA 摆角条带（--qa-swing DEG）----
     # 部件层全画布贴回 bbox 原位 → 绕 pivot 旋转 → 核心图压在其上
     # （under_core 语义），五档角度横排——上引擎前人工预检接缝与出界。
-    if args.qa_swing > 0:
+    if args.qa_swing > 0 and core is not None:
         a_max = args.qa_swing
         angles = [-a_max, -a_max / 2, 0.0, a_max / 2, a_max]
         th_w, th_h = im.width // 3, im.height // 3
@@ -312,6 +330,10 @@ def main() -> int:
             qa_dir, f"swing_{args.stage}_{figure_key}_{args.part}.png")
         strip.save(swing_path)
         print(f"   QA 摆角条带={os.path.relpath(swing_path, REPO)}")
+    elif args.qa_swing > 0:
+        # 批次G/rL4：skip-core 且核心图不在 → 无合成对象，跳过摆角条带
+        print("⚠️ --skip-core 且无既有核心图，--qa-swing 摆角条带跳过",
+              file=sys.stderr)
 
     print(f"✅ 部件={os.path.relpath(part_path, REPO)}\n"
           f"   派生核心={os.path.relpath(fig_path, REPO)}\n"

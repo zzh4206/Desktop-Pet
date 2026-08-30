@@ -63,6 +63,11 @@ for part_info in MANIFEST["parts"]:
         np_[0, y] = (0, 0, 0, 0)
         np_[new_part.width - 1, y] = (0, 0, 0, 0)
     new_part.save(part_path)
+    # 批次G/rM5（REVIEW-2026-08-31）：trim 状态记 manifest——旧版原地改写
+    # 部件图而 manifest 无记录，对某腿调参重切会复活已裁像素且无从察觉
+    part_info.setdefault("split", {})["trimmed"] = True
     print(f"{pid}: 裁除 {erased} 保留 {kept} → {os.path.relpath(part_path, REPO)}")
 
-print("done")
+json.dump(MANIFEST, open(os.path.join(STAGE, "manifest.json"), "w",
+                         encoding="utf-8"), ensure_ascii=False, indent=2)
+print("done（manifest 已记 split.trimmed）")

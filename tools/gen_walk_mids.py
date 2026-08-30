@@ -191,39 +191,39 @@ def main() -> int:
     os.makedirs(QA, exist_ok=True)
     if "--subdivide" in sys.argv:
         return subdivide()
-    strips = []
-    for branch in ("neglected", "healthy"):
-        stage = "final"
-        p0 = os.path.join(FR, f"{stage}_walk_0.png")
-        p1 = os.path.join(FR, f"{stage}_walk_1.png")
-        ref0, ref1 = Image.open(p0).convert("RGBA"), Image.open(p1).convert("RGBA")
-        for name, (ra, rb_) in (("walk_0b", (p0, p1)),
-                                ("walk_1b", (p1, p0))):
-            out_path = os.path.join(FR, f"{stage}_{name}.png")
-            if os.path.isfile(out_path) and "--force" not in sys.argv:
-                print(f"{branch}/{name} 已存在，跳过（--force 重生成）")
-            else:
-                print(f"生成 {stage}_{name} ...")
-                img = gen_two_refs(ra, rb_)
-                img.save(os.path.join(QA, f"_{stage}_{name}_raw.png"))
-                aligned = align_to(ref0, img)
-                aligned.save(out_path)
-    # QA 条带：每分支一排 [w0, 0b, w1, 1b, w0]（收口验证循环连贯性）
+    # 批次G/rL3（REVIEW-2026-08-31）：帧文件按 stage 命名（无 branch
+    # 维度）——旧版外层 for branch 循环两轮生成同一组文件（第二轮恒
+    # "已存在跳过"），QA 条带同内容写两遍。去循环单次产出。
+    stage = "final"
+    p0 = os.path.join(FR, f"{stage}_walk_0.png")
+    p1 = os.path.join(FR, f"{stage}_walk_1.png")
+    ref0, ref1 = Image.open(p0).convert("RGBA"), Image.open(p1).convert("RGBA")
+    for name, (ra, rb_) in (("walk_0b", (p0, p1)),
+                            ("walk_1b", (p1, p0))):
+        out_path = os.path.join(FR, f"{stage}_{name}.png")
+        if os.path.isfile(out_path) and "--force" not in sys.argv:
+            print(f"{name} 已存在，跳过（--force 重生成）")
+        else:
+            print(f"生成 {stage}_{name} ...")
+            img = gen_two_refs(ra, rb_)
+            img.save(os.path.join(QA, f"_{stage}_{name}_raw.png"))
+            aligned = align_to(ref0, img)
+            aligned.save(out_path)
+    # QA 条带：[w0, 0b, w1, 1b, w0]（收口验证循环连贯性）
     TH = 420
     def th(im):
         t = im.copy(); t.thumbnail((10000, TH)); return t
-    for branch in ("neglected", "healthy"):
-        seq = ["walk_0", "walk_0b", "walk_1", "walk_1b", "walk_0"]
-        row = [th(Image.open(os.path.join(FR, f"final_{n}.png")).convert("RGBA"))
-               for n in seq]
-        strip = Image.new("RGB", (sum(p.width for p in row) + 8 * len(row),
-                                  TH), (30, 30, 36, 255))
-        x = 0
-        for p in row:
-            strip.paste(p, (x, 0), p)
-            x += p.width + 8
-        strip.save(os.path.join(QA, f"walk_cycle_{branch}.png"))
-        print(f"QA 条带 walk_cycle_{branch}.png（顺序 w0,0b,w1,1b,w0）")
+    seq = ["walk_0", "walk_0b", "walk_1", "walk_1b", "walk_0"]
+    row = [th(Image.open(os.path.join(FR, f"final_{n}.png")).convert("RGBA"))
+           for n in seq]
+    strip = Image.new("RGB", (sum(p.width for p in row) + 8 * len(row),
+                              TH), (30, 30, 36, 255))
+    x = 0
+    for p in row:
+        strip.paste(p, (x, 0), p)
+        x += p.width + 8
+    strip.save(os.path.join(QA, "walk_cycle_4f.png"))
+    print("QA 条带 walk_cycle_4f.png（顺序 w0,0b,w1,1b,w0）")
     return 0
 
 

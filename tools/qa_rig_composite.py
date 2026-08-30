@@ -75,33 +75,29 @@ def check_overlap(rig_dir: str, manifest: dict, figure: str,
     return True
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True,
-                    choices=["young", "adult", "final"])
-    ap.add_argument("--branch", required=True,
-                    choices=["healthy", "neglected"])
-    ap.add_argument("--mood", default="neutral")
-    ap.add_argument("--alpha-thr", type=int, default=32,
-                    help="α 差超过该值计入失配（0-255）")
-    ap.add_argument("--max-pct", type=float, default=0.5,
-                    help="失配像素占原图不透明像素百分比门禁")
-    ap.add_argument("--exclude", default="",
-                    help="已知存量差异区 x0,y0,x1,y1（不计门禁，如 v0.13 尾件"
-                         "保护带残影基线）")
-    args = ap.parse_args()
+def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
+             max_pct: float = 0.5, exclude: str = "",
+             write_qa: bool = True) -> dict:
+    """单 figure 静止合成门禁（可编程调用版）。
 
-    figure = f"{args.branch}_{args.mood}"
-    rig_dir = os.path.join(REPO, "assets", "rig", args.stage)
+    返回 dict(ok, inter_pct, mism, inter_mism, overlap_rows, figure, reason)。
+    ``exclude`` 为空时自动读 manifest ``qa.exclude[figure]``
+    （批次G/rL6：已知工艺残留基线随 manifest 留档，不再靠口头 --exclude）。
+    """
+    figure = f"{branch}_{mood}"
+    rig_dir = os.path.join(REPO, "assets", "rig", stage)
     with open(os.path.join(rig_dir, "manifest.json"), "r", encoding="utf-8") as f:
         manifest = json.load(f)
+    if not exclude:
+        exclude = (manifest.get("qa", {}) or {}).get("exclude", {}) \
+            .get(figure, "")
 
-    orig = Image.open(os.path.join(
-        REPO, "assets", "ai", f"{args.stage}_{figure}.png")).convert("RGBA")
+    orig_path = os.path.join(REPO, "assets", "ai", f"{stage}_{figure}.png")
     core_path = manifest["figures"].get(figure)
-    if not core_path:
-        print(f"❌ manifest 无 figure {figure}（未拆件）")
-        return 2
+    if not core_path or not os.path.isfile(orig_path):
+        return {"ok": False, "figure": f"{stage}/{figure}",
+                "reason": "manifest 无此 figure（未拆件）或原图缺失"}
+    orig = Image.open(orig_path).convert("RGBA")
     core = Image.open(os.path.join(rig_dir, core_path)).convert("RGBA")
 
     layer = Image.new("RGBA", orig.size, (0, 0, 0, 0))
@@ -119,7 +115,7 @@ def main() -> int:
     a_c = comp.getchannel("A")
     da = ImageChops.difference(a_o, a_c)
     hist = da.histogram()
-    mism = sum(hist[args.alpha_thr + 1:])
+    mism = sum(hist[alpha_thr + 1:])
     opaque = sum(a_o.histogram()[1:])
     pct = mism * 100.0 / max(1, opaque)
     max_da = max(i for i, n in enumerate(hist) if n)
@@ -130,9 +126,9 @@ def main() -> int:
     # 真问题（缺块/错位/烤死件）必然出现在内部。
     bin_o = a_o.point(lambda v: 255 if v > 128 else 0)
     interior = bin_o.filter(ImageFilter.MinFilter(5))
-    da_strong = da.point(lambda v: 255 if v > args.alpha_thr else 0)
-    if args.exclude:
-        ex = tuple(int(v) for v in args.exclude.split(","))
+    da_strong = da.point(lambda v: 255 if v > alpha_thr else 0)
+    if exclude:
+        ex = tuple(int(v) for v in exclude.split(","))
         da_strong.paste(0, box=ex)
         interior.paste(0, box=ex)
     inter_mism = ImageStat.Stat(da_strong, interior).sum[0] // 255
@@ -147,35 +143,71 @@ def main() -> int:
     rgb_mean = ImageStat.Stat(rgb_diff, mask).mean if mask.getbbox() else [0.0]
     rgb_d = sum(rgb_mean) / len(rgb_mean)
 
-    print(f"figure={args.stage}/{figure} parts={n_parts}")
-    print(f"全图: 不透明={opaque}  |Δα|>{args.alpha_thr} 失配={mism} "
-          f"({pct:.3f}%)  maxΔα={max_da}  平均ΔRGB={rgb_d:.2f}")
-    print(f"内部(腐蚀2px): 不透明={inter_opaque}  失配={inter_mism} "
-          f"({inter_pct:.3f}%)   轮廓环失配={mism - inter_mism}")
+    qa_rel = ""
+    if write_qa:
+        # 差异热区图（红=α 失配，暗底）
+        heat = Image.new("RGBA", orig.size, (24, 24, 28, 255))
+        red = Image.new("RGBA", orig.size, (255, 60, 60, 255))
+        heat.paste(red, (0, 0), da.point(lambda v: 255 if v > alpha_thr else 0))
 
-    # 差异热区图（红=α 失配，暗底）
-    heat = Image.new("RGBA", orig.size, (24, 24, 28, 255))
-    red = Image.new("RGBA", orig.size, (255, 60, 60, 255))
-    heat.paste(red, (0, 0), da.point(lambda v: 255 if v > args.alpha_thr else 0))
+        tw, thh = orig.width // 3, orig.height // 3
+        panel = Image.new("RGBA", (tw * 3 + 16, thh), (24, 24, 28, 255))
+        for i, img in enumerate((orig, comp, heat)):
+            t = img.resize((tw, thh))
+            panel.paste(t, (i * (tw + 8), 0), t)
+        qa_dir = os.path.join(REPO, "spikes", "_qa")
+        os.makedirs(qa_dir, exist_ok=True)
+        qa_path = os.path.join(qa_dir, f"restcomp_{stage}_{figure}.png")
+        panel.save(qa_path)
+        qa_rel = os.path.relpath(qa_path, REPO)
 
-    tw, thh = orig.width // 3, orig.height // 3
-    panel = Image.new("RGBA", (tw * 3 + 16, thh), (24, 24, 28, 255))
-    for i, img in enumerate((orig, comp, heat)):
-        t = img.resize((tw, thh))
-        panel.paste(t, (i * (tw + 8), 0), t)
-    qa_dir = os.path.join(REPO, "spikes", "_qa")
-    os.makedirs(qa_dir, exist_ok=True)
-    qa_path = os.path.join(qa_dir, f"restcomp_{args.stage}_{figure}.png")
-    panel.save(qa_path)
-
-    ok = inter_pct <= args.max_pct
     # 批次F/C1：部件交叠门禁（静止合成对"同域拆两遍"失明，必须独立挡）
+    rows = part_overlap_px(rig_dir, manifest, figure)
+    overlap_ok = all(n <= _OVERLAP_MAX_PX for _a, _b, n in rows)
+    ok = inter_pct <= max_pct and overlap_ok
+    return {
+        "ok": ok, "figure": f"{stage}/{figure}", "n_parts": n_parts,
+        "inter_pct": inter_pct, "inter_mism": inter_mism, "mism": mism,
+        "pct": pct, "max_da": max_da, "rgb_d": rgb_d, "exclude": exclude,
+        "overlap_rows": rows, "overlap_ok": overlap_ok, "qa": qa_rel,
+        "reason": "",
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--stage", required=True,
+                    choices=["young", "adult", "final"])
+    ap.add_argument("--branch", required=True,
+                    choices=["healthy", "neglected"])
+    ap.add_argument("--mood", default="neutral")
+    ap.add_argument("--alpha-thr", type=int, default=32,
+                    help="α 差超过该值计入失配（0-255）")
+    ap.add_argument("--max-pct", type=float, default=0.5,
+                    help="失配像素占原图不透明像素百分比门禁")
+    ap.add_argument("--exclude", default="",
+                    help="已知存量差异区 x0,y0,x1,y1（缺省自动读 manifest "
+                         "qa.exclude 基线段）")
+    args = ap.parse_args()
+
+    r = evaluate(args.stage, args.branch, args.mood,
+                 alpha_thr=args.alpha_thr, max_pct=args.max_pct,
+                 exclude=args.exclude)
+    if r["reason"]:
+        print(f"❌ {r['reason']}")
+        return 2
+    print(f"figure={r['figure']} parts={r['n_parts']}"
+          + (f"  exclude={r['exclude']}" if r["exclude"] else ""))
+    print(f"全图: |Δα|>{args.alpha_thr} 失配={r['mism']} "
+          f"({r['pct']:.3f}%)  maxΔα={r['max_da']}  平均ΔRGB={r['rgb_d']:.2f}")
+    print(f"内部(腐蚀2px): 失配={r['inter_mism']} ({r['inter_pct']:.3f}%)")
     print(f"部件交叠检查（≤{_OVERLAP_MAX_PX}px）：")
-    if not check_overlap(rig_dir, manifest, figure):
-        ok = False
-    print(f"{'✅ PASS' if ok else '❌ FAIL'}（内部门禁 ≤{args.max_pct}% + 交叠"
-          f"≤{_OVERLAP_MAX_PX}px）  QA 三联图={os.path.relpath(qa_path, REPO)}")
-    return 0 if ok else 1
+    for (a, b, n) in r["overlap_rows"]:
+        flag = "❌" if n > _OVERLAP_MAX_PX else ("⚠️ " if n > 0 else "  ")
+        print(f"  {flag}{a} × {b}: 交叠 {n}px")
+    print(f"{'✅ PASS' if r['ok'] else '❌ FAIL'}（内部门禁 ≤{args.max_pct}%"
+          f" + 交叠≤{_OVERLAP_MAX_PX}px）  QA 三联图={r['qa']}")
+    return 0 if r["ok"] else 1
 
 
 if __name__ == "__main__":

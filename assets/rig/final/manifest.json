@@ -184,5 +184,10 @@
       }
     }
   ],
-  "spec": 1
+  "spec": 1,
+  "qa": {
+    "exclude": {
+      "healthy_neutral": "717,595,1024,1046"
+    }
+  }
 }

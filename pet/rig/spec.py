@@ -39,6 +39,10 @@ _MANIFEST_SCHEMA: dict = {
             "minProperties": 1,
             "additionalProperties": {"type": "string"},
         },
+        # 批次G/rL6（REVIEW-2026-08-31）：门禁基线段——qa.exclude 记已知
+        # 工艺残留区（如尾件保护带），qa_rig_composite 自动读取；
+        # 运行期不消费
+        "qa": {"type": "object"},
         "parts": {
             "type": "array",
             "items": {
@@ -63,6 +67,10 @@ _MANIFEST_SCHEMA: dict = {
                     "kind": {"enum": ["sway", "limb"]},
                     "base_deg": {"type": "number", "minimum": -45,
                                  "maximum": 45},
+                    # 批次G/rL5（REVIEW-2026-08-31）：拆件参数留痕段
+                    # （seed/block/protect/claim/extended_up/trimmed）——
+                    # 重切不再依赖逆向工程。运行期不消费，宽进
+                    "split": {"type": "object"},
                     "sway": {
                         "type": "object",
                         "properties": {

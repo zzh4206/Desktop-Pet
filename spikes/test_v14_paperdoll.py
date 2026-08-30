@@ -335,6 +335,23 @@ def main() -> int:
     check("T4c _part_walk=False（rig 档）：帧路径原样",
           len(s.window.played) == 1 and s._anim_key == "walk")
 
+    # ---- T10 批次G/rL6（REVIEW-2026-08-31 N1）：静止合成门禁常驻 ----
+    # 全 figure（3 阶段 × 2 分支 neutral + final 侧身）跑内部失配 ≤0.5%
+    # + 部件交叠 ≤256px——旧版门禁只靠手动跑工具，final/healthy_neutral
+    # 尾件基线 FAIL 长期无报警。exclude 基线读 manifest qa.exclude 段
+    gate_rows = []
+    for st in ("young", "adult", "final"):
+        for br in ("healthy", "neglected"):
+            gate_rows.append(qa_gate.evaluate(st, br, "neutral",
+                                              write_qa=False))
+    gate_rows.append(qa_gate.evaluate("final", "healthy", "side",
+                                      write_qa=False))
+    bad = [r["figure"] for r in gate_rows if not r["ok"]]
+    worst = max(gate_rows, key=lambda r: r["inter_pct"])
+    check(f"T10 静止合成门禁 7 figure 全过（最差 {worst['figure']} "
+          f"{worst['inter_pct']:.3f}%）" + (f"，FAIL={bad}" if bad else ""),
+          not bad)
+
     # 收尾清理定时器，防 Qt teardown 抖（对齐 v04/v13 教训）
     win.stop_frames()
     win._frame_timer.stop()
