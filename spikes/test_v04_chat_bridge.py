@@ -11,8 +11,12 @@ delta/done/failed/offline 信号，验证 ChatBridge 行为：
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
+
+# 批次H/M12（REVIEW-2026-08-31 F31）：缺省 offscreen（不依赖真显示会话）
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, ".")
 
@@ -166,8 +170,71 @@ def main() -> int:
     check("低危 _md_to_html code 内 * 不被 italic 误匹配",
           "<code>a*b*c</code>" in html_code and "<i>" not in html_code)
 
-    # 还原 monkeypatch
+    # ---- T16 批次H/M11（REVIEW-2026-08-31 F30）：真 ChatWorker 生命周期 ----
+    # 旧版 FakeChatWorker.start() no-op——真线程的 cancel 中断/迟到信号/
+    # 离线分类零覆盖。此处还原本体 + stub client（无网络）真跑 QThread
     llm_mod.ChatWorker = real_worker
+    import time as _time
+
+    from pet.llm import OFFLINE_REPLY, OfflineError
+
+    class _StubClient:
+        """无网络 client：可控延迟/异常；_resp=None 供 cancel 探测。"""
+
+        def __init__(self, reply="在的～", delay=0.05, exc=None):
+            self._reply, self._delay, self._exc = reply, delay, exc
+            self._resp = None
+
+        def chat_once(self, history, ctx, on_delta=None):
+            if self._delay:
+                _time.sleep(self._delay)
+            if self._exc is not None:
+                raise self._exc
+            if on_delta:
+                on_delta(self._reply)
+            return self._reply, [ChatTurn("assistant", self._reply)]
+
+    from PySide6.QtTest import QTest
+
+    def _pump(ms: int) -> None:
+        """跨线程信号投递要泵事件循环——QTest.qWait 不 processEvents
+        （本批实测踩坑），必须显式泵"""
+        t0 = _time.monotonic()
+        while ( _time.monotonic() - t0) * 1000 < ms:
+            QCoreApplication.processEvents()
+            _time.sleep(0.005)
+
+    # 16a 正常完成：真线程跑完 + done 信号送达 → 回复落定、worker 自清
+    b2 = ChatBridge(client=_StubClient(), registry=object(),
+                    make_ctx=lambda: None)
+    n0 = len(b2._messages)
+    b2.send("真线程问好")
+    _pump(700)
+    check("T16a 真 ChatWorker 完成：回复落定",
+          len(b2._messages) == n0 + 2
+          and b2._messages[-1]["content"] == "在的～")
+    check("T16a worker 完成自清（_worker=None）", b2._worker is None)
+
+    # 16b cancel 真中断：长延迟 stub，cancel 后无幽灵回复、可再发
+    b3 = ChatBridge(client=_StubClient(delay=1.0), registry=object(),
+                    make_ctx=lambda: None)
+    m0 = len(b3._messages)
+    b3.send("会被取消")
+    _pump(100)          # 线程已在 stub 里 sleep
+    b3.cancel()               # wait(2000) 内线程自然跑完（cancelled 不 emit）
+    _pump(1200)         # 等 stub 返回点过去
+    check("T16b cancel 后无幽灵回复（仅 user 入列）",
+          len(b3._messages) == m0 + 1)
+    check("T16b cancel 后 _worker 清空可再发", b3._worker is None)
+
+    # 16c 离线路径：stub 抛 OfflineError → offline 信号语义 + 入史
+    b4 = ChatBridge(client=_StubClient(delay=0.0, exc=OfflineError("断网")),
+                    registry=object(), make_ctx=lambda: None)
+    b4.send("离线消息")
+    _pump(400)
+    check("T16c 离线入史 + _offline 置位",
+          b4._offline is True
+          and b4._messages[-1]["content"] == OFFLINE_REPLY)
 
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0

@@ -9,7 +9,12 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import sys
+
+# 批次H/M12（REVIEW-2026-08-31 F31）：缺省 offscreen——GUI 用例不依赖
+# 真实显示会话（CI/SSH 可跑）；要真窗口调试则显式设 QT_QPA_PLATFORM
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtTest import QTest

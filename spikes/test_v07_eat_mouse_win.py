@@ -295,8 +295,7 @@ def main() -> int:
     )
     pr4.eat_mouse(5.0)
     check("G1 空闲3h 挂机态不抑制(无事件无pending)",
-          ev3 == [] and locked is not None and not FakeLockInstance.active
-          if False else (ev3 == [] and pr4._eat_pending is None))
+          ev3 == [] and pr4._eat_pending is None)
 
     # ---- H M7 修（REVIEW-2026-08-27）：活跃内容白名单 exe 名归一化 ----
     # sensor_win.foreground_process_name() 返回大写带 .EXE 名，旧版裸

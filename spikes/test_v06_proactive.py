@@ -206,6 +206,62 @@ def main() -> int:
     s.shutdown()   # 幂等：二次调用 no-op
     check("T24 shutdown 幂等", s._wake_worker is None)
 
+    # ---- T25 批次H/M10（REVIEW-2026-08-31 F32）：异步决策链真跑 ----
+    # worker 与 _decide 同路径后的端到端：LLM JSON → done 信号 → 气泡+排程；
+    # 垃圾输出 → _decide 内部罐头；_on_wake_failed → 罐头。旧版 T24 无
+    # QCoreApplication，done 信号永不送达（生产/测试双轨的实证盲区）
+    from PySide6.QtCore import QCoreApplication
+
+    _qapp = QCoreApplication.instance() or QCoreApplication(sys.argv)
+
+    def _pump(ms: int) -> None:
+        """跨线程信号投递要泵事件循环——QTest.qWait 不 processEvents
+        （批次H 实测踩坑），必须显式泵"""
+        import time as _t
+        t0 = _t.monotonic()
+        while (_t.monotonic() - t0) * 1000 < ms:
+            _qapp.processEvents()
+            _t.sleep(0.005)
+
+    class JsonClient:
+        _resp = None
+
+        def __init__(self, text):
+            self._text = text
+
+        def chat_once(self, history, ctx, on_delta=None,
+                      system_override=None, tools_override=None):
+            # 决策链契约校验：system_override 隔离 + 不挂工具
+            assert system_override and tools_override is None
+            return self._text, []
+
+    clock25 = FakeClock("2026-08-17 10:00")
+    s25, bubbles25 = make(clock25)
+    s25._client = JsonClient('{"message": "记得喝水哦", "next_min": 30}')
+    s25._fire_wake(clock25())
+    _pump(400)   # worker 完成 + done 信号经事件循环送达
+    check("T25a 异步决策链：LLM 气泡送达", bubbles25 == ["记得喝水哦"])
+    check("T25b 异步链排定下次唤醒（30min 后）",
+          s25._next_wake_at is not None
+          and abs(s25._next_wake_at - (clock25() + 1800)) < 1)
+    s25.shutdown()
+
+    # 垃圾 JSON → _decide 内部回退罐头（链不断）
+    s26, bubbles26 = make(FakeClock("2026-08-17 10:00"))
+    s26._client = JsonClient("这不是 JSON")
+    s26._fire_wake(s26._now())
+    _pump(400)
+    check("T25c 垃圾决策输出回退本地罐头（气泡非空+链不断）",
+          len(bubbles26) == 1 and s26._next_wake_at is not None)
+    s26.shutdown()
+
+    # failed 槽直测（decide_fn 自身崩溃的兜底路径）
+    s27, bubbles27 = make(FakeClock("2026-08-17 10:00"))
+    s27._on_wake_failed({"hour": "10:00"})
+    check("T25d _on_wake_failed 回退罐头 + 链不断",
+          len(bubbles27) == 1 and s27._next_wake_at is not None)
+    s27.shutdown()
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

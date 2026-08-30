@@ -582,34 +582,25 @@ class ProactiveScheduler:
             _log.info("[主动] 上一轮决策 worker 仍在跑，跳过本次唤醒")
             return
         self._wake_ctx_pending = ctx
+        # 批次H/M10（REVIEW-2026-08-31 F32）：worker 与测试共用同一条
+        # ``_decide``（请求+解析+罐头回退全在里面）——旧版 worker 内联
+        # chat_once、slot 里再解析，生产异步链与测试同步链双轨漂移
         self._wake_worker = _ProactiveWorker(self._client, ctx,
-                                             parent=self._worker_owner)
+                                             parent=self._worker_owner,
+                                             decide_fn=self._decide)
         self._wake_worker.done.connect(self._on_wake_done)
         self._wake_worker.failed.connect(self._on_wake_failed)
         # 删除只走 finished→deleteLater 单通道（parent 管生存期，见 __init__）
         self._wake_worker.finished.connect(self._wake_worker.deleteLater)
         self._wake_worker.start()
 
-    @Slot(object, object)
-    def _on_wake_done(self, text: object, ctx: object) -> None:
-        """worker done：解析 JSON → 发气泡 + 排下一次（主线程槽）。"""
+    @Slot(float, str, object)
+    def _on_wake_done(self, delay_min: float, msg: str, ctx: object) -> None:
+        """worker done：_decide 已含解析+罐头回退，这里只发气泡+排下一次。"""
         self._wake_worker = None
-        try:
-            delay_min, msg = self._parse_decision(str(text))
-            if msg:
-                self._emit_bubble(msg, self._now())
-                _log.info("[主动] 唤醒(LLM): %s → 下次 %.0fmin", ctx, delay_min)
-                self.schedule_wake(delay_min, {"chain": True})
-            else:
-                # message 无效 → 本地罐头
-                d, m = self._local_canned()
-                self._emit_bubble(m, self._now())
-                self.schedule_wake(d, {"chain": True})
-        except Exception as exc:
-            _log.warning("[主动] 决策结果解析异常退本地: %s", exc)
-            d, m = self._local_canned()
-            self._emit_bubble(m, self._now())
-            self.schedule_wake(d, {"chain": True})
+        self._emit_bubble(msg, self._now())
+        _log.info("[主动] 唤醒(决策): %s → 下次 %.0fmin", ctx, delay_min)
+        self.schedule_wake(delay_min, {"chain": True})
 
     @Slot(object)
     def _on_wake_failed(self, ctx: object) -> None:
@@ -621,7 +612,7 @@ class ProactiveScheduler:
         self.schedule_wake(d, {"chain": True})
 
     def _decide(self, ctx: dict) -> tuple[float, str]:
-        """同步决策（测试用；生产走异步 _fire_wake + _on_wake_done）。
+        """决策唯一实现（生产异步 worker 与测试共用，批次H/M10 收口双轨）。
 
         v0.6.2：chat_once 加 system_override=_DECISION_SYSTEM + tools_override=None
         （隔离人设 + 不挂工具，治 ctx=None 崩 + 人设冲突）；JSON 剥离 ```json```
@@ -673,24 +664,29 @@ class ProactiveScheduler:
 
 
 class _ProactiveWorker(QThread):
-    """proactive 决策后台线程（v0.6.2）——包裹 chat_once，主线程不阻塞。
+    """proactive 决策后台线程（v0.6.2）——包裹决策，主线程不阻塞。
 
-    信号：``done(text, ctx)``（决策文本 + 原 ctx 回主线程解析）/
-    ``failed(ctx)``（超时/离线/异常退本地罐头）。
+    批次H/M10（REVIEW-2026-08-31 F32）：决策本体 = 注入的 ``decide_fn``
+    （生产即 ``ProactiveScheduler._decide``，测试同路径）——旧版此处内联
+    chat_once、解析在主线程 slot，生产/测试两套代码零交集。
+
+    信号：``done(delay_min, msg, ctx)``（_decide 已含解析+罐头回退）/
+    ``failed(ctx)``（decide_fn 自身崩溃的兜底，正常不会发生）。
     """
 
-    done = Signal(object, object)
+    done = Signal(float, str, object)
     failed = Signal(object)
 
-    def __init__(self, client, ctx: dict, parent=None) -> None:
+    def __init__(self, client, ctx: dict, parent=None, decide_fn=None) -> None:
         super().__init__(parent)
         self._client = client
         self._ctx = ctx
+        self._decide_fn = decide_fn
 
     def cancel(self) -> None:
         """中断在飞请求（shutdown 用）：关底层流式 socket——iter_lines 抛
-        ConnectionError→OfflineError→run 的 except→failed.emit（信号已断，
-        无副作用），线程随即退出，wait 不必吃满 read 超时。"""
+        ConnectionError→OfflineError→_decide 的 except→退罐头，线程随即
+        退出，wait 不必吃满 read 超时。"""
         try:
             if self._client._resp is not None:
                 self._client._resp.close()
@@ -699,19 +695,9 @@ class _ProactiveWorker(QThread):
 
     @Slot()
     def run(self) -> None:
-        from .llm import ChatTurn
-
-        history = [ChatTurn(
-            role="user",
-            content="当前状态：" + json.dumps(self._ctx, ensure_ascii=False),
-        )]
         try:
-            text, _turns = self._client.chat_once(
-                history, None,
-                system_override=_DECISION_SYSTEM,
-                tools_override=None,
-            )
-            self.done.emit(text, self._ctx)
+            delay_min, msg = self._decide_fn(self._ctx)
+            self.done.emit(float(delay_min), str(msg), self._ctx)
         except Exception as exc:
             _log.warning("[主动] 异步决策异常: %s", exc)
             self.failed.emit(self._ctx)

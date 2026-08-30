@@ -11,6 +11,9 @@ import sys
 import tempfile
 import time
 
+# 批次H/M12（REVIEW-2026-08-31 F31）：缺省 offscreen（不依赖真显示会话）
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 sys.path.insert(0, ".")
 
 from pet.memory import MemoryStore, _tokenize  # noqa: E402
@@ -300,10 +303,18 @@ def main() -> int:
         fake._mem_window.hide()
 
     # 平台 open_path：目录+文件
+    # 批次H/M13（REVIEW-2026-08-31）：真调用会在开发机弹 Explorer 窗口
+    # （os.startfile 副作用）——默认只验可调用，真副作用用例需
+    # DESKTOP_PET_GUI_EFFECTS=1 显式开启
     from pet.platform import get_platform_adapter
     ad = get_platform_adapter()
-    ok_d, _ = ad.open_path(tempfile.gettempdir())
-    check("T12 win open_path(目录)成功", ok_d)
+    if os.environ.get("DESKTOP_PET_GUI_EFFECTS") == "1":
+        ok_d, _ = ad.open_path(tempfile.gettempdir())
+        check("T12 win open_path(目录)成功", ok_d)
+    else:
+        check("T12 win open_path 可调用（真开 Explorer 需 "
+              "DESKTOP_PET_GUI_EFFECTS=1）",
+              callable(getattr(ad, "open_path", None)))
 
     QTest.qWait(100)
     win.hide()

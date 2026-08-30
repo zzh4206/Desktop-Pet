@@ -532,13 +532,19 @@ def main() -> int:
     fsm.drag_move((960, 500))     # 强上抛
     fsm.end_drag()
     hit_top_tick = None
+    left_next = None
+    never_above = True
     for i in range(int(3 / DT)):
         fsm.step(PetState.default(), sensors(), DT)
+        never_above = never_above and fsm.pos[1] >= _TOP - 1e-6
         if fsm.pos[1] <= _TOP and hit_top_tick is None:
             hit_top_tick = i
-        if hit_top_tick is not None and i == hit_top_tick + 1:
-            check("T27 撞顶次tick即离开(反弹不吸附)",
-                  fsm.pos[1] > _TOP)
+        elif hit_top_tick is not None and left_next is None:
+            # 批次H/T2：触顶次拍必离开——旧版 check 只在 i==hit+1 那一拍
+            # 条件执行，循环提前结束则断言静默不执行（不计 PASS/FAIL）
+            left_next = fsm.pos[1] > _TOP
+    check("T27 撞顶次tick即离开(反弹不吸附)", left_next is True)
+    check("T27 全程不越上界（逐拍）", never_above)
     check("T27 上抛确实触顶", hit_top_tick is not None)
 
     # T27b 弧线顶点恰好触顶（触顶时 |vy|≈0）：最小弹速保证 0.3s 内降 ≥80px
@@ -549,11 +555,13 @@ def main() -> int:
     fsm._vx, fsm._vy = 800.0, -2600.0
     top_at = None
     ys = []
+    never_above_b = True
     for i in range(int(4 / DT)):
         fsm.step(PetState.default(), sensors(), DT)
         if fsm.mode in ("idle", "climb", "drag"):
             break
         ys.append(fsm.pos[1])
+        never_above_b = never_above_b and fsm.pos[1] >= _TOP - 1e-6
         if fsm.pos[1] <= _TOP + 1:
             top_at = i
     if top_at is not None:
@@ -562,8 +570,8 @@ def main() -> int:
         check("T27b 顶点触顶0.3s内脱离≥80px(不贴顶滑行)", left)
     else:
         check("T27b 该轨迹未触顶(参数漂移,重校)", False)
-    # 触顶期间任意时刻不越界（头顶不超出工作区顶）
-    check("T27 全程不越上界", fsm.pos[1] >= _TOP)
+    # 触顶期间任意时刻不越界（头顶不超出工作区顶）——批次H/T2 改逐拍
+    check("T27b 全程不越上界（逐拍）", never_above_b)
 
     # T28 上抛撞窗底弹回：不许穿体落顶（"吸附贴顶窗"的根因）
     midwin = {"x": 700, "y": 300, "width": 500, "height": 300}

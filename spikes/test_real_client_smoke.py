@@ -38,7 +38,11 @@ except AttributeError as e:
     raise AssertionError(f"H2 regression: {e}")
 finally:
     llm_mod.requests.post = orig_post
-assert timeout_seen["v"] is not None and (isinstance(timeout_seen["v"], (int, float, tuple)) and (isinstance(timeout_seen["v"], (int, float)) or all(x > 0 for x in timeout_seen["v"])))
+assert timeout_seen["v"] is not None and (
+    # 批次H/T3：标量分支也要 >0——timeout=0 在 urllib3 语义=永不超时
+    (isinstance(timeout_seen["v"], (int, float)) and timeout_seen["v"] > 0)
+    or (isinstance(timeout_seen["v"], tuple)
+        and all(x > 0 for x in timeout_seen["v"])))
 print(f"  ✅ H2: chat_once 传 timeout={timeout_seen['v']}s 到网络层")
 
 # ---- 批次D（REVIEW-2026-08-28）F9/F11/F7/F14 ----

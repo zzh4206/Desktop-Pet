@@ -1105,6 +1105,17 @@ class PetApp:
             except Exception:
                 pass
         self._chat_engine = None
+        # 批次H/L14（REVIEW-2026-08-31）：perm/mem 面板一并收口——旧版只
+        # 关聊天引擎，两副引擎挂到进程退出（QML 对象树滞留 + 潜在告警）
+        for attr in ("_mem_window", "_perm_window"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                try:
+                    w.close()
+                except Exception:
+                    pass
+        self._mem_engine = None
+        self._perm_engine = None
         # ⑥ 移除托盘
         self.tray.remove()
         # ⑦ QApplication.quit()

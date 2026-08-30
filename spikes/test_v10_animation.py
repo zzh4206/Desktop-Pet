@@ -153,21 +153,22 @@ def main() -> int:
     import pet.asset_provider as ap
 
     provider._frames_cache.clear()
-    orig_isfile = os.path.isfile
     stat_calls = []
 
     def _spy_isfile(p, *a, **k):
         stat_calls.append(str(p))
-        return orig_isfile(p, *a, **k)
+        return _orig_isfile(p, *a, **k)
 
-    ap.os.path.isfile = _spy_isfile
-    try:
+    # 批次H/T4（REVIEW-2026-08-31）：mock.patch.object 上下文管理器——
+    # 旧版手工赋值/恢复 ap.os.path.isfile（ap.os 即全局 os 模块），
+    # 恢复遗漏即全进程污染
+    from unittest import mock
+    _orig_isfile = os.path.isfile
+    with mock.patch.object(os.path, "isfile", _spy_isfile):
         provider.frames_for("young", "walk")
         n_first = len(stat_calls)
         provider.frames_for("young", "walk")
         n_second = len(stat_calls) - n_first
-    finally:
-        ap.os.path.isfile = orig_isfile
     check("T8a 首次 stat 建缓存", n_first >= 1)
     check("T8b 二次调用零 stat（M9 缓存命中）", n_second == 0)
     w1 = provider.frames_for("young", "walk")
