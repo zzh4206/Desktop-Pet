@@ -268,11 +268,19 @@ class BehaviorFSM:
     # ---- 拖拽 API（window 拖拽 signal → app 调用） ----
 
     def begin_drag(self, cursor: tuple) -> None:
-        """按住宠物：进入 DRAG，位置=光标（bottom_center 钉在光标）。"""
+        """按住宠物：进入 DRAG，位置=光标（bottom_center 钉在光标）。
+
+        批次D/L2（REVIEW-2026-08-31）：_pos 立即落光标位（钳制同
+        drag_move）——旧版只记 drag_hist，按下未移动的窗口期内 _tick
+        用旧 FSM 坐标同步窗口 = 拖拽起始回跳一拍。"""
         self._mode = _DRAG
         self._vx = self._vy = 0.0
         self._bounce_count = 0
         self._stand_win = None
+        self._pos = (
+            self._clamp_x(cursor[0]),
+            max(cursor[1], self._work_area["y"] + self._pet_height),
+        )
         self._drag_hist.clear()
         self._drag_hist.append((time.monotonic(), cursor[0], cursor[1]))
 
@@ -357,6 +365,13 @@ class BehaviorFSM:
             if mode not in {"free", "follow", "edge"}:
                 _log.warning("忽略未知移动模式: %s", mode)
                 return
+            # 批次D/L3（REVIEW-2026-08-31）：吃鼠标两态期间忽略模式切换——
+            # edge 分支强置 _mode=IDLE 会让 FSM 与 EatMouseSession 的抑制态
+            # 脱钩（锁还挂着、FSM 已回 idle）。菜单选中态由 app 回读
+            # fsm.motion_mode 同步，忽略后不脱节
+            if self._mode in (_EAT_MOUSE, _EAT_APPROACH):
+                _log.info("[吃鼠标] 期间忽略移动模式切换: %s", mode)
+                return
             self._motion_mode = mode
             self._follow = mode == "follow"
             if mode == "edge":
@@ -372,12 +387,15 @@ class BehaviorFSM:
             self._eat_approach_t0 = time.monotonic()
             self._stand_win = None
             self._vx = self._vy = 0.0
-            self._follow = False
+            self._follow = False   # _motion_mode 不动（释放时据它恢复）
         elif event == "eat_mouse_off":
             # 吐出/释放 → 回 idle（原 EAT_MOUSE 才有意义；非此态 no-op）
             if self._mode in (_EAT_MOUSE, _EAT_APPROACH):
                 self._mode = _IDLE
                 self._idle_left = self._new_idle()
+                # 批次D/M4（REVIEW-2026-08-31）：按 motion_mode 恢复跟随——
+                # 旧版只清 _follow，释放后 UI 仍显示跟随而实际不再跟随
+                self._follow = self._motion_mode == "follow"
 
     @property
     def mode(self) -> str:
@@ -472,10 +490,21 @@ class BehaviorFSM:
         self._alive_at = sensors.alive_at
         self._rect_at = sensors.rect_at
 
-        # dt 钳制：时钟回拨/卡顿致 dt<=0 或过大时反向积分/大步穿体，
-        # 钳到 [0, 0.05]（50ms 上限对齐 _tick 间隔，防一帧大位移穿墙）
-        dt = max(0.0, min(dt, 0.05))
+        # 批次D/L4（REVIEW-2026-08-31）：子步积分——批次E/L12 起 app 喂
+        # 实测间隔（模态挂起后可达 0.25s），旧版此处钳 0.05 把挂起期间的
+        # 物理时间静默吞掉（L12 修复名存实亡）。拆 ≤0.05 子步循环：
+        # 单步上限防一帧大位移穿墙（原钳制意图），总量 0.25s 由 app 钳。
+        # 常态 50ms tick → 单子步，逐拍行为与旧版完全等价
+        dt = max(0.0, min(dt, 0.25))
+        action = None
+        while dt > 1e-9 or action is None:
+            sub = min(dt, 0.05) if dt > 0 else 0.0
+            dt -= sub
+            action = self._step_once(state, sensors, sub)
+        return action
 
+    def _step_once(self, state: PetState, sensors: Sensors, dt: float) -> Action:
+        """单个子步（dt ≤ 0.05）的模式分派——原 step() 主体。"""
         # 防御钳制：任何状态下都在工作区内（防偶发消失）
         # y 下限 = 工作区顶+身位（头顶齐屏顶），与 drag_move/_step_air 撞顶
         # 同语义——脚贴屏顶时头已穿出工作区顶，裸 work_area.y 会漏钳

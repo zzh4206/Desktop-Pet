@@ -720,6 +720,58 @@ def main() -> int:
     check("T10 get_frames 动作 3 帧(首尾静帧)", len(f_act) == 3
           and f_act[0].path == f_act[2].path != f_act[1].path)
 
+    # ---- 批次D（REVIEW-2026-08-31）----
+    # T35 L2：begin_drag 立即落 _pos——旧版不落，按下未移动的窗口期内
+    # _tick 用旧 FSM 坐标把窗口拽回（拖拽起始回跳）
+    fsm = BehaviorFSM(dict(WA))
+    fsm._pos = (400, WA["height"])
+    fsm.begin_drag((900, 800))
+    check("T35 begin_drag 即落 _pos（拖拽起始不回跳）",
+          fsm.pos == (900, 800) and fsm.mode == "drag")
+    fsm.end_drag()
+
+    # T36 M4：eat_mouse_off 按 motion_mode 恢复 follow——旧版只清 _follow，
+    # 释放后 UI 仍显示跟随而实际不再跟随
+    fsm = BehaviorFSM(dict(WA))
+    fsm.handle_event("motion_mode:follow")
+    assert fsm._follow is True
+    fsm.handle_event("eat_mouse")
+    check("T36a 吃鼠标期间 follow 暂停",
+          fsm._follow is False and fsm.motion_mode == "follow")
+    fsm.handle_event("eat_mouse_off")
+    check("T36b 释放后按 motion_mode 恢复 follow", fsm._follow is True)
+    # free 模式释放后不意外开启跟随
+    fsm.handle_event("motion_mode:free")
+    fsm.handle_event("eat_mouse")
+    fsm.handle_event("eat_mouse_off")
+    check("T36c free 模式释放后不误开 follow", fsm._follow is False)
+
+    # T37 L3：吃鼠标两态期间 motion_mode 不抢占（FSM 与抑制态不脱钩）
+    fsm = BehaviorFSM(dict(WA))
+    fsm.handle_event("eat_mouse")
+    fsm.handle_event("motion_mode:edge")
+    check("T37 吃鼠标期间 motion_mode 被忽略",
+          fsm.mode == "eat_approach" and fsm.motion_mode != "edge")
+    fsm.handle_event("eat_mouse_off")
+
+    # T38 L4：子步积分——dt=0.25 不再被吞成 0.05（模态挂起后物理不慢动作）；
+    # 常态 0.05 单子步与旧版逐拍等价
+    fsm = BehaviorFSM(dict(WA))
+    fsm._mode = "walk"
+    fsm._target = (1500, WA["height"])
+    fsm._pos = (500, WA["height"])
+    fsm.step(PetState.default(), sensors(), 0.25)
+    moved = fsm.pos[0] - 500
+    check("T38a dt=0.25 行走 30px（旧版仅走 6px）",
+          abs(moved - 120 * 0.25) < 1e-6)
+    fsm2 = BehaviorFSM(dict(WA))
+    fsm2._mode = "walk"
+    fsm2._target = (1500, WA["height"])
+    fsm2._pos = (500, WA["height"])
+    fsm2.step(PetState.default(), sensors(), DT)
+    check("T38b dt=0.05 单子步逐拍等价（6px）",
+          abs(fsm2.pos[0] - 506) < 1e-6)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 
