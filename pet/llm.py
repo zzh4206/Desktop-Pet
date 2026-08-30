@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
 
@@ -117,6 +118,7 @@ class OpenAICompatibleClient(LLMClient):
         system_prompt: str = SYSTEM_PROMPT,
         timeout=_TIMEOUT,
         max_tokens: int = 4096,
+        stream_total_s: float = 180.0,
     ) -> None:
         self._api_key = api_key
         self._registry = registry
@@ -128,6 +130,9 @@ class OpenAICompatibleClient(LLMClient):
         # 批次D/F12（REVIEW-2026-08-28）：显式上限——工具结果已截断，回复
         # 侧同样封顶（DS 默认恰 4096，行为不变；其余 provider 不再无界）
         self._max_tokens = int(max_tokens)
+        # 批次E/M9（REVIEW-2026-08-31 F13）：流式**总时长**上限——read
+        # 超时是分片间隔语义，服务端每 100s 滴 1 字节可无限拖住一轮对话
+        self._stream_total_s = float(stream_total_s)
         self._resp = None  # 流式响应引用（cancel() 调 close 真中断用）
         self.usage = Usage()
 
@@ -191,8 +196,14 @@ class OpenAICompatibleClient(LLMClient):
         full = []
         tool_calls: dict[int, dict] = {}  # index 聚合 DS 分片 tool_call
         usage = {}
+        t0 = time.monotonic()   # 批次E/M9：流式总时长计时
         try:
             for line in self._resp.iter_lines(decode_unicode=True):
+                # 批次E/M9：慢滴流总时长超限 → 按超时降级（不等 read 超时
+                # 被滴流续命）
+                if time.monotonic() - t0 > self._stream_total_s:
+                    raise requests.Timeout(
+                        f"流式总时长超 {self._stream_total_s:.0f}s（慢滴流）")
                 if not line or not line.startswith("data:"):
                     continue
                 data = line[len("data:") :].strip()
@@ -300,7 +311,13 @@ class OpenAICompatibleClient(LLMClient):
             except json.JSONDecodeError:
                 args = {}
             if log.isEnabledFor(logging.INFO):
-                log.info("DS 工具调用 %s args=%s", name, args)
+                # 批次E/M8（REVIEW-2026-08-31 F5）：工具参数可含剪贴板文本/
+                # 记忆事实等隐私内容——日志只留截断形态（值 ≤24 字符）
+                trunc = {
+                    k: (v if len(str(v)) <= 24 else str(v)[:24] + "…")
+                    for k, v in (args or {}).items()
+                }
+                log.info("DS 工具调用 %s args=%s", name, trunc)
             res = self._registry.dispatch(name, args, ctx)
             content = truncate_tool_result(res.message)
             if not getattr(res, "success", True):
@@ -488,9 +505,10 @@ def create_client(provider: str, api_key: str, registry, cfg: dict) -> LLMClient
     model = pcfg.get("model", DS_MODEL)
     max_tokens = pcfg.get("max_tokens",
                           cfg.get("llm", {}).get("max_tokens", 4096))
+    stream_total = cfg.get("llm", {}).get("stream_total_s", 180.0)
     if provider == "claude":
         raise NotImplementedError("ClaudeClient 待加（/messages 格式，首批只 OpenAI 兼容）")
     # deepseek / openai / 任何 OpenAI 兼容中转站 → 同一 Client
     return OpenAICompatibleClient(
         api_key, registry, base_url=base_url, model=model,
-        max_tokens=max_tokens)
+        max_tokens=max_tokens, stream_total_s=stream_total)

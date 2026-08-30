@@ -52,14 +52,22 @@ def main() -> int:
     m.memorize("", 0.5)
     check("T2 空文拒", len(m) == 2)
 
-    # ---- T3 recall：词面命中 + 回血 ----
+    # ---- T3 recall：词面命中 + 回血（批次E/L13：跨天复召才回血）----
     before = [x["importance"] for x in m.all()
               if "拿铁" in x["fact"]][0]
     hits = m.recall("咖啡 拿铁 口味", k=5)
     check("T3 命中拿铁条目", any("拿铁" in h["fact"] for h in hits))
     after = [x["importance"] for x in m.all()
              if "拿铁" in x["fact"]][0]
-    check("T3 命中回血(+0.05)", after >= before)
+    check("T3 同日复召不回血(=旧版立即+0.05 封顶失真)", after == before)
+    # 跨天复召才回血：把 last_recalled 回拨 2 天再召回
+    for x in m._mem:
+        if "拿铁" in x["fact"]:
+            x["last_recalled"] = time.time() - 2 * 86400
+    m.recall("拿铁", k=5)
+    after2 = [x["importance"] for x in m.all()
+              if "拿铁" in x["fact"]][0]
+    check("T3 跨天复召回血(+0.05)", after2 > after)
     miss = m.recall("完全不相关的词汇如量子力学", k=5)
     check("T3 无命中返空(拿铁不匹配量子)", not miss)
 
@@ -98,11 +106,20 @@ def main() -> int:
     check("T7 低权超龄被遗忘", dropped == 1 and len(m5) == 0)
     m5.memorize("常被提起的记忆", 0.8)
     for _ in range(6):
-        m5.recall("记忆")       # 反复召回回血
+        # 批次E/L13：跨天复召才回血——每次召回前回拨 last_recalled 一天
+        for x in m5.all():
+            x["last_recalled"] -= 86400
+        m5.recall("记忆")       # 跨日复召回血
     for x in m5.all():
         x["last_recalled"] = time.time() - 40 * 86400
     m5.forget_expired()
     check("T7 常用记忆存活(回血抵衰减)", len(m5) == 1)
+    m5b = MemoryStore()
+    m5b.memorize("同日反复提起不回血", 0.5)
+    for _ in range(6):
+        m5b.recall("回血")      # 同日复召：不再回血
+    imp_b = m5b.all()[0]["importance"]
+    check("T7b 同日复召不胀顶（F19 失真封堵）", abs(imp_b - 0.5) < 1e-6)
 
     # ---- T8 上限挤占 ----
     m6 = MemoryStore()
@@ -126,11 +143,17 @@ def main() -> int:
     check("T9 工具 search 命中", r3.success and "咖啡" in r3.message)
     r4 = tools["memory_search"].execute({"query": "无关词"}, ctx)
     check("T9 search 无命中不报错", r4.success)
+    # 批次E/L11：k 负值钳 [1,10]（旧版 k=-1 → scored[:-1] 语义错乱）
+    r5 = tools["memory_search"].execute({"query": "咖啡", "k": -1}, ctx)
+    check("T9 search k=-1 钳制不炸", r5.success and "咖啡" in r5.message)
 
     # ---- T10 memory_context 注入段 ----
     seg = memory_context(store, "喝什么咖啡")
     check("T10 注入段含命中记忆", "咖啡" in seg and "长期记忆" in seg)
     check("T10 无命中返空", memory_context(store, "量子涨落") == "")
+    # 批次E/S1（F3）：注入段不再有"可靠"背书（存储型注入通道降权）
+    check("T10 注入段无'可靠'背书（仅供参考措辞）",
+          "可靠" not in seg and "仅供参考" in seg)
 
     # ---- T11 滚屏摘要：>20 轮压缩最老 10 轮 ----
     # H4 修后摘要走 _SummarizeWorker 后台 QThread（chat_once 带

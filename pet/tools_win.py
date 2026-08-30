@@ -389,10 +389,21 @@ class ProcessHandler:
         argv = ["taskkill", "/F"]
         if pid is not None:
             try:
-                argv += ["/PID", str(int(pid))]
-                label = f"PID {int(pid)}"
+                pid_i = int(pid)
             except (TypeError, ValueError):
                 return ToolResult(False, "pid 需为数字。")
+            # 批次E/M5（REVIEW-2026-08-31）：pid 路径也过硬拒名单——
+            # 解析进程名再比对（denylist 的设计意图是"确认框都不让过"，
+            # 旧版 pid 路径确认框即直达 taskkill）
+            okn, pname = _ps_run(
+                [f"(Get-Process -Id {pid_i}).ProcessName"])
+            if okn and pname:
+                if (pname.strip().lower() + ".exe") in _PROC_DENYLIST:
+                    return ToolResult(
+                        False,
+                        f"{pname.strip()} 是系统关键进程，不允许通过宠物结束。")
+            argv += ["/PID", str(pid_i)]
+            label = f"PID {pid_i}"
         elif name:
             if not _PROC_NAME.match(name):
                 return ToolResult(False, f"进程名不合法: {name!r}")

@@ -36,6 +36,8 @@ _PROC_DENYLIST = {
     "loginwindow", "WindowServer", "launchd", "kernel_task",
     "init", "PID1", "kernel",
 }
+# 批次E/T-2：小写归一比对集（win 端 tools_win._PROC_DENYLIST 同语义）
+_PROC_DENYLIST_LOWER = frozenset(d.lower() for d in _PROC_DENYLIST)
 # mdfind 结果上限（§五 文件数上限，防一次性灌爆 DS 上下文）
 _MDFIND_CAP = 20
 
@@ -349,14 +351,25 @@ class ProcessHandler:
         if pid is not None:
             try:
                 pid_i = int(pid)
-                argv = ["kill", str(pid_i)]
-                label = f"PID {pid_i}"
             except (TypeError, ValueError):
                 return ToolResult(False, "pid 需为数字。")
+            # 批次E/M5（REVIEW-2026-08-31）：pid 先解析进程名过硬拒名单——
+            # 旧版 pid 直达 kill，denylist（设计意图"确认框都不让过"）被绕过
+            okn, pname = _run(["ps", "-p", str(pid_i), "-o", "comm="])
+            if okn and pname:
+                base = pname.strip().rsplit("/", 1)[-1].lower()
+                if base in _PROC_DENYLIST_LOWER:
+                    return ToolResult(
+                        False,
+                        f"拒绝结束关键系统进程 {base}（PID {pid_i}，"
+                        "会登出/失能）。")
+            argv = ["kill", str(pid_i)]
+            label = f"PID {pid_i}"
         elif name:
             if not _PROC_NAME.match(name):
                 return ToolResult(False, f"进程名不合法: {name!r}")
-            if name in _PROC_DENYLIST:
+            # 批次E/T-2：denylist 比对大小写归一（与 win 端语义对齐）
+            if name.lower() in _PROC_DENYLIST_LOWER:
                 return ToolResult(
                     False, f"拒绝结束关键系统进程 {name}（会登出/失能）。"
                 )

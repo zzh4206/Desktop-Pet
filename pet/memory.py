@@ -177,7 +177,10 @@ class MemoryStore:
                 "recall_count": 0,
             })
             self._gen += 1                      # 批次D/F16：变更代数+1
-        _log.info("[记忆] 存: %s(imp=%.2f)", fact[:40], importance)
+        # 批次E/M8（REVIEW-2026-08-31 F5）：记忆内容（可能含隐私）不进日志，
+        # 只记 id/重要度/长度
+        _log.info("[记忆] 存: id=%s imp=%.2f（%d字）", mid, importance,
+                  len(fact))
         return mid
 
     def recall(self, query: str, k: int = 5) -> list:
@@ -223,8 +226,11 @@ class MemoryStore:
             hits = []
             for score, m in scored[:k]:
                 m["recall_count"] += 1
+                # 批次E/L13（REVIEW-2026-08-31 F19）：跨天复召才回血——
+                # 旧版每次命中 +0.05，会话内反复命中迅速封顶 1.0 失真
+                if now - m["last_recalled"] >= 86400.0:
+                    m["importance"] = min(1.0, m["importance"] + _RECALL_BOOST)
                 m["last_recalled"] = now
-                m["importance"] = min(1.0, m["importance"] + _RECALL_BOOST)
                 hits.append({"id": m["id"], "fact": m["fact"],
                              "importance": round(m["importance"], 3)})
             if hits:
@@ -261,6 +267,10 @@ class MemoryStore:
                 else:
                     kept.append(m)
             self._mem = kept
+            # 批次E/L12（REVIEW-2026-08-31）：衰减/删除也是变更——旧版不
+            # bump _gen，纯遗忘永不触发 dirty，崩溃即丢（仅 shutdown 落盘）
+            if dropped or kept:
+                self._gen += 1
         if dropped:
             _log.info("[记忆] 遗忘清理 %d 条", dropped)
         return dropped

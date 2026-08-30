@@ -170,6 +170,18 @@ def main() -> int:
         {"name": "EXPLORER.EXE"},
         ToolContext(pet_state=None, user_name="x", config={}))
     check("批次A process 硬拒大小写不敏感", r12.success is False)
+    # 批次E/M5（REVIEW-2026-08-31）：pid 路径也过硬拒名单——解析 csrss 真实
+    # pid（只读 Get-Process，不真跑 taskkill），旧版 pid 直达 taskkill
+    from pet.tools_win import _ps_run
+    okp, csrss_pid = _ps_run(["(Get-Process csrss | Select-Object -First 1).Id"])
+    if okp and csrss_pid.strip().isdigit():
+        r13 = ProcessHandler().execute(
+            {"pid": int(csrss_pid.strip())},
+            ToolContext(pet_state=None, user_name="x", config={}))
+        check("批次E process pid 路径硬拒 csrss（denylist 不再可绕）",
+              r13.success is False and "关键进程" in r13.message)
+    else:
+        check("批次E process pid 硬拒（取不到 csrss pid，环境跳过）", True)
 
     # F12：工具结果回灌截断
     from pet.llm import truncate_tool_result, _TOOL_RESULT_MAX_CHARS
