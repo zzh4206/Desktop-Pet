@@ -296,6 +296,44 @@ def main() -> int:
           win2._spec.stage == "young")
     win2.stop_frames()
 
+    # ---- T12 批次K：blink 瞬态覆盖件（闭眼睑贴片）----
+    # schema 放行 kind=blink；partsModel 透传；场景有 blinkOn 脉冲属性；
+    # 静止合成门禁跳过 blink（evaluate/part_overlap_px 双处）。
+    # 注意 build_rig_window(rig_root=) 期望 rig 父目录（内部拼 stage 子目录）
+    tmp_rig = tempfile.mkdtemp()
+    tmp_blink = os.path.join(tmp_rig, "final")
+    os.makedirs(tmp_blink, exist_ok=True)
+    _write_manifest(tmp_blink, {"neglected_neutral": src_neutral}, [{
+        "id": "blink_t", "file": src_neutral,
+        "source_figure": "neglected_neutral",
+        "px_rect": [402, 186, 556, 250], "pivot": [479, 218],
+        "z": "over_core", "kind": "blink",
+    }])
+    spec_b = load_rig_spec(tmp_blink, "final")
+    check("T12a schema 放行 kind=blink", spec_b is not None
+          and spec_b.parts[0].kind == "blink")
+    win_b = build_rig_window(WindowBase, base_sprite, "final",
+                             rig_root=tmp_rig)
+    ok_b = isinstance(win_b, RigWindow) and win_b.rig_active
+    check("T12b blink 部件装配进 partsModel", ok_b and any(
+        p.get("kind") == "blink"
+        for p in (win_b._root.property("partsModel") or [])))
+    check("T12c 场景具备 blinkOn 脉冲属性",
+          ok_b and win_b._root.property("blinkOn") is not None)
+    if ok_b:
+        win_b.stop_frames()
+    # 门禁跳过：带 blink 件的 manifest 静止合成不受贴片影响（贴片=闭眼
+    # 像素，若未跳过必然失配）
+    import importlib.util as _ilu
+    _qa2_spec = _ilu.spec_from_file_location(
+        "qa_rig_gate2", os.path.join(REPO, "tools", "qa_rig_composite.py"))
+    qa2 = _ilu.module_from_spec(_qa2_spec)
+    _qa2_spec.loader.exec_module(qa2)
+    rows_b = qa2.part_overlap_px(tmp_blink, json.load(
+        open(os.path.join(tmp_blink, "manifest.json"), encoding="utf-8")),
+        "neglected_neutral")
+    check("T12d 交叠门禁跳过 blink 件（单件无对→空）", rows_b == [])
+
     # 收尾清理定时器，防 Qt teardown 抖（对齐 v04 教训）
     win.stop_frames()
     win._frame_timer.stop()

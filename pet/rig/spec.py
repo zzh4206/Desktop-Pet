@@ -64,7 +64,9 @@ _MANIFEST_SCHEMA: dict = {
                         "maxItems": 2,
                     },
                     "z": {"enum": ["under_core", "over_core"]},
-                    "kind": {"enum": ["sway", "limb"]},
+                    # 批次K：blink=瞬态覆盖件（闭眼睑贴片，场景按周期脉冲
+                    # 显隐，不旋转不参与静止合成）——v0.14.33 眼睑部件
+                    "kind": {"enum": ["sway", "limb", "blink"]},
                     "base_deg": {"type": "number", "minimum": -45,
                                  "maximum": 45},
                     # 批次G/rL5（REVIEW-2026-08-31）：拆件参数留痕段

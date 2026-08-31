@@ -23,6 +23,7 @@ Item {
     property bool walking: false
     property real walkHz: 0       // 步态频率 Hz（FSM 速度映射；0=用部件周期）
     property string activeFigure: ""   // 当前展示的 figure 名（绑定件可见性）
+    property bool blinkOn: false       // 批次K：blink 覆盖件脉冲（眼睑贴片显隐）
     property var partsModel: []   // [{id,file,_url,source_figure,px_rect,pivot,z,kind,sway{...}}]
 
     // ---- 源图→画布几何（与 QLabel KeepAspectRatio+AlignCenter 同构）----
@@ -46,6 +47,9 @@ Item {
         property real t: 0
         onTriggered: {
             t += interval
+            // 批次K：眨眼脉冲——4.7s 周期闭眼 130ms（恰好一拍 33ms×4）；
+            // 常数周期不做随机化：QML 侧无随机源，伪随机漂移交给未来
+            root.blinkOn = (t % 4700) < 130
             // 批次F/rM1（REVIEW-2026-08-28）：步态相位=累加器 φ+=hz·dt——
             // 旧版 sin(2π·t·hz/1000) 相位=绝对时间×瞬时频率，hz 一变相位
             // 瞬移 t·Δhz 个整周期（跑 10min 后 0.05Hz 变化=30 个周期跳变，
@@ -133,13 +137,15 @@ Item {
         }
     }
 
-    // 部件委托：一槽一件；可见性由 source_figure===activeFigure 决定
+    // 部件委托：一槽一件；可见性由 source_figure===activeFigure 决定；
+    // blink 覆盖件仅在脉冲窗口可见（批次K）
     component RigPartDelegate : Item {
         id: dlg
         required property var modelData
         property var d: modelData
         anchors.fill: parent
         visible: !!d && d.source_figure === root.activeFigure
+            && (d.kind !== "blink" || root.blinkOn)
         width: parent ? parent.width : 0
         height: parent ? parent.height : 0
 

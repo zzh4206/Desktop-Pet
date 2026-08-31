@@ -36,7 +36,8 @@ def part_overlap_px(rig_dir: str, manifest: dict, figure: str) -> list:
     两件不同 pivot 各自摆动=正确前后关系，非 C1 同域拆两遍）不计入——
     静止合成仍由内部门禁把关，摆动观感由 --qa-swing 条带人工目检把关。
     """
-    parts = [p for p in manifest["parts"] if p["source_figure"] == figure]
+    parts = [p for p in manifest["parts"]
+             if p["source_figure"] == figure and p.get("kind") != "blink"]
     if len(parts) < 2:
         return []
 
@@ -117,6 +118,10 @@ def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
     n_parts = 0
     for p in manifest["parts"]:
         if p["source_figure"] != figure:
+            continue
+        if p.get("kind") == "blink":
+            # 批次K：blink 是瞬态覆盖件（闭眼贴片），静止合成=睁眼原图，
+            # 不参与 0° 复原比对
             continue
         part = Image.open(os.path.join(rig_dir, p["file"])).convert("RGBA")
         x0, y0, _x1, _y1 = p["px_rect"]
