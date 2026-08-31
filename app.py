@@ -547,11 +547,11 @@ class PetApp:
         if store is None or engine is None:
             return
         messages = store.recent_messages()
-        # 先处理最新一句中的明确情绪词；其余情况仍按最近上下文的 MLP 判断。
-        result = obvious_emotion(messages[-1]["text"]) if messages else None
-        if result is None:
-            # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
-            result = engine.evaluate(messages[-1:])
+        # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
+        # v2 句向量模型必须先判断，不能被关键词规则短路；显式词仅保留给旧 v1 的安全回退。
+        result = engine.evaluate(messages[-1:])
+        if result.used_fallback and engine.version != 2 and messages:
+            result = obvious_emotion(messages[-1]["text"]) or result
         if not is_significant(result, self._chat_emotion_cfg.get(
                 "event_confidence_threshold", .75)):
             return

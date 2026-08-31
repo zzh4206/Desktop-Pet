@@ -70,15 +70,22 @@ def main() -> None:
         return np.vstack(result).astype(np.float32)
     x = embed(train); xa = embed(acceptance)
     y = np.array([LABELS.index(r['label']) for r in train]); ya = np.array([LABELS.index(r['label']) for r in acceptance])
+    # 验收集完全隔离：只在训练数据内按类别切出验证集，用其选择最佳 checkpoint。
+    rng = np.random.default_rng(args.seed); train_ix, valid_ix = [], []
+    for label in range(len(LABELS)):
+        indices = np.flatnonzero(y == label); rng.shuffle(indices)
+        cut = max(1, int(len(indices) * .85)); train_ix.extend(indices[:cut]); valid_ix.extend(indices[cut:])
+    train_ix, valid_ix = np.asarray(train_ix), np.asarray(valid_ix)
     head = nn.Linear(x.shape[1], len(LABELS)).to(device); opt = torch.optim.AdamW(head.parameters(), lr=2e-3, weight_decay=.01)
-    loss_fn = nn.CrossEntropyLoss(); xt, yt = torch.from_numpy(x).to(device), torch.from_numpy(y).to(device)
+    loss_fn = nn.CrossEntropyLoss(); xt, yt = torch.from_numpy(x[train_ix]).to(device), torch.from_numpy(y[train_ix]).to(device)
+    xv, yv = torch.from_numpy(x[valid_ix]).to(device), y[valid_ix]
     best = None; best_f1 = -1.
     for epoch in range(args.epochs):
-        head.train(); order = torch.randperm(len(y), device=device)
+        head.train(); order = torch.randperm(len(yt), device=device)
         for ix in order.split(args.batch_size):
             opt.zero_grad(); loss_fn(head(xt[ix]), yt[ix]).backward(); opt.step()
-        head.eval(); pred = head(torch.from_numpy(xa).to(device)).argmax(1).cpu().numpy(); report = metrics(ya, pred)
-        print(f"epoch={epoch + 1} acceptance_macro_f1={report['macro_f1']:.4f}")
+        head.eval(); pred = head(xv).argmax(1).cpu().numpy(); report = metrics(yv, pred)
+        print(f"epoch={epoch + 1} validation_macro_f1={report['macro_f1']:.4f}")
         if report['macro_f1'] > best_f1: best_f1, best = report['macro_f1'], {k: v.detach().cpu().clone() for k, v in head.state_dict().items()}
     head.load_state_dict(best); args.out_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.out_dir / "classifier.npz", labels=np.array(LABELS), weight=head.weight.detach().cpu().numpy().T,
@@ -100,14 +107,16 @@ def main() -> None:
     torch.onnx.export(EncoderForOnnx(encoder).to(device).eval(), (input_ids, attention, type_ids), onnx_path,
                       input_names=["input_ids", "attention_mask", "token_type_ids"], output_names=["embedding"],
                       dynamic_axes={"input_ids": {0: "batch", 1: "sequence"}, "attention_mask": {0: "batch", 1: "sequence"},
-                                    "token_type_ids": {0: "batch", 1: "sequence"}, "embedding": {0: "batch"}}, opset_version=17)
+                                    "token_type_ids": {0: "batch", 1: "sequence"}, "embedding": {0: "batch"}},
+                      opset_version=17, dynamo=False)
     try:
         from onnxruntime.quantization import QuantType, quantize_dynamic
         quantize_dynamic(str(onnx_path), str(args.out_dir / "encoder.int8.onnx"), weight_type=QuantType.QInt8)
         onnx_path.unlink()
     except Exception as exc:
         raise SystemExit(f"ONNX 量化失败，拒绝导出未量化部署模型：{exc}") from exc
-    report = metrics(ya, head(torch.from_numpy(xa).to(device)).argmax(1).cpu().numpy())
+    report = {"validation": metrics(yv, head(xv).argmax(1).cpu().numpy()),
+              "acceptance": metrics(ya, head(torch.from_numpy(xa).to(device)).argmax(1).cpu().numpy())}
     (args.out_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False)); print(f"saved={args.out_dir}")
 
