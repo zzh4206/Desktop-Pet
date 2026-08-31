@@ -319,6 +319,28 @@ def main() -> int:
     QTest.qWait(100)
     win.hide()
 
+    # T14 假 PetApp 清理：fake 非 QObject，其持有的 QWidget/QML 引擎
+    # 在 Python GC 时按随机顺序析构，Qt 收到悬垂指针 → 进程退出
+    # 0xC0000409。手动 deleteLater + 事件泵确保有序销毁。
+    # PermBridge._worker 是 QThread：须先等其 finished 信号送达
+    # （qWait 不投递跨线程信号，须 processEvents 显式泵）。
+    if getattr(fake, "_perm_bridge", None) is not None:
+        from PySide6.QtCore import QCoreApplication
+        import time as _time
+        pb = fake._perm_bridge
+        for _ in range(100):
+            QCoreApplication.processEvents()
+            if pb._worker is None:
+                break
+            _time.sleep(0.05)
+        pb.deleteLater()
+    for w in (fake.bubble, fake._mem_window, win):
+        if w is not None:
+            w.deleteLater()
+    if getattr(fake, "_mem_engine", None) is not None:
+        fake._mem_engine.deleteLater()
+    QTest.qWait(200)
+
     for suffix in ("", ".bak", ".tmp"):
         try:
             os.remove(tmp + suffix)
