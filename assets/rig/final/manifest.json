@@ -450,6 +450,52 @@
         "min_px": 20000,
         "max_px": 400000
       }
+    },
+    {
+      "id": "blink_neglected_neutral",
+      "file": "parts/blink_neglected_neutral.png",
+      "source_figure": "neglected_neutral",
+      "px_rect": [
+        402,
+        186,
+        556,
+        250
+      ],
+      "pivot": [
+        479,
+        218
+      ],
+      "z": "over_core",
+      "kind": "blink",
+      "split": {
+        "source": "gpt-image-2 edits 补绘闭眼态（掩码岛内回贴）",
+        "api_mask": "spikes/_qa/blink_api_mask_neg.png",
+        "part_mask": "spikes/_qa/blink_part_mask_neg.png",
+        "filled_raw": "spikes/_qa/blink_filled_neg.png"
+      }
+    },
+    {
+      "id": "blink_healthy_neutral",
+      "file": "parts/blink_healthy_neutral.png",
+      "source_figure": "healthy_neutral",
+      "px_rect": [
+        395,
+        160,
+        575,
+        240
+      ],
+      "pivot": [
+        485,
+        200
+      ],
+      "z": "over_core",
+      "kind": "blink",
+      "split": {
+        "source": "gpt-image-2 edits 补绘闭眼态（掩码岛内回贴）",
+        "api_mask": "spikes/_qa/blink_api_mask_hea.png",
+        "part_mask": "spikes/_qa/blink_part_mask_hea.png",
+        "filled_raw": "spikes/_qa/blink_filled_hea.png"
+      }
     }
   ],
   "spec": 1,
