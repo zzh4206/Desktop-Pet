@@ -20,6 +20,7 @@ class TrayManager(QObject):
         self._on_reset = None
         self._on_spit = None
         self._on_mem = None
+        self._on_chat_emotion = None
         self._autostart_state = False
         self._on_autostart = None  # v0.11 自启切换回调（L14 修：注释原误标"强制吐出"）
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
@@ -30,12 +31,14 @@ class TrayManager(QObject):
         act_chat.triggered.connect(self._emit_chat)
         act_reset = menu.addAction("重新开始")
         act_mem = menu.addAction("记忆管理")
+        act_emotion = menu.addAction("聊天情绪设置")
         self._act_auto = act_auto = menu.addAction("开机自启")
         act_auto.setCheckable(True)
         act_auto.setChecked(self._autostart_state)
         act_auto.toggled.connect(self._emit_autostart)
         act_reset.triggered.connect(self._emit_reset)
         act_mem.triggered.connect(self._emit_mem)
+        act_emotion.triggered.connect(self._emit_chat_emotion)
         # v0.7 强制吐出：吃鼠标期间鼠标被抑制点不到菜单，故此菜单主要服务于
         # 非锁定态的残留释放 + 键盘可达用户（Tab/方向键导航菜单）。主逃生口
         # 仍是热键 Cmd+Option+T + 看门狗。
@@ -75,6 +78,13 @@ class TrayManager(QObject):
 
     def set_mem_callback(self, cb) -> None:
         self._on_mem = cb
+
+    def set_chat_emotion_callback(self, cb) -> None:
+        self._on_chat_emotion = cb
+
+    def _emit_chat_emotion(self) -> None:
+        if self._on_chat_emotion:
+            self._on_chat_emotion()
 
     def set_chat_callback(self, cb) -> None:
         """v0.4：托盘'聊天'唤出聊天面板（v0.11 真全局热键占位）。"""

@@ -57,6 +57,7 @@ if sys.platform == "darwin":
     threading.Thread(target=_filter_stderr, daemon=True).start()
 
 import argparse
+import json
 import logging
 import signal
 
@@ -71,7 +72,7 @@ from pet.bubble import BubbleType, BubbleWidget
 from pet.config import load_config
 from pet.logging_setup import setup_logging
 from pet.llm import create_client  # v0.4.15 工厂（不再硬编码 DeepSeekClient）
-from pet.pet_state import PetStateStore, Stage
+from pet.pet_state import Mood, PetStateStore, Stage
 from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
@@ -98,6 +99,14 @@ _INTERACT_MSG = {
     "poke": "别戳啦…",
 }
 
+_CHAT_EMOTION_BUBBLES = {
+    "happy": ("太好了，替你开心～", "听起来真棒！", "今天有好消息呀～"),
+    "neutral": ("我在这儿陪着你～", "慢慢来就好。", "今天也一起加油～"),
+    "sad": ("抱抱你，难过也没关系。", "我会在这里听你说。", "先对自己温柔一点～"),
+    "sleepy": ("辛苦啦，早点休息吧～", "慢一点，今晚好好放松。", "困了就和我一起歇会儿～"),
+    "hungry": ("别忘了吃点东西呀～", "先补充一点能量吧。", "喝口水、吃点热乎的～"),
+}
+
 
 class PetApp:
     def __init__(self, argv, adapter, verbose: bool):
@@ -117,6 +126,22 @@ class PetApp:
             self.logger.setLevel(lvl_map.get(
                 str(self.cfg["log_level"]).upper(), 20))
         self._state_path = os.path.join(paths["data_dir"], "pet_state.json")
+        # 情绪上下文是独立于养成存档的隐私最小化档案，仅含最近用户消息。
+        self._chat_emotion_cfg = dict(self.cfg.get("chat_emotion", {}))
+        self._chat_emotion_store = None
+        self._chat_emotion_engine = None
+        self._chat_emotion_active = None
+        if self._chat_emotion_cfg.get("enabled", True):
+            from pet.chat_emotion import ChatEmotionEngine, ConversationEmotionStore
+            self._chat_emotion_store = ConversationEmotionStore(
+                os.path.join(paths["data_dir"], "chat_emotion.json"),
+                self._chat_emotion_cfg.get("retention_hours", 48),
+            )
+            model_root = os.path.join(os.path.dirname(__file__), "pet", "models")
+            v2_path = os.path.join(model_root, "chat_emotion_v2")
+            model_path = v2_path if os.path.isdir(v2_path) else os.path.join(model_root, "chat_emotion_v1.npz")
+            self._chat_emotion_engine = ChatEmotionEngine(
+                model_path, self._chat_emotion_cfg.get("confidence_threshold", .55))
 
         # 养成 store：启动 load（无存档→default）；重启数值一致靠此
         self.store = PetStateStore.load(self._state_path)
@@ -168,6 +193,9 @@ class PetApp:
                 set_stage(s.stage.value)
 
         self.store.on_change(_on_stage_maybe_changed)
+        # 每次启动都以中性聊天表情开始，不恢复上次退出前的短时状态。
+        if self._chat_emotion_store is not None:
+            self._reset_chat_emotion_to_neutral()
         # v0.14.4 行走覆盖：行走期间改显部件步态载体 figure，停步还原
         # mood 立绘——否则行走静默回退 GPT 帧环，帧间烤死的手臂摆动/
         # 尾巴位移/色调差即实机报告的观感问题。
@@ -265,11 +293,21 @@ class PetApp:
         self.tray.set_spit_callback(self._proactive.force_spit)
         # v0.9 记忆管理页唤出
         self.tray.set_mem_callback(self._show_mem)
+        self.tray.set_chat_emotion_callback(self._show_chat_emotion_settings)
         self._proactive_timer = QTimer(self.app)
         self._proactive_timer.timeout.connect(
             lambda: self._proactive.poll()
         )
         self._proactive_timer.start(30_000)
+
+        # 独立于主动关怀：只负责每日低频聊天情绪推理，纯主线程、无平台依赖。
+        self._chat_emotion_timer = QTimer(self.app)
+        self._chat_emotion_timer.timeout.connect(self._poll_chat_emotion)
+        self._chat_emotion_timer.start(60_000)
+        QTimer.singleShot(3000, self._poll_chat_emotion)
+        self._chat_emotion_expiry_timer = QTimer(self.app)
+        self._chat_emotion_expiry_timer.setSingleShot(True)
+        self._chat_emotion_expiry_timer.timeout.connect(self._reset_chat_emotion_to_neutral)
 
         # v0.11 全局热键（Ctrl+Alt+P 唤聊天 / Ctrl+Alt+T 吐出）
         self._setup_hotkeys()
@@ -529,6 +567,88 @@ class PetApp:
         except Exception:
             self.logger.warning("记忆注入异常", exc_info=True)
         self._maybe_followup(text)
+        if self._chat_emotion_store is not None:
+            try:
+                self._chat_emotion_store.add_user_message(text)
+                self._evaluate_message_emotion()
+            except Exception:
+                self.logger.warning("聊天情绪上下文写入失败", exc_info=True)
+
+    def _evaluate_message_emotion(self) -> None:
+        """每条新用户消息只在检测到明显情绪波动时立即换表情。"""
+        from pet.chat_emotion import is_significant, obvious_emotion
+        store, engine = self._chat_emotion_store, self._chat_emotion_engine
+        if store is None or engine is None:
+            return
+        messages = store.recent_messages()
+        # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
+        # v2 句向量模型必须先判断，不能被关键词规则短路；显式词仅保留给旧 v1 的安全回退。
+        result = engine.evaluate(messages[-1:])
+        if result.used_fallback and engine.version != 2 and messages:
+            result = obvious_emotion(messages[-1]["text"]) or result
+        if not is_significant(result, self._chat_emotion_cfg.get(
+                "event_confidence_threshold", .5)):
+            return
+        # 每个短时状态最多五分钟；新消息只会在明确的新情绪时覆盖。
+        duration_s = self._chat_emotion_duration_seconds()
+        store.set_current(result, __import__("time").time() + duration_s)
+        self._chat_emotion_expiry_timer.start(int(duration_s * 1000))
+        self._apply_chat_emotion(result.label, result.confidence)
+
+    def _chat_emotion_duration_seconds(self) -> float:
+        return max(60., float(self._chat_emotion_cfg.get("expression_minutes", 5)) * 60)
+
+    def _reset_chat_emotion_to_neutral(self) -> None:
+        """启动或短时状态过期后，恢复可预测的中性表情。"""
+        if self._chat_emotion_store is not None:
+            self._chat_emotion_store.clear_current()
+        self._chat_emotion_active = "neutral"
+        try:
+            self.window.set_conversation_mood(Mood.NEUTRAL)
+        except Exception:
+            self.logger.warning("聊天情绪重置失败", exc_info=True)
+
+    def _poll_chat_emotion(self) -> None:
+        """执行到期时段。模型/存档故障都只降级，不影响桌宠主循环。"""
+        store, engine = self._chat_emotion_store, self._chat_emotion_engine
+        if store is None or engine is None:
+            return
+        try:
+            active = store.active_label() or "neutral"
+            if active != self._chat_emotion_active:
+                self._chat_emotion_active = active
+                self.window.set_conversation_mood(Mood(active) if active else None)
+            from pet.chat_emotion import EmotionResult, is_significant
+            for slot in store.due_slots(self._chat_emotion_cfg.get("schedule", [])):
+                result = engine.evaluate(store.recent_messages(), slot)
+                # 22:00 是休息提醒：只有明确的非中性情绪才覆盖 sleepy。
+                if slot == "22:00" and not is_significant(
+                        result, self._chat_emotion_cfg.get("event_confidence_threshold", .5)):
+                    result = EmotionResult("sleepy", 0.0, True, result.model_version)
+                duration_s = self._chat_emotion_duration_seconds()
+                store.set_current(result, __import__("time").time() + duration_s)
+                self._chat_emotion_expiry_timer.start(int(duration_s * 1000))
+                store.mark_slot(slot)
+                self._apply_chat_emotion(result.label, result.confidence)
+        except Exception:
+            self.logger.warning("聊天情绪推理失败", exc_info=True)
+
+    def _apply_chat_emotion(self, label: str, confidence: float = 0.0) -> None:
+        """短时表情立即可见；养成 mood 仅受限地轻微移动。"""
+        try:
+            mood = Mood(label)
+        except ValueError:
+            return
+        try:
+            self._chat_emotion_active = label
+            self.window.set_conversation_mood(mood)
+        except Exception:
+            self.logger.warning("聊天情绪立绘更新失败", exc_info=True)
+        delta = float(self._chat_emotion_cfg.get("mood_delta", {}).get(label, 0))
+        if delta and confidence >= float(self._chat_emotion_cfg.get("confidence_threshold", .55)):
+            self.store.update(mood=delta)
+        import random
+        self.bubble.show(random.choice(_CHAT_EMOTION_BUBBLES[label]), anchor=self._pet_anchor())
 
     def _maybe_followup(self, text: str) -> None:
         """v0.6：聊天消息启发式排 follow-up（30min 后回访气泡）。"""
@@ -648,6 +768,44 @@ class PetApp:
         self._mem_window.show()
         self._mem_window.raise_()
         self._mem_window.requestActivate()
+
+    def _show_chat_emotion_settings(self) -> None:
+        """跨平台 Qt 小设置窗；避免给共享情绪模块引入任何平台 UI 依赖。"""
+        from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
+                                       QFormLayout, QLineEdit, QMessageBox)
+        dialog = QDialog()
+        dialog.setWindowTitle("聊天情绪设置")
+        layout = QFormLayout(dialog)
+        enabled = QCheckBox("启用本地聊天情绪推理")
+        enabled.setChecked(bool(self._chat_emotion_cfg.get("enabled", True)))
+        schedule = QLineEdit(", ".join(self._chat_emotion_cfg.get("schedule", ["22:00"])))
+        schedule.setPlaceholderText("例如：22:00")
+        layout.addRow(enabled); layout.addRow("每天推理时段：", schedule)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        layout.addRow(buttons); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        slots = [part.strip() for part in schedule.text().replace("，", ",").split(",") if part.strip()]
+        import re
+        if not slots or any(not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", slot) for slot in slots):
+            QMessageBox.warning(dialog, "聊天情绪设置", "时段请填写 HH:MM，例如 22:00。")
+            return
+        new_cfg = dict(self._chat_emotion_cfg); new_cfg["enabled"] = enabled.isChecked(); new_cfg["schedule"] = slots
+        try:
+            path = self._paths["config_path"]
+            raw = {}
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f: raw = json.load(f)
+            raw["chat_emotion"] = new_cfg
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(raw, f, ensure_ascii=False, indent=2); f.flush(); os.fsync(f.fileno())
+            os.replace(tmp, path)
+            self._chat_emotion_cfg = new_cfg
+            self.bubble.show("聊天情绪设置已保存，重启后完全生效～", anchor=self._pet_anchor())
+        except Exception:
+            self.logger.warning("聊天情绪设置保存失败", exc_info=True)
+            QMessageBox.warning(dialog, "聊天情绪设置", "保存失败，请检查配置文件权限。")
 
     def _save_memory(self) -> None:
         """UI 删除/清空后即时落盘。"""
@@ -1076,7 +1234,7 @@ class PetApp:
             return  # 幂等：二次触发直接返回
         self._shutdown_done = True
         # ① 停全部 QTimer（proactive/save/sensor/fullscreen/tick/decay/sig）
-        for name in ("_proactive_timer", "_periodic_save_timer", "_save_timer",
+        for name in ("_proactive_timer", "_chat_emotion_timer", "_chat_emotion_expiry_timer", "_periodic_save_timer", "_save_timer",
                      "_sensor_timer", "_fullscreen_timer", "_tick_timer",
                      "_decay_timer", "_sig_timer"):
             t = getattr(self, name, None)

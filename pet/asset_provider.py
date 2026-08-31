@@ -43,7 +43,7 @@ class SpriteRef:
 
 
 class AssetProvider(Protocol):
-    def get_static(self, state: PetState, skin: str = "default") -> SpriteRef:
+    def get_static(self, state: PetState, skin: str = "default", mood_override: Mood | None = None) -> SpriteRef:
         ...
 
     def get_frames(
@@ -141,8 +141,8 @@ class EmojiProvider:
         except Exception:
             return None
 
-    def get_static(self, state: PetState, skin: str = "default") -> SpriteRef:
-        mood = _mood_from_state(state, self._idle_s())
+    def get_static(self, state: PetState, skin: str = "default", mood_override: Mood | None = None) -> SpriteRef:
+        mood = mood_override or _mood_from_state(state, self._idle_s())
         width, height = _STAGE_SIZE[state.stage]
         if state.branch == Branch.NEGLECTED:
             emoji = _NEGLECTED_BY_STAGE.get(state.stage, "😿")
@@ -211,8 +211,8 @@ class AIArtProvider:
         # isfile ≈ 40 stat/s 持续在主线程
         self._frames_cache: dict = {}
 
-    def get_static(self, state: PetState, skin: str = "default") -> SpriteRef:
-        mood = _mood_from_state(state, self._fallback._idle_s())
+    def get_static(self, state: PetState, skin: str = "default", mood_override: Mood | None = None) -> SpriteRef:
+        mood = mood_override or _mood_from_state(state, self._fallback._idle_s())
         suffix = "" if skin == "default" else f"_{skin}"
         filename = f"{state.stage.value}_{state.branch.value}"                    f"_{mood.value}{suffix}.png"
         path = os.path.join(self._dir, filename)

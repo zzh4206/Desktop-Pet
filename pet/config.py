@@ -69,6 +69,13 @@ _SAFE_DEFAULTS: dict = {
     "sleepy_idle_minutes": 10,
     "hotkeys": {},
     "llm": {"providers": {}},
+    "chat_emotion": {
+        "enabled": True, "schedule": ["22:00"],
+        "retention_hours": 48, "expression_minutes": 5,
+        "confidence_threshold": 0.55, "event_confidence_threshold": 0.5,
+        "mood_delta": {"happy": 4, "neutral": 0, "sad": -3,
+                        "sleepy": -1, "hungry": -2},
+    },
 }
 
 # 需校验的数值子段 schema（其余键 v0.2 不强校验）
@@ -204,6 +211,26 @@ _SECTION_SCHEMAS: dict[str, dict] = {
                                "maximum": 3600},
         },
         "additionalProperties": True,
+    },
+    "chat_emotion": {
+        "type": "object",
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "schedule": {"type": "array", "minItems": 1, "maxItems": 8,
+                         "items": {"type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$"}},
+            "retention_hours": {"type": "number", "minimum": 1, "maximum": 168},
+            "expression_minutes": {"type": "number", "minimum": 1, "maximum": 60},
+            "confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+            "event_confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+            "mood_delta": {"type": "object", "properties": {
+                "happy": {"type": "number", "minimum": -20, "maximum": 20},
+                "neutral": {"type": "number", "minimum": -20, "maximum": 20},
+                "sad": {"type": "number", "minimum": -20, "maximum": 20},
+                "sleepy": {"type": "number", "minimum": -20, "maximum": 20},
+                "hungry": {"type": "number", "minimum": -20, "maximum": 20},
+            }, "required": ["happy", "neutral", "sad", "sleepy", "hungry"],
+            "additionalProperties": False},
+        }, "additionalProperties": False,
     },
 }
 
