@@ -63,7 +63,7 @@ _SAFE_DEFAULTS: dict[str, dict] = {
     "chat_emotion": {
         "enabled": True, "schedule": ["22:00"],
         "retention_hours": 48, "expression_hours": 2,
-        "confidence_threshold": 0.55, "event_confidence_threshold": 0.75,
+        "confidence_threshold": 0.55, "event_confidence_threshold": 0.5,
         "mood_delta": {"happy": 4, "neutral": 0, "sad": -3,
                         "sleepy": -1, "hungry": -2},
     },

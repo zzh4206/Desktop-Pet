@@ -553,7 +553,7 @@ class PetApp:
         if result.used_fallback and engine.version != 2 and messages:
             result = obvious_emotion(messages[-1]["text"]) or result
         if not is_significant(result, self._chat_emotion_cfg.get(
-                "event_confidence_threshold", .75)):
+                "event_confidence_threshold", .5)):
             return
         # 即时情绪在下一条明确情绪出现前保持，避免表情在状态间横跳。
         store.set_current(result, None)
@@ -574,7 +574,7 @@ class PetApp:
                 result = engine.evaluate(store.recent_messages(), slot)
                 # 22:00 是休息提醒：只有明确的非中性情绪才覆盖 sleepy。
                 if slot == "22:00" and not is_significant(
-                        result, self._chat_emotion_cfg.get("event_confidence_threshold", .75)):
+                        result, self._chat_emotion_cfg.get("event_confidence_threshold", .5)):
                     result = EmotionResult("sleepy", 0.0, True, result.model_version)
                 hours = float(self._chat_emotion_cfg.get("expression_hours", 2))
                 store.set_current(result, __import__("time").time() + hours * 3600)
