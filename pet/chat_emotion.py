@@ -153,6 +153,11 @@ class ConversationEmotionStore:
                         "expires_at": expires_at, "model_version": result.model_version}
         self.save()
 
+    def clear_current(self) -> None:
+        """清除短时聊天表情；不会影响保留的用户消息。"""
+        self.current = None
+        self.save()
+
     def active_label(self, now: float | None = None) -> str | None:
         if not self.current: return None
         expires_at = self.current.get("expires_at")

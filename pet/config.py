@@ -62,7 +62,7 @@ _SAFE_DEFAULTS: dict[str, dict] = {
     },
     "chat_emotion": {
         "enabled": True, "schedule": ["22:00"],
-        "retention_hours": 48, "expression_hours": 2,
+        "retention_hours": 48, "expression_minutes": 5,
         "confidence_threshold": 0.55, "event_confidence_threshold": 0.5,
         "mood_delta": {"happy": 4, "neutral": 0, "sad": -3,
                         "sleepy": -1, "hungry": -2},
@@ -184,7 +184,7 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "schedule": {"type": "array", "minItems": 1, "maxItems": 8,
                          "items": {"type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$"}},
             "retention_hours": {"type": "number", "minimum": 1, "maximum": 168},
-            "expression_hours": {"type": "number", "minimum": 0.1, "maximum": 24},
+            "expression_minutes": {"type": "number", "minimum": 1, "maximum": 60},
             "confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
             "event_confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
             "mood_delta": {"type": "object", "properties": {

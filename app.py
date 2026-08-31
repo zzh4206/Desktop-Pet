@@ -173,6 +173,9 @@ class PetApp:
             self.window = adapter.create_pet_window(sprite0)
         self._part_walk = presentation == "paperdoll"
         self.window.set_sprite_provider(self.provider)
+        # 每次启动都以中性聊天表情开始，不恢复上次退出前的短时状态。
+        if self._chat_emotion_store is not None:
+            self._reset_chat_emotion_to_neutral()
         # v0.14.4 行走覆盖：行走期间改显部件步态载体 figure，停步还原
         # mood 立绘——否则行走静默回退 GPT 帧环，帧间烤死的手臂摆动/
         # 尾巴位移/色调差即实机报告的观感问题。
@@ -282,6 +285,9 @@ class PetApp:
         self._chat_emotion_timer.timeout.connect(self._poll_chat_emotion)
         self._chat_emotion_timer.start(60_000)
         QTimer.singleShot(3000, self._poll_chat_emotion)
+        self._chat_emotion_expiry_timer = QTimer(self.app)
+        self._chat_emotion_expiry_timer.setSingleShot(True)
+        self._chat_emotion_expiry_timer.timeout.connect(self._reset_chat_emotion_to_neutral)
 
         # v0.11 全局热键（Ctrl+Alt+P 唤聊天 / Ctrl+Alt+T 吐出）
         self._setup_hotkeys()
@@ -555,9 +561,24 @@ class PetApp:
         if not is_significant(result, self._chat_emotion_cfg.get(
                 "event_confidence_threshold", .5)):
             return
-        # 即时情绪在下一条明确情绪出现前保持，避免表情在状态间横跳。
-        store.set_current(result, None)
+        # 每个短时状态最多五分钟；新消息只会在明确的新情绪时覆盖。
+        duration_s = self._chat_emotion_duration_seconds()
+        store.set_current(result, __import__("time").time() + duration_s)
+        self._chat_emotion_expiry_timer.start(int(duration_s * 1000))
         self._apply_chat_emotion(result.label, result.confidence)
+
+    def _chat_emotion_duration_seconds(self) -> float:
+        return max(60., float(self._chat_emotion_cfg.get("expression_minutes", 5)) * 60)
+
+    def _reset_chat_emotion_to_neutral(self) -> None:
+        """启动或短时状态过期后，恢复可预测的中性表情。"""
+        if self._chat_emotion_store is not None:
+            self._chat_emotion_store.clear_current()
+        self._chat_emotion_active = "neutral"
+        try:
+            self.window.set_conversation_mood(Mood.NEUTRAL)
+        except Exception:
+            self.logger.warning("聊天情绪重置失败", exc_info=True)
 
     def _poll_chat_emotion(self) -> None:
         """执行到期时段。模型/存档故障都只降级，不影响桌宠主循环。"""
@@ -565,7 +586,7 @@ class PetApp:
         if store is None or engine is None:
             return
         try:
-            active = store.active_label()
+            active = store.active_label() or "neutral"
             if active != self._chat_emotion_active:
                 self._chat_emotion_active = active
                 self.window.set_conversation_mood(Mood(active) if active else None)
@@ -576,8 +597,9 @@ class PetApp:
                 if slot == "22:00" and not is_significant(
                         result, self._chat_emotion_cfg.get("event_confidence_threshold", .5)):
                     result = EmotionResult("sleepy", 0.0, True, result.model_version)
-                hours = float(self._chat_emotion_cfg.get("expression_hours", 2))
-                store.set_current(result, __import__("time").time() + hours * 3600)
+                duration_s = self._chat_emotion_duration_seconds()
+                store.set_current(result, __import__("time").time() + duration_s)
+                self._chat_emotion_expiry_timer.start(int(duration_s * 1000))
                 store.mark_slot(slot)
                 self._apply_chat_emotion(result.label, result.confidence)
         except Exception:
@@ -1169,7 +1191,7 @@ class PetApp:
             return  # 幂等：二次触发直接返回
         self._shutdown_done = True
         # ① 停全部 QTimer（proactive/save/sensor/fullscreen/tick/decay/sig）
-        for name in ("_proactive_timer", "_chat_emotion_timer", "_periodic_save_timer", "_save_timer",
+        for name in ("_proactive_timer", "_chat_emotion_timer", "_chat_emotion_expiry_timer", "_periodic_save_timer", "_save_timer",
                      "_sensor_timer", "_fullscreen_timer", "_tick_timer",
                      "_decay_timer", "_sig_timer"):
             t = getattr(self, name, None)

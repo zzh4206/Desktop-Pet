@@ -74,7 +74,7 @@
     "enabled": true,
     "schedule": ["22:00"],
     "retention_hours": 48,
-    "expression_hours": 2,
+    "expression_minutes": 5,
     "confidence_threshold": 0.55,
     "event_confidence_threshold": 0.5,
     "mood_delta": {
