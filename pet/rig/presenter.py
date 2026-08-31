@@ -401,6 +401,11 @@ class RigWindow(WindowBase):
         把 neutral 覆盖图翻回 mood 图，与下一拍 _walk_edge 打架=闪烁。"""
         if self._provider is None:
             return
+        # 并行线（v0.15.x 聊天情绪）的 set_conversation_mood 会在
+        # _last_state 未设时传 None——get_static(None) 每启动刷一条
+        # AttributeError traceback（实机日志 2026-09-01 实证），守卫之
+        if state is None:
+            return
         self._last_state = state
         sprite = self._provider.get_static(
             state, mood_override=getattr(self, "_conversation_mood", None))
