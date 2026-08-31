@@ -32,30 +32,43 @@ def part_overlap_px(rig_dir: str, manifest: dict, figure: str) -> list:
     """同 figure 部件两两 α>0 交叠像素数（跨 bbox 互含也计入）。
 
     返回 [(id_a, id_b, overlap_px), ...]（仅同 figure 部件对）。
+    批次K：部件 split.overlap_ok_with 声明的**结构遮挡对**（如发缕在尾前，
+    两件不同 pivot 各自摆动=正确前后关系，非 C1 同域拆两遍）不计入——
+    静止合成仍由内部门禁把关，摆动观感由 --qa-swing 条带人工目检把关。
     """
     parts = [p for p in manifest["parts"] if p["source_figure"] == figure]
     if len(parts) < 2:
         return []
+
+    def _waived(a: dict, b: dict) -> bool:
+        ok_a = (a.get("split", {}) or {}).get("overlap_ok_with") or []
+        ok_b = (b.get("split", {}) or {}).get("overlap_ok_with") or []
+        return a["id"] in ok_b or b["id"] in ok_a
+
     loaded = []
     max_w = max_h = 0
     for p in parts:
         img = Image.open(os.path.join(rig_dir, p["file"])).convert("RGBA")
-        x0, y0, _x1, _y1 = p["px_rect"]
+        x0, y0 = int(p["px_rect"][0]), int(p["px_rect"][1])
         # 公共画布：各部件 bbox 不同，必须贴回同一尺寸才能逐对比对
-        max_w = max(max_w, int(x0) + img.width)
-        max_h = max(max_h, int(y0) + img.height)
-        loaded.append((p["id"], img, int(x0), int(y0)))
+        max_w = max(max_w, x0 + img.width)
+        max_h = max(max_h, y0 + img.height)
+        loaded.append((p, img, x0, y0))
     alphas = []
-    for pid, img, x0, y0 in loaded:
+    for p, img, x0, y0 in loaded:
         full = Image.new("L", (max_w, max_h), 0)
         full.paste(img.getchannel("A").point(lambda v: 255 if v > 0 else 0),
                    (x0, y0))
-        alphas.append((pid, full))
+        alphas.append((p, full))
     out = []
     for i in range(len(alphas)):
         for j in range(i + 1, len(alphas)):
-            inter = ImageChops.multiply(alphas[i][1], alphas[j][1])
-            out.append((alphas[i][0], alphas[j][0],
+            pa, fa = alphas[i]
+            pb, fb = alphas[j]
+            if _waived(pa, pb):
+                continue
+            inter = ImageChops.multiply(fa, fb)
+            out.append((pa["id"], pb["id"],
                         sum(inter.histogram()[1:]) if inter.getbbox() else 0))
     return out
 

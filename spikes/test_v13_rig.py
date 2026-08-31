@@ -274,9 +274,12 @@ def main() -> int:
           isinstance(win2, RigWindow) and win2.rig_active
           and _usProp(win2, "figASrc").endswith(
               "rig/final/figs/healthy_neutral.png"))
-    n_final_parts = len(win2._root.property("partsModel") or [])
-    check("T11b final 部件模型 8 件（2 尾 + 4 正腿 + 2 侧腿）",
-          n_final_parts == 8)
+    parts_final = win2._root.property("partsModel") or []
+    _limbs = sum(1 for p in parts_final if p.get("kind") == "limb")
+    _sways = sum(1 for p in parts_final if p.get("kind") == "sway")
+    check("T11b final 部件模型按 kind 计数（limb 6：4 正腿+2 侧腿；"
+          "sway 10：2 尾+4 发+4 裙）",
+          _limbs == 6 and _sways == 10)
     win2.set_stage("young")
     young_neutral = os.path.join(
         REPO, "assets", "ai", "young_healthy_neutral.png")
