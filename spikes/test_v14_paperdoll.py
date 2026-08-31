@@ -325,6 +325,19 @@ def main() -> int:
     check("T4a paperdoll+limb：不播 walk 帧",
           s.window.played == [] and s._anim_key is None)
 
+    # N3（实机审查 2026-08-31）：无 _anim_key 属性时 _frame_tick 不抛——
+    # 真机 PetApp 旧版首赋值在 _play_key，行走先于首个小动作即每拍
+    # AttributeError（stub 复刻该形态：不预置 _anim_key）
+    s = _stub(_pwa=True, _pw=True)
+    del s._anim_key
+    raised = False
+    try:
+        s._frame_tick(action, "walk", "idle")
+    except AttributeError:
+        raised = True
+    check("T4a-2 无 _anim_key 属性不抛（行走先于小动作）",
+          not raised and s.window.played == [])
+
     s = _stub(_pwa=False, _pw=True)
     s._frame_tick(action, "walk", "idle")
     check("T4b 无 limb figure：回退帧路径",

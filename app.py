@@ -147,6 +147,11 @@ class PetApp:
         else:
             self.window = adapter.create_pet_window(sprite0)
         self._part_walk = presentation == "paperdoll"
+        # 批次L/N3（实机审查 2026-08-31）：_anim_key 初始化——旧版首赋值在
+        # _play_key，行走先于首个随机小动作时 _frame_tick 裸读
+        # self._anim_key 每拍 AttributeError：FSM 照走、窗口位置同步被跳过
+        # =宠物画面冻结直到首个小动作（15-35s）后才动
+        self._anim_key = None
         self.window.set_sprite_provider(self.provider)
         # 批次A/H1（REVIEW-2026-08-31）：进化换档重载 rig spec——三阶段
         # manifest 共用 figure 键，spec 终生绑启动阶段会把新阶段 neutral
@@ -1045,7 +1050,8 @@ class PetApp:
             # 无 limb figure（mood 姿态/未铺量阶段）走下方帧路径自动回退。
             if getattr(self, "_part_walk", False) \
                     and self.window.part_walk_active():
-                if self._anim_key == "walk":
+                # 批次L/N3：裸读改 getattr——与本函数其他 _anim_key 读取一致
+                if getattr(self, "_anim_key", None) == "walk":
                     self._stop_anim()
                 return
             walk = provider.frames_for(stage, "walk")
