@@ -189,18 +189,18 @@
       "source_figure": "neglected_neutral",
       "px_rect": [
         158,
-        380,
+        336,
         441,
         901
       ],
       "pivot": [
-        435.0,
-        470.0
+        440,
+        470
       ],
       "z": "under_core",
       "kind": "sway",
       "sway": {
-        "amp_deg": 2.5,
+        "amp_deg": 1.2,
         "period_ms": 3000.0,
         "phase_ms": 0.0
       },
@@ -212,7 +212,9 @@
         "block": "y<380;x>440;y>900",
         "protect": "y<430",
         "min_px": 20000,
-        "max_px": 400000
+        "max_px": 400000,
+        "extend_up_needed": 44,
+        "extended_up": 44
       }
     },
     {
@@ -221,13 +223,13 @@
       "source_figure": "neglected_neutral",
       "px_rect": [
         208,
-        1120,
+        1103,
         521,
         1271
       ],
       "pivot": [
-        505.0,
-        1160.0
+        520,
+        1160
       ],
       "z": "under_core",
       "kind": "sway",
@@ -244,7 +246,9 @@
         "block": "y<1120;x>520;y>1270",
         "protect": "y<1140",
         "min_px": 20000,
-        "max_px": 400000
+        "max_px": 400000,
+        "extend_up_needed": 17,
+        "extended_up": 17
       }
     },
     {
@@ -253,18 +257,18 @@
       "source_figure": "neglected_neutral",
       "px_rect": [
         580,
-        380,
+        335,
         871,
         901
       ],
       "pivot": [
-        585.0,
-        470.0
+        581,
+        470
       ],
       "z": "under_core",
       "kind": "sway",
       "sway": {
-        "amp_deg": 2.5,
+        "amp_deg": 1.2,
         "period_ms": 3000.0,
         "phase_ms": 1500.0
       },
@@ -280,7 +284,9 @@
         "overlap_ok_with": [
           "tail_neglected_neutral"
         ],
-        "overlap_reason": "发缕/裙摆在尾前（源图前后遮挡），非同域拆两遍"
+        "overlap_reason": "发缕/裙摆在尾前（源图前后遮挡），非同域拆两遍",
+        "extend_up_needed": 45,
+        "extended_up": 45
       }
     },
     {
@@ -289,13 +295,13 @@
       "source_figure": "neglected_neutral",
       "px_rect": [
         560,
-        1120,
+        1103,
         876,
         1271
       ],
       "pivot": [
-        568.0,
-        1160.0
+        561,
+        1160
       ],
       "z": "under_core",
       "kind": "sway",
@@ -316,7 +322,9 @@
         "overlap_ok_with": [
           "tail_neglected_neutral"
         ],
-        "overlap_reason": "发缕/裙摆在尾前（源图前后遮挡），非同域拆两遍"
+        "overlap_reason": "发缕/裙摆在尾前（源图前后遮挡），非同域拆两遍",
+        "extend_up_needed": 17,
+        "extended_up": 17
       }
     },
     {
@@ -325,18 +333,18 @@
       "source_figure": "healthy_neutral",
       "px_rect": [
         162,
-        380,
+        336,
         441,
         901
       ],
       "pivot": [
-        435.0,
-        470.0
+        440,
+        470
       ],
       "z": "under_core",
       "kind": "sway",
       "sway": {
-        "amp_deg": 2.5,
+        "amp_deg": 1.2,
         "period_ms": 3000.0,
         "phase_ms": 0.0
       },
@@ -348,7 +356,9 @@
         "block": "y<380;x>440;y>900",
         "protect": "y<430",
         "min_px": 20000,
-        "max_px": 400000
+        "max_px": 400000,
+        "extend_up_needed": 44,
+        "extended_up": 44
       }
     },
     {
@@ -357,18 +367,18 @@
       "source_figure": "healthy_neutral",
       "px_rect": [
         580,
-        380,
+        335,
         871,
         901
       ],
       "pivot": [
-        585.0,
-        470.0
+        581,
+        470
       ],
       "z": "under_core",
       "kind": "sway",
       "sway": {
-        "amp_deg": 2.5,
+        "amp_deg": 1.2,
         "period_ms": 3000.0,
         "phase_ms": 1500.0
       },
@@ -384,7 +394,9 @@
         "overlap_ok_with": [
           "tail_healthy_neutral"
         ],
-        "overlap_reason": "发缕在尾前（源图前后遮挡），非同域拆两遍"
+        "overlap_reason": "发缕在尾前（源图前后遮挡），非同域拆两遍",
+        "extend_up_needed": 45,
+        "extended_up": 45
       }
     },
     {
@@ -393,13 +405,13 @@
       "source_figure": "healthy_neutral",
       "px_rect": [
         191,
-        1120,
+        1102,
         521,
         1271
       ],
       "pivot": [
-        505.0,
-        1160.0
+        520,
+        1160
       ],
       "z": "under_core",
       "kind": "sway",
@@ -416,7 +428,9 @@
         "block": "y<1120;x>520;y>1270",
         "protect": "y<1140",
         "min_px": 20000,
-        "max_px": 400000
+        "max_px": 400000,
+        "extend_up_needed": 18,
+        "extended_up": 18
       }
     },
     {
@@ -425,13 +439,13 @@
       "source_figure": "healthy_neutral",
       "px_rect": [
         560,
-        1120,
+        1104,
         850,
         1271
       ],
       "pivot": [
-        568.0,
-        1160.0
+        561,
+        1160
       ],
       "z": "under_core",
       "kind": "sway",
@@ -448,7 +462,9 @@
         "block": "y<1120;x<560;y>1270",
         "protect": "y<1140",
         "min_px": 20000,
-        "max_px": 400000
+        "max_px": 400000,
+        "extend_up_needed": 16,
+        "extended_up": 16
       }
     },
     {
