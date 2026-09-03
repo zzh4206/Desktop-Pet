@@ -92,6 +92,7 @@ try:
         CFRunLoopRemoveSource,
         CFMachPortCreateRunLoopSource,
         kCFRunLoopCommonModes,
+        CFRelease,
     )
 
     _HAS_CF = True
@@ -325,6 +326,8 @@ class MouseLockMac:
                 log.warning("鼠标 tap 接 run loop 失败", exc_info=True)
                 try:
                     CGEventTapEnable(mtap, False)
+                    # L16（REVIEW-2026-09-04）：失败分支也释放 mach 端口
+                    CFRelease(mtap)
                 except Exception:
                     pass
                 return False
@@ -373,6 +376,14 @@ class MouseLockMac:
             try:
                 rl = CFRunLoopGetMain()
                 CFRunLoopRemoveSource(rl, msrc, kCFRunLoopCommonModes)
+                CFRelease(msrc)
             except Exception:
                 pass
+        # L16（REVIEW-2026-09-04）：mach 端口释放——旧版只 disable+移源，
+        # 每次吃鼠标会话泄漏一个 CGEventTap 内核端口（长会话累积）
+        if mtap is not None:
+            try:
+                CFRelease(mtap)
+            except Exception:
+                log.warning("CFRelease(mtap) 异常", exc_info=True)
         log.info("鼠标释放(%s)", reason)

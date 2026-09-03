@@ -277,7 +277,18 @@ class HotkeyManager:
                     self._on_conflict(_name, _key)
                 except Exception:
                     pass
-        self._active = bool(self._refs)
+        # L16（REVIEW-2026-09-04）：_active 写回收锁内（旧版锁外写，与
+        # stop() 的读存在理论竞态）+ 两键全失败时回滚已装 handler
+        # （旧版半初始化态挂着，只有 stop() 会拆）
+        with self._lock:
+            self._active = bool(self._refs)
+            if not self._active and self._handler_ref is not None:
+                try:
+                    _carbon.RemoveEventHandler(self._handler_ref)
+                except Exception:
+                    _log.warning("[热键] 全失败回滚 RemoveEventHandler 异常",
+                                 exc_info=True)
+                self._handler_ref = None
         return self._active
 
     def _install_handler(self) -> bool:
