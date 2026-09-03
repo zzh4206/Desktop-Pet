@@ -237,6 +237,20 @@ def main() -> int:
           b4._offline is True
           and b4._messages[-1]["content"] == OFFLINE_REPLY)
 
+    # M4（REVIEW-2026-09-04）：在飞一轮 send 被拒返回 False、消息不入史
+    # （旧版静默 return + QML 无条件清空输入=消息丢失零反馈）
+    class _RunningStub:
+        def isRunning(self):
+            return True
+
+    b4._worker = _RunningStub()
+    n_busy = len(b4._messages)
+    ok_busy = b4.send("会被拒绝")
+    check("M4 在飞 send 返回 False 且不入史",
+          ok_busy is False and len(b4._messages) == n_busy)
+    check("M4 空文本 send 返回 False", b4.send("   ") is False)
+    b4._worker = None
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

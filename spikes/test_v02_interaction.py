@@ -96,6 +96,24 @@ def main() -> int:
         == ["喂食", "洗澡", "戳一戳", "移动状态", "设置", "退出"],
     )
 
+    # M1（REVIEW-2026-09-04）：非左键不参与单击/双击/拖拽——旧版快速右键
+    # 会在 menu.exec 嵌套循环里触发摸头、右键双击喂食
+    p0, f0 = events.count("pat"), events.count("feed")
+
+    def _close_popup_m1():
+        popup = QApplication.activePopupWidget()
+        if isinstance(popup, QMenu):
+            popup.close()
+
+    QTimer.singleShot(300, _close_popup_m1)
+    QTest.mouseClick(win, Qt.RightButton, pos=win.rect().center())
+    QTest.qWait(350)
+    QTimer.singleShot(300, _close_popup_m1)
+    QTest.mouseDClick(win, Qt.RightButton, pos=win.rect().center())
+    QTest.qWait(650)
+    check("M1 右键单击/双击不触发摸头与喂食",
+          events.count("pat") == p0 and events.count("feed") == f0)
+
     # T-c3 气泡跟随宠物定位（§2.4：头顶20px/靠顶翻下/无锚点回退顶中）
     from pet.bubble import BubbleWidget
 

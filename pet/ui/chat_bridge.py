@@ -182,16 +182,22 @@ class ChatBridge(QAbstractListModel):
     streamingText = Property(str, fget=streamingText, notify=streamingChanged)
 
     # ---- 发送一轮 ----
-    @Slot(str)
-    def send(self, text: str) -> None:
+    @Slot(str, result=bool)
+    def send(self, text: str) -> bool:
+        """发起一轮对话。
+
+        返回 False 表示本轮未被接受（空文本/离线/上一轮仍在飞）——QML
+        据此保留输入框文本不清空（M4，REVIEW-2026-09-04：旧版静默丢弃，
+        流式最长 180s 窗口内消息丢失零反馈）。
+        """
         text = (text or "").strip()
         if not text:
-            return
+            return False
         if self._client is None or self._offline:
             self.offlineRequested.emit()
-            return
+            return False
         if self._worker is not None and self._worker.isRunning():
-            return
+            return False  # 在飞：丢弃，输入由 QML 侧保留
 
         self._append_message("user", text)
         self._pending_user = text   # 批次D/F15：失败/离线路径补 user turn 用
@@ -201,7 +207,8 @@ class ChatBridge(QAbstractListModel):
             try:
                 self.on_user_message(text)  # v0.6 follow-up 启发式（不阻塞聊天）
             except Exception:
-                pass
+                # L22：钩子异常留痕（app 侧各段已有内部 try，此处兜底）
+                log.exception("on_user_message 钩子异常")
         self._set_streaming("")
         from ..llm import ChatWorker
 
@@ -216,6 +223,7 @@ class ChatBridge(QAbstractListModel):
         # 旧版自然完成路径不接，worker 挂 parent 之下永不回收=每轮泄漏
         self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
+        return True
 
     _SUMMARIZE_THRESHOLD = 20   # 超过触发
     _SUMMARIZE_BATCH = 10       # 压缩最老 N 轮

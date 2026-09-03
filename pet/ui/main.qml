@@ -241,10 +241,12 @@ ApplicationWindow {
                         focus: true
                         selectByMouse: true
                         onAccepted: {
-                            if (input.text.trim().length > 0) {
-                                Chat.send(input.text)
+                            if (input.text.trim().length > 0
+                                && Chat.send(input.text)) {
                                 input.text = ""
                             }
+                            // M4：send 被拒（在飞/离线/空文本）时保留输入，
+                            // 不再无声吞消息
                         }
                         Keys.onEscapePressed: root.hide()
                     }

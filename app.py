@@ -566,7 +566,12 @@ class PetApp:
             self._chat_client.set_memory_context(seg)
         except Exception:
             self.logger.warning("记忆注入异常", exc_info=True)
-        self._maybe_followup(text)
+        # L22（REVIEW-2026-09-04）：follow-up 排程也要兜底——旧版裸调，
+        # 异常被 chat_bridge 的钩子包装吞掉后无任何日志，排障黑洞
+        try:
+            self._maybe_followup(text)
+        except Exception:
+            self.logger.warning("follow-up 排程异常", exc_info=True)
         if self._chat_emotion_store is not None:
             try:
                 self._chat_emotion_store.add_user_message(text)

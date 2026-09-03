@@ -328,6 +328,12 @@ class WindowBase(QWidget):
         )
 
     def mousePressEvent(self, event):
+        # M1（REVIEW-2026-09-04）：仅左键参与单击/拖拽——右键 release 先于
+        # contextMenuEvent 送达，快速右键会启动单击消歧定时器并在 menu.exec()
+        # 嵌套循环里照常触发"摸摸头"；右键按住移动还会进入拖拽。
+        if event.button() != Qt.LeftButton:
+            self._press_start = None
+            return
         self._press_start = (
             event.position().x(),
             event.position().y(),
@@ -340,6 +346,8 @@ class WindowBase(QWidget):
         self._grab_dy = by - g.y()
 
     def mouseReleaseEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return  # M1：非左键 release 不参与单击消歧/拖拽收尾
         if self._press_start is None:
             return
         x, y, t0 = self._press_start
@@ -360,6 +368,8 @@ class WindowBase(QWidget):
         self._single_shot.start()
 
     def mouseDoubleClickEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return  # M1：右键双击不喂食
         self._single_shot.stop()  # 吞掉第一次单击，双击生效
         self.feedRequested.emit()
 
