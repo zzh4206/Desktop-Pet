@@ -80,7 +80,6 @@ class ConversationEmotionStore:
         self.messages: list[dict] = []
         self.ran_slots: dict[str, list[str]] = {}
         self.current: dict | None = None
-        self.feedback: list[dict] = []
         self.load()
 
     def load(self) -> None:
@@ -96,7 +95,6 @@ class ConversationEmotionStore:
                 self.ran_slots = {str(k): list(v) for k, v in raw.get("ran_slots", {}).items()
                                   if isinstance(v, list)}
                 self.current = raw.get("current") if isinstance(raw.get("current"), dict) else None
-                self.feedback = [x for x in raw.get("feedback", []) if isinstance(x, dict)]
                 self.prune(save=False)
                 return
             except (OSError, ValueError, json.JSONDecodeError):
@@ -105,7 +103,7 @@ class ConversationEmotionStore:
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         data = {"version": 1, "messages": self.messages, "ran_slots": self.ran_slots,
-                "current": self.current, "feedback": self.feedback}
+                "current": self.current}
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -133,7 +131,8 @@ class ConversationEmotionStore:
         cutoff = now - self.retention_s
         before = len(self.messages)
         self.messages = [m for m in self.messages if float(m["at"]) >= cutoff]
-        # 仅保留最近 14 天的调度去重记录，防档案无限增长。
+        # 调度去重记录保留当年（跨年 1 月 1 日清零，防档案无限增长；
+        # 时段每日重复，跨年重跑一次无害）——L19：旧注释"最近 14 天"与实现不符
         today = datetime.fromtimestamp(now).date().isoformat()
         self.ran_slots = {d: s for d, s in self.ran_slots.items() if d >= today[:4] + "-01-01"}
         if save and before != len(self.messages): self.save()
@@ -169,11 +168,6 @@ class ConversationEmotionStore:
     def clear_messages(self) -> None:
         self.messages = []; self.current = None; self.save()
 
-    def add_feedback(self, expected: str, predicted: str) -> None:
-        if expected in LABELS:
-            self.feedback.append({"at": time.time(), "expected": expected, "predicted": predicted})
-            self.save()
-
 
 class ChatEmotionEngine:
     def __init__(self, model_path: str, threshold: float = .55, feature_dim: int = FEATURE_DIM) -> None:
@@ -185,8 +179,19 @@ class ChatEmotionEngine:
             return
         try:
             if os.path.isdir(model_path):
-                self._load_v2(model_path)
-                return
+                try:
+                    self._load_v2(model_path)
+                    return
+                except Exception as exc:
+                    # L1（REVIEW-2026-09-04）：v2 目录存在但资产残缺 → 回退
+                    # 同目录旁完好的 v1.npz（旧版直接降级时段兜底，v1 白白闲置）
+                    v1 = os.path.join(
+                        os.path.dirname(os.path.normpath(model_path)),
+                        "chat_emotion_v1.npz")
+                    if not os.path.isfile(v1):
+                        raise
+                    log.warning("v2 模型不可用，回退 v1：%s", exc)
+                    model_path = v1
             raw = np.load(model_path, allow_pickle=False)
             if int(raw["feature_dim"]) != self.feature_dim or tuple(raw["labels"].tolist()) != LABELS:
                 raise ValueError("模型元数据不兼容")
@@ -224,8 +229,18 @@ class ChatEmotionEngine:
         return vec / norm if norm else vec
 
     def evaluate(self, messages: Iterable[dict], scheduled_time: str | None = None,
-                 now: float | None = None) -> EmotionResult:
+                 now: float | None = None,
+                 threshold: float | None = None) -> EmotionResult:
+        """推理情绪标签。
+
+        M3（REVIEW-2026-09-04）：``threshold`` 允许调用方按路径覆写内层置信
+        截断（缺省仍用构造时的 ``confidence_threshold``）——旧版内层 0.55
+        截断把结果标 used_fallback 后，app 层 event_confidence_threshold
+        （可配 0.5）的 is_significant 判定永远先被 `not used_fallback` 否决，
+        有效触发阈值恒为 max(两者)，低配侧旋钮是死的。
+        """
         fallback = fallback_for_slot(scheduled_time)
+        cut = self.threshold if threshold is None else float(threshold)
         messages = list(messages)
         if self.session is not None:
             text = "\n".join(str(x.get("text", "")) for x in messages[-3:]).strip()
@@ -239,7 +254,7 @@ class ChatEmotionEngine:
             weight, bias, _ = self.classifier; logits = emb @ weight + bias
             logits -= logits.max(); probs = np.exp(logits); probs /= probs.sum()
             idx = int(np.argmax(probs)); confidence = float(probs[0, idx])
-            if confidence < self.threshold:
+            if confidence < cut:
                 return EmotionResult(fallback, confidence, True, self.version)
             return EmotionResult(LABELS[idx], confidence, False, self.version)
         if self.weights is None:
@@ -251,6 +266,6 @@ class ChatEmotionEngine:
         logits = h2 @ w3 + b3; logits -= logits.max()
         probs = np.exp(logits); probs /= probs.sum()
         idx = int(np.argmax(probs)); confidence = float(probs[idx])
-        if confidence < self.threshold:
+        if confidence < cut:
             return EmotionResult(fallback, confidence, True, self.version)
         return EmotionResult(LABELS[idx], confidence, False, self.version)

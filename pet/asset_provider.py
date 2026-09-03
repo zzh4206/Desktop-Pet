@@ -103,15 +103,20 @@ _WALK_FRAME2: dict[Mood, str] = {
 _ACT_FRAME = "😽"  # 伸懒腰/打滚峰值占位帧
 
 
-def _mood_from_state(state: PetState, idle_s: float | None = None) -> Mood:
+def _mood_from_state(state: PetState, idle_s: float | None = None,
+                     sleepy_s: float | None = _SLEEPY_IDLE_S_DEFAULT) -> Mood:
     """v0.2：饱食<20 优先 HUNGRY；mood >=50 HAPPY、>=20 NEUTRAL、余 SAD。
 
     v0.10：idle_s（系统空闲秒，None=不启用）≥ 门限 → SLEEPY（优先级在
     HUNGRY 之下、mood 之上——饿醒比困重要）。
+    L8（REVIEW-2026-09-04）：``sleepy_s`` 由调用方传入配置门限，None=禁用
+    睡姿判定——旧版恒用 600s 模块常量，provider 构造存的 ``_sleepy_idle_s``
+    从未被读取，config 的 sleepy_idle_minutes 实际不生效。
     """
     if state.fullness < 20:
         return Mood.HUNGRY
-    if idle_s is not None and idle_s >= _SLEEPY_IDLE_S_DEFAULT:
+    if (idle_s is not None and sleepy_s is not None
+            and idle_s >= sleepy_s):
         return Mood.SLEEPY
     if state.mood >= 50:
         return Mood.HAPPY
@@ -142,7 +147,8 @@ class EmojiProvider:
             return None
 
     def get_static(self, state: PetState, skin: str = "default", mood_override: Mood | None = None) -> SpriteRef:
-        mood = mood_override or _mood_from_state(state, self._idle_s())
+        mood = mood_override or _mood_from_state(
+            state, self._idle_s(), self._sleepy_idle_s)
         width, height = _STAGE_SIZE[state.stage]
         if state.branch == Branch.NEGLECTED:
             emoji = _NEGLECTED_BY_STAGE.get(state.stage, "😿")
@@ -167,7 +173,7 @@ class EmojiProvider:
         from .behavior import ActionType
 
         base = self.get_static(state, skin)
-        mood = _mood_from_state(state, self._idle_s())
+        mood = _mood_from_state(state, self._idle_s(), self._sleepy_idle_s)
 
         def _ref(path: str) -> SpriteRef:
             return SpriteRef(
@@ -212,7 +218,8 @@ class AIArtProvider:
         self._frames_cache: dict = {}
 
     def get_static(self, state: PetState, skin: str = "default", mood_override: Mood | None = None) -> SpriteRef:
-        mood = mood_override or _mood_from_state(state, self._fallback._idle_s())
+        mood = mood_override or _mood_from_state(
+            state, self._fallback._idle_s(), self._fallback._sleepy_idle_s)
         suffix = "" if skin == "default" else f"_{skin}"
         filename = f"{state.stage.value}_{state.branch.value}"                    f"_{mood.value}{suffix}.png"
         path = os.path.join(self._dir, filename)

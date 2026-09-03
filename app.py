@@ -572,7 +572,10 @@ class PetApp:
             self._maybe_followup(text)
         except Exception:
             self.logger.warning("follow-up 排程异常", exc_info=True)
-        if self._chat_emotion_store is not None:
+        # M2（REVIEW-2026-09-04）：禁用即时生效——旧版只判启动时创建的
+        # store，设置页关掉后仍持续把用户消息写进 chat_emotion.json 直到重启
+        if (self._chat_emotion_store is not None
+                and self._chat_emotion_cfg.get("enabled", True)):
             try:
                 self._chat_emotion_store.add_user_message(text)
                 self._evaluate_message_emotion()
@@ -588,7 +591,11 @@ class PetApp:
         messages = store.recent_messages()
         # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
         # v2 句向量模型必须先判断，不能被关键词规则短路；显式词仅保留给旧 v1 的安全回退。
-        result = engine.evaluate(messages[-1:])
+        # M3（REVIEW-2026-09-04）：evaluate 传 event 阈值——引擎内层默认
+        # 0.55 截断先于 app 层判定生效，event_confidence_threshold<0.55 时是死旋钮
+        result = engine.evaluate(
+            messages[-1:],
+            threshold=self._chat_emotion_cfg.get("event_confidence_threshold", .5))
         if result.used_fallback and engine.version != 2 and messages:
             result = obvious_emotion(messages[-1]["text"]) or result
         if not is_significant(result, self._chat_emotion_cfg.get(
@@ -616,7 +623,8 @@ class PetApp:
     def _poll_chat_emotion(self) -> None:
         """执行到期时段。模型/存档故障都只降级，不影响桌宠主循环。"""
         store, engine = self._chat_emotion_store, self._chat_emotion_engine
-        if store is None or engine is None:
+        if (store is None or engine is None
+                or not self._chat_emotion_cfg.get("enabled", True)):  # M2 同上
             return
         try:
             active = store.active_label() or "neutral"
@@ -625,7 +633,10 @@ class PetApp:
                 self.window.set_conversation_mood(Mood(active) if active else None)
             from pet.chat_emotion import EmotionResult, is_significant
             for slot in store.due_slots(self._chat_emotion_cfg.get("schedule", [])):
-                result = engine.evaluate(store.recent_messages(), slot)
+                result = engine.evaluate(
+                    store.recent_messages(), slot,
+                    threshold=self._chat_emotion_cfg.get(
+                        "event_confidence_threshold", .5))  # M3：同即时路径
                 # 22:00 是休息提醒：只有明确的非中性情绪才覆盖 sleepy。
                 if slot == "22:00" and not is_significant(
                         result, self._chat_emotion_cfg.get("event_confidence_threshold", .5)):
@@ -673,7 +684,10 @@ class PetApp:
         """
         kind = self.cfg.get("provider", "emoji")
         idle_fn = lambda: self.sensors.idle_time
-        sleepy_s = self.cfg.get("sleepy_idle_minutes", 10) * 60
+        # L8（REVIEW-2026-09-04）：0=禁用睡姿——旧版 0 会变成门限 0s 恒 SLEEPY，
+        # 且配置值此前从未真正接入判定（见 asset_provider 修复说明）
+        raw_sleepy = float(self.cfg.get("sleepy_idle_minutes", 10))
+        sleepy_s = raw_sleepy * 60 if raw_sleepy > 0 else None
         if kind in ("ai", "commission"):
             from pet.asset_provider import AIArtProvider
 

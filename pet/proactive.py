@@ -174,7 +174,9 @@ class ProactiveScheduler:
                 and all(0 <= int(h) <= 23 for h in qh)):
             _log.warning("proactive.quiet_hours 非法 %r，用默认 (23,8)", qh)
             qh = (23, 8)
-        self._quiet = tuple(qh)
+        # L6（REVIEW-2026-09-04）：存整数——旧版校验用 int() 截断却存原 float，
+        # _quiet_end_after 的 replace(hour=float) 在深夜重排槽里抛异常
+        self._quiet = tuple(int(h) for h in qh)
         self._festivals = {**_FESTIVALS, **(c.get("festivals") or {})}
         self._sedentary_min = float(c.get("sedentary_min", _SEDENTARY_MIN))
         self._cooldown = float(

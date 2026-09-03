@@ -176,6 +176,22 @@ def main() -> int:
     w2 = provider.frames_for("young", "walk")
     check("T8c 返回防御拷贝（改尺寸不污染缓存）", w2[0].width == 192)
 
+    # L8（REVIEW-2026-09-04）：sleepy 门限接线 + None=禁用——旧版
+    # _mood_from_state 恒用 600s 模块常量，config 的 sleepy_idle_minutes
+    # 存进 provider 后从未被读取
+    from pet.asset_provider import _mood_from_state
+    from pet.pet_state import Mood
+
+    st_l8 = types.SimpleNamespace(fullness=80, mood=80)
+    check("L8a 配置门限生效(700<800 不困)",
+          _mood_from_state(st_l8, 700.0, 800.0) == Mood.HAPPY)
+    check("L8b 越配置门限即困(700>=650)",
+          _mood_from_state(st_l8, 700.0, 650.0) == Mood.SLEEPY)
+    check("L8c 门限 None=禁用(99999 不困)",
+          _mood_from_state(st_l8, 99999.0, None) == Mood.HAPPY)
+    p_l8 = AIArtProvider(idle_fn=lambda: 700.0, sleepy_idle_s=800.0)
+    check("L8d provider 透传门限", p_l8._fallback._sleepy_idle_s == 800.0)
+
     print(f"\n动画层: {len(PASS)} 通过, {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

@@ -149,8 +149,11 @@ _SECTION_SCHEMAS: dict[str, dict] = {
         "type": "object",
         "properties": {
             "quiet_hours": {
+                # L6（REVIEW-2026-09-04）：限整数——旧版 number 放行 22.5，
+                # proactive 构造校验 int() 截断后存原 float，_quiet_end_after
+                # 的 replace(hour=float) 抛异常且 22.5 实际 23 点才静默
                 "type": "array",
-                "items": {"type": "number", "minimum": 0, "maximum": 23},
+                "items": {"type": "integer", "minimum": 0, "maximum": 23},
                 "minItems": 2,
                 "maxItems": 2,
             },
@@ -191,6 +194,8 @@ _SECTION_SCHEMAS: dict[str, dict] = {
     "provider": {"enum": ["emoji", "ai", "commission"]},
     "presentation": {"enum": ["frames", "rig", "paperdoll"]},
     "log_level": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+    # L8（REVIEW-2026-09-04）：0=禁用睡姿（旧版 0 → 门限 0s 恒 SLEEPY，
+    # 且配置值此前从未真正接入判定——见 asset_provider._mood_from_state）
     "sleepy_idle_minutes": {"type": "number", "minimum": 0,
                             "maximum": 1440},
     "hotkeys": {
@@ -217,7 +222,10 @@ _SECTION_SCHEMAS: dict[str, dict] = {
         "properties": {
             "enabled": {"type": "boolean"},
             "schedule": {"type": "array", "minItems": 1, "maxItems": 8,
-                         "items": {"type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$"}},
+                         # L7（REVIEW-2026-09-04）：旧版 ^[0-2][0-9]:… 放行
+                         # 24-29 点，due_slots 字符串比较永不触发=静默无效
+                         "items": {"type": "string",
+                                   "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"}},
             "retention_hours": {"type": "number", "minimum": 1, "maximum": 168},
             "expression_minutes": {"type": "number", "minimum": 1, "maximum": 60},
             "confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
