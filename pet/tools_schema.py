@@ -77,8 +77,10 @@ _TRAVERSAL = re.compile(
     r"(^/+$|\.\.|rm[\s\t]+-rf|>\s*/dev/null|find\s+.*-delete|dd\s+.*of\s*=/dev/)",
     re.IGNORECASE,
 )
-# 形如 ~、~root、/、// 的裸根路径
-_BARE_ROOT = re.compile(r"^~/?$|^//?$|^/+$")
+# 形如 ~、~root、/、// 的裸根路径——批次F/L13（REVIEW-2026-09-04）：
+# 旧版正则只匹配 ~/?，注释声称覆盖 ~root 实则放行；~ 前缀整体拒绝
+# （Windows 无 ~user 展开，此类值一律按家目录根对待）
+_BARE_ROOT = re.compile(r"^~|^//?$|^/+$")
 
 
 def _is_unsafe_path(value: str) -> bool:

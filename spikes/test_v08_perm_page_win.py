@@ -55,12 +55,16 @@ class _StubBridge(PermBridge):
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     b = _StubBridge(object())   # 检查全 stub，adapter 不被触碰
-    # 构造即触发后台自检；等 worker 完成且 done 信号经事件循环送达
+    # 批次F/L14（REVIEW-2026-09-04）：构造不再自动自检（旧版每次开机后台
+    # 读一次剪贴板）——权限页打开（perm.qml onCompleted）/显式 refresh 才跑
+    check("T0 构造不自检（L14 启动零剪贴板访问）", b._items == [])
+    b.refresh()
+    # 等 worker 完成且 done 信号经事件循环送达
     waited = 0
     while waited < 5000 and not b._items:
         QTest.qWait(50)
         waited += 50
-    check("T1 构造即后台自检（items 到位）", len(b._items) == 6)
+    check("T1 refresh 后台自检（items 到位）", len(b._items) == 6)
     check("T2 stub 结果如约（5 过 1 挂）",
           sum(1 for i in b._items if i["ok"]) == 5)
     check("T3 worker 引用已回收", b._worker is None)

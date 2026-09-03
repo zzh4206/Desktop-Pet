@@ -15,6 +15,10 @@ ApplicationWindow {
 
     onClosing: function(close) { root.hide(); close.accepted = false }
 
+    // 批次F/L14（REVIEW-2026-09-04）：打开页面才触发自检——旧版 PermBridge
+    // 构造即后台跑一轮（含 PowerShell 读剪贴板），每次开机都动一次剪贴板
+    Component.onCompleted: Perm.refresh()
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 16

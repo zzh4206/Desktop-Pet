@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import ctypes
+import time
 from ctypes import wintypes
 
 from .behavior import Sensors
@@ -132,6 +133,26 @@ def _monitor_map(screens=None) -> list:
     return out
 
 
+# 批次F/L17（REVIEW-2026-09-04）：监视器配对表 TTL 缓存——站窗顶时
+# window_rect 每 50ms tick 调用，旧版每次都跑 QGuiApplication.screens()
+# + EnumDisplayMonitors + 回调配对，20Hz 主线程 Win32 调用违背
+# "绝不每帧枚举"红线精神（与 _WINDOWS_TTL_S 同拍）
+_MONITOR_TTL_S = 2.0
+_monitor_cache: tuple[float, list] = (0.0, [])
+
+
+def _cached_monitor_map(screens=None) -> list:
+    global _monitor_cache
+    now = time.monotonic()
+    ts, mons = _monitor_cache
+    if mons and now - ts < _MONITOR_TTL_S:
+        return mons
+    mons = _monitor_map(screens)
+    if mons:
+        _monitor_cache = (now, mons)
+    return mons
+
+
 _WNDENUMPROC = ctypes.WINFUNCTYPE(
     wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
 )
@@ -208,7 +229,7 @@ def _hwnd_to_rect(hwnd, screens=None, mons=None) -> dict | None:
     if screens is None:
         screens = QGuiApplication.screens()
     if mons is None:
-        mons = _monitor_map(screens)
+        mons = _cached_monitor_map(screens)   # L17：TTL 缓存（站窗顶 20Hz 路径）
     tl = QPoint(rc.left, rc.top)
     br = QPoint(rc.right, rc.bottom)
     # 物理像素→逻辑像素（Win32 坐标是物理系，Qt 工作区/FSM 是逻辑系）；
@@ -237,11 +258,14 @@ def _hwnd_to_rect(hwnd, screens=None, mons=None) -> dict | None:
                         int(sg.y() + (rc.top - py0) / dpr))
             br = QPoint(int(sg.x() + (rc.right - px0) / dpr),
                         int(sg.y() + (rc.bottom - py0) / dpr))
-            break
-    return {
-        "x": tl.x(), "y": tl.y(),
-        "width": br.x() - tl.x(), "height": br.y() - tl.y(),
-    }
+            return {
+                "x": tl.x(), "y": tl.y(),
+                "width": br.x() - tl.x(), "height": br.y() - tl.y(),
+            }
+    # 批次F/L17（REVIEW-2026-09-04）：两级兜底都未命中（窗口完全离屏）——
+    # 旧版把物理坐标当逻辑坐标返回，混合 DPI 下差 1.5× 污染 FSM 几何判定；
+    # 返回 None（调用方 visible_windows/window_rect 均已按 None 跳过）
+    return None
 
 
 _windows_cache: list[dict] = []
@@ -345,7 +369,7 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
     pt = None
     # 批次F/M1：逻辑→物理同样按监视器配对表精确变换——旧版 x*dpr 默认
     # 原点 (0,0)，副屏（逻辑原点非零）探针点系统性错位
-    for screen, (pl, pt_, pr, pb) in _monitor_map(screens):
+    for screen, (pl, pt_, pr, pb) in _cached_monitor_map(screens):
         sg = screen.geometry()
         if (sg.x() <= x < sg.x() + sg.width()
                 and sg.y() <= y < sg.y() + sg.height()):

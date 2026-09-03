@@ -158,6 +158,10 @@ class HotkeyManager:
             # 创建——旧版 Event 在 start() 后建，子线程先跑到 _ready.set()
             # 则主线程 AttributeError；_reg_ok 由子线程写入，主线程 wait
             # 超时后读未初始化属性同样炸（_loop 内不再重建 _reg_ok）。
+            # 批次F/L15（REVIEW-2026-09-04）：同时清陈旧 _thread_id——
+            # stop→start 复用时旧死线程 id 残留，stop 抢在新线程首行赋值
+            # 前投递 WM_QUIT 会打到死线程（改键场景旧键残留）
+            self._thread_id = 0
             self._ready = threading.Event()
             self._reg_ok = {}
             self._thread = threading.Thread(

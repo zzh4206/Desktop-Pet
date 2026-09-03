@@ -141,9 +141,14 @@ class MemoryStore:
             f.flush()
             os.fsync(f.fileno())
         if os.path.exists(path):
+            # L18（REVIEW-2026-09-04）：.bak 被杀软/编辑器锁定时不让
+            # OSError 冒泡（chat_emotion 同款代码早有 try）
             import shutil
 
-            shutil.copy2(path, path + ".bak")
+            try:
+                shutil.copy2(path, path + ".bak")
+            except OSError:
+                pass
         os.replace(tmp, path)
         with self._lock:
             if self._gen == snap_gen:

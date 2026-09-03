@@ -277,13 +277,16 @@ class ProactiveScheduler:
             sess.on_dnd_active()
             return sess
         # T8 活跃内容：前台视频 → 不吃
+        # L11（REVIEW-2026-09-04）：检测器异常按 fail-closed 不吃——旧版日志
+        # 写"放行不抑制"但代码继续走后续门禁可能开吃，言行不一且方向不安全
         if self._active_content_fn is not None:
             try:
                 if self._active_content_fn():
                     return sess
             except Exception:
-                _log.warning("[吃鼠标] active_content_fn 异常，放行不抑制",
+                _log.warning("[吃鼠标] active_content_fn 异常，保守不吃（fail-closed）",
                              exc_info=True)
+                return sess
         # 批次C/H2 第五门禁：前台全屏（演示/放映/全屏视频）→ 不吃。
         # 放映中 5min 无输入完全正常（idle 门禁必过），宠物本体虽已隐藏，
         # 吞掉演示者鼠标 10s 是事故级观感——sensor_win 注释自 v0.3 就宣称
@@ -294,8 +297,10 @@ class ProactiveScheduler:
                     _log.info("[吃鼠标] 前台全屏（演示/播放），不抑制")
                     return sess
             except Exception:
-                _log.warning("[吃鼠标] fullscreen_fn 异常，放行不抑制",
+                # L11：同 active_content——fail-closed（演示事故级观感优先）
+                _log.warning("[吃鼠标] fullscreen_fn 异常，保守不吃（fail-closed）",
                              exc_info=True)
+                return sess
         # T9 Accessibility：未授权 → 提示 + 深链，不抑制
         if self._accessibility_fn is not None:
             try:
@@ -421,10 +426,11 @@ class ProactiveScheduler:
         态冻结在当前位置，视觉即"在光标处吃"）。
         """
         # 释放检测（恒执行：自动释放后 FSM 回 idle 坠落）
+        # L11：裸吞改留痕——释放检测链路坏了无迹可查
         try:
             self._eat_session.sync_release()
         except Exception:
-            pass
+            _log.warning("[吃鼠标] sync_release 异常", exc_info=True)
         if self._eat_pending is None:
             return
         if self._now() >= self._eat_pending[1]:
@@ -440,7 +446,10 @@ class ProactiveScheduler:
             try:
                 return bool(self._dnd_fn())
             except Exception:
-                _log.warning("[吃鼠标] dnd_fn 异常，按非 DND 处理", exc_info=True)
+                # L11：DND 检测异常按 DND 处理（fail-closed，铁律4 勿扰不吃）
+                _log.warning("[吃鼠标] dnd_fn 异常，按 DND 处理（fail-closed）",
+                             exc_info=True)
+                return True
         return False
 
     # ---- 深夜判定 ----

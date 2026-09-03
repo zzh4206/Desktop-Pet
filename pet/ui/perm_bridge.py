@@ -50,10 +50,12 @@ class PermBridge(QObject):
     def __init__(self, adapter, parent=None) -> None:
         super().__init__(parent)
         self._adapter = adapter
-        self._items: list = []
+        self._items: list[dict] = []
         self._worker: _PermCheckWorker | None = None
         self._note = "Windows 端无需系统授权；以下为运行时能力自检"
-        self.refresh()
+        # L14（REVIEW-2026-09-04）：不再构造即自检——旧版 app 启动路径实例化
+        # PermBridge 就后台跑一轮（含 PowerShell 读剪贴板 1-3s，绕过
+        # clipboard 工具 dangerous 确认语义）；改由权限页打开时 QML 触发 refresh
 
     @Property("QString", notify=noteChanged)
     def note(self) -> str:

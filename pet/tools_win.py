@@ -34,6 +34,18 @@ _PROC_DENYLIST = frozenset({
     "sihost.exe", "ctfmon.exe", "fontdrvhost.exe", "searchhost.exe",
     "shellexperiencehost.exe", "startmenuexperiencehost.exe",
 })
+# 批次F/L12（REVIEW-2026-09-04）：open_app 系统程序黑名单——_APP_NAME 放行
+# "cmd"/"regedit" 等（regex 禁 / 无参数面，危害限开窗口，但提示注入可借
+# 记忆通道诱导开系统程序，process 有 denylist 而 open_app 无=防护不对称）
+_APP_DENYLIST = frozenset({
+    "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
+    "regedit", "regedit.exe", "reg", "reg.exe", "taskmgr", "taskmgr.exe",
+    "msconfig", "msconfig.exe", "diskpart", "diskpart.exe", "shutdown",
+    "shutdown.exe", "vssadmin", "vssadmin.exe", "bcdedit", "bcdedit.exe",
+    "netsh", "netsh.exe", "schtasks", "schtasks.exe", "sc", "sc.exe",
+    "wscript", "wscript.exe", "cscript", "cscript.exe", "mshta", "mshta.exe",
+    "rundll32", "rundll32.exe", "control", "control.exe",
+})
 
 OPEN_APP_SCHEMA = ToolSchema(
     name="open_app",
@@ -74,6 +86,12 @@ class OpenAppHandler:
         if app:
             if not _APP_NAME.match(app):
                 return ToolResult(False, f"应用名不合法: {app!r}")
+            # L12：系统程序黑名单（大小写归一，含 .exe 形态）
+            if app.lower() in _APP_DENYLIST:
+                return ToolResult(
+                    False,
+                    f"出于安全考虑不能代开系统程序 {app}，请自行从开始菜单打开。",
+                )
             target = app
         elif url:
             if not _HTTP_URL.match(url):

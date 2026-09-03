@@ -148,6 +148,20 @@ def main() -> int:
                         ToolContext(pet_state=None, user_name="x", config={}))
     check("批次A open_app 纯 app 名不走 confirm_fn（dangerous_when 分流）",
           r10.success is True)
+
+    # 批次F/L12（REVIEW-2026-09-04）：open_app 系统程序黑名单——
+    # _APP_NAME 放行 "cmd"/"regedit.exe"，注入可借记忆通道诱导开系统程序
+    _octx = ToolContext(pet_state=None, user_name="x", config={})
+    r_cmd = OpenAppHandler().execute({"app": "cmd"}, _octx)
+    r_re = OpenAppHandler().execute({"app": "regedit.exe"}, _octx)
+    check("L12 open_app 系统程序黑名单拒绝（cmd/regedit.exe）",
+          r_cmd.success is False and r_re.success is False)
+    # 批次F/L13：_BARE_ROOT ~ 前缀整体拒绝（旧版注释称覆盖 ~root 实则放行）
+    from pet.tools_schema import _is_unsafe_path
+
+    check("L13 _BARE_ROOT 覆盖 ~root（注释承诺兑现）",
+          _is_unsafe_path("~root") and _is_unsafe_path("~")
+          and not _is_unsafe_path("C:/Users/x/notes.txt"))
     from pet.tools_mac import CLIPBOARD_SCHEMA as MAC_CLIP
     check("批次A mac clipboard 同步 dangerous + text_fields 对齐",
           MAC_CLIP.dangerous is True and MAC_CLIP.text_fields == ("text",))

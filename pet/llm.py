@@ -191,6 +191,12 @@ class OpenAICompatibleClient(LLMClient):
             except Exception:
                 pass
             log.warning("DS HTTP %s: %s", self._resp.status_code, body)
+            # L9（REVIEW-2026-09-04）：早退也在 finally 语义内清 _resp/关
+            # 连接——旧版该 return 在 try 之外，resp 引用滞留、连接靠 GC
+            try:
+                self._resp.close()
+            finally:
+                self._resp = None
             return FALLBACK_REPLY, [], {}
 
         full = []
@@ -394,6 +400,11 @@ class OpenAICompatibleClient(LLMClient):
                     on_delta(text2)
                 appended.append(ChatTurn("assistant", text2))
                 text = text2
+            else:
+                # L10（REVIEW-2026-09-04）：空文本但续轮仍有 tool_calls——
+                # 下一轮 append 的 assistant 消息不带上一轮旧 content
+                # （旧版 text 残留，过时回复在上下文里重复出现）
+                text = ""
         return text, appended
 
 
