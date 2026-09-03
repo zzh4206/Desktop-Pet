@@ -53,17 +53,21 @@ def read_cped(root: Path) -> dict[str, list[dict]]:
                 if label and text:
                     context = [r["Utterance"].strip() for r in rows[max(0, i - 4):i + 1]
                                if (r.get("Utterance") or "").strip()]
-                    if context: by_label[label].append({"context": context, "label": label, "source": "cped"})
+                    if context: by_label[label].append(
+                        {"context": context, "label": label, "source": "cped",
+                         # M7（REVIEW-2026-09-04）：对话 id 供训练侧分组切分
+                         "group": f"{split}:{row['Dialogue_ID']}"})
     return by_label
 
 
-def synthetic(label: str, n: int, rng: random.Random) -> list[dict]:
+def synthetic(label: str, n: int, rng: random.Random, start_id: int) -> list[dict]:
     setup, reaction = TEMPLATES[label]; filler = ["今天过得怎么样", "我想和你说件事", "刚刚想到这个", "你在忙吗"]
     out = []
-    for _ in range(n):
+    for i in range(n):
         context = [rng.choice(filler), rng.choice(setup), rng.choice(reaction)]
         if rng.random() < .55: context.pop(0)
-        out.append({"context": context, "label": label, "source": "synthetic"})
+        out.append({"context": context, "label": label, "source": "synthetic",
+                    "group": f"synth:{label}:{start_id + i}"})
     return out
 
 
@@ -74,10 +78,11 @@ def main() -> None:
     ap.add_argument("--per-label", type=int, default=2500)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args(); rng = random.Random(args.seed)
-    source = read_cped(args.cped); samples = []
+    source = read_cped(args.cped); samples = []; synth_id = 0
     for label in LABELS:
         picked = list(source.get(label, [])); rng.shuffle(picked); picked = picked[:args.per_label]
-        picked += synthetic(label, args.per_label - len(picked), rng)
+        extra = synthetic(label, args.per_label - len(picked), rng, synth_id)
+        synth_id += len(extra); picked += extra
         rng.shuffle(picked); samples.extend(picked)
         print(f"{label}: {len(picked)} (cped={sum(x['source']=='cped' for x in picked)})")
     rng.shuffle(samples); args.out.parent.mkdir(parents=True, exist_ok=True)

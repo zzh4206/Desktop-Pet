@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import time
 from dataclasses import dataclass
@@ -49,6 +48,27 @@ def is_significant(result: EmotionResult, threshold: float) -> bool:
     """消息到来时只响应明确、非中性的情绪，避免普通聊天频繁换脸。"""
     return (not result.used_fallback and result.label != "neutral"
             and result.confidence >= float(threshold))
+
+
+def ngram_vector(texts: Iterable[str], weights: Iterable[float] | None = None,
+                 feature_dim: int = FEATURE_DIM) -> "np.ndarray":
+    """2–4 gram blake2b 特征哈希——训练（tools/train_chat_emotion）与推理
+    共享的唯一实现（M9，REVIEW-2026-09-04：旧版双份手工同步，单侧改动即
+    静默训练-推理 skew）。``weights`` 与 ``texts`` 等长（缺省全 1），
+    返回 L2 归一化向量。
+    """
+    clean = ["".join(str(t).split()).lower() for t in texts]
+    ws = list(weights) if weights is not None else [1.0] * len(clean)
+    vec = np.zeros(feature_dim, dtype=np.float32)
+    for text, w in zip(clean, ws):
+        for n in (2, 3, 4):
+            for i in range(max(0, len(text) - n + 1)):
+                idx = int.from_bytes(
+                    blake2b(text[i:i + n].encode("utf-8"), digest_size=4).digest(),
+                    "little") % feature_dim
+                vec[idx] += w
+    norm = float(np.linalg.norm(vec))
+    return vec / norm if norm else vec
 
 
 # 这是模型的保守护栏，不是对话内容上传或 LLM 调用。它只处理极直白、
@@ -214,19 +234,11 @@ class ChatEmotionEngine:
         self.session = ort.InferenceSession(os.path.join(model_dir, "encoder.int8.onnx"), providers=["CPUExecutionProvider"])
         self.version = 2
 
-    def _features(self, messages: Iterable[dict], now: float) -> "np.ndarray":
-        vec = np.zeros(self.feature_dim, dtype=np.float32)
-        for message in messages:
-            age_h = max(0., (now - float(message["at"])) / 3600.)
-            weight = math.exp(-age_h / 18.)
-            text = "".join((message.get("text") or "").split()).lower()
-            for n in (2, 3, 4):
-                for i in range(max(0, len(text) - n + 1)):
-                    gram = text[i:i + n].encode("utf-8")
-                    idx = int.from_bytes(blake2b(gram, digest_size=4).digest(), "little") % self.feature_dim
-                    vec[idx] += weight
-        norm = float(np.linalg.norm(vec))
-        return vec / norm if norm else vec
+    def _features(self, messages: Iterable[dict], now: float | None = None) -> "np.ndarray":
+        # M9（REVIEW-2026-09-04）：对齐训练窗口——v1 训练 context 恒 ≤5 句
+        # 等权，旧版推理带 exp 衰减且上下文无上限（48h 全量）=分布漂移。
+        # now 参数保留仅为调用方兼容，不再参与计算。
+        return ngram_vector([m.get("text", "") for m in list(messages)[-5:]])
 
     def evaluate(self, messages: Iterable[dict], scheduled_time: str | None = None,
                  now: float | None = None,

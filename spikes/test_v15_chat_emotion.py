@@ -144,4 +144,17 @@ with tempfile.TemporaryDirectory() as d:
     app_mod.PetApp._poll_chat_emotion(fake_poll)
     check("M2d 启用后轮询照常推理", len(eval_calls) == 1 and ("apply", "happy") in calls)
 
+    # ---- M9（REVIEW-2026-09-04）共享特征实现 + 训练窗口对齐 ----
+    from pet.chat_emotion import ngram_vector
+
+    v_a = ngram_vector(["abcabc"])
+    v_b = ngram_vector(["abcabc", "abcabc"])
+    check("M9a ngram_vector 归一化线性不变", np.allclose(v_a, v_b))
+    check("M9b 权重参数等价叠加",
+          np.allclose(ngram_vector(["abc"], [2.0]), ngram_vector(["abc", "abc"])))
+    six = [{"text": f"消息内容编号{i}号"} for i in range(6)]
+    check("M9c _features 截最近 5 条对齐训练窗口",
+          np.allclose(eng_mid._features(six),
+                      ngram_vector([m["text"] for m in six[1:]])))
+
 print("聊天情绪检查完成")

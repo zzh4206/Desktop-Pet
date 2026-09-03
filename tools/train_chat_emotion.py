@@ -14,21 +14,13 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from pet.chat_emotion import FEATURE_DIM, LABELS
+from pet.chat_emotion import FEATURE_DIM, LABELS, ngram_vector
 
 
 def vectorize(texts: list[str]) -> np.ndarray:
-    """与运行时相同的 2–4 gram 特征哈希；训练/推理必须保持同一实现。"""
-    from hashlib import blake2b
-    x = np.zeros(FEATURE_DIM, dtype=np.float32)
-    for text in texts:
-        text = "".join(str(text).split()).lower()
-        for n in (2, 3, 4):
-            for i in range(max(0, len(text) - n + 1)):
-                idx = int.from_bytes(blake2b(text[i:i+n].encode(), digest_size=4).digest(), "little") % FEATURE_DIM
-                x[idx] += 1
-    norm = np.linalg.norm(x)
-    return x / norm if norm else x
+    """运行时共享的 2–4 gram 特征哈希（M9，REVIEW-2026-09-04：旧版双份
+    手工同步，单侧改动即静默训练-推理 skew）。"""
+    return ngram_vector(texts)
 
 
 def main() -> None:
@@ -53,7 +45,17 @@ def main() -> None:
         except json.JSONDecodeError: pass
     if len(rows) < 100: raise SystemExit("有效样本少于 100 条，拒绝训练")
     torch.manual_seed(args.seed); rng = np.random.default_rng(args.seed)
-    rng.shuffle(rows); cut = max(1, int(len(rows) * .85)); train, valid = rows[:cut], rows[cut:]
+    # M7（REVIEW-2026-09-04）：按对话（group=CPED Dialogue_ID）分组切分——
+    # 滑窗上下文使同对话相邻样本共享 5 句中的 4 句，行级随机切分=近重复
+    # 跨集，val_macro_f1 虚高。无 group 字段的旧数据退化为单行组（等价旧
+    # 行为）。
+    by_group: dict[str, list[dict]] = {}
+    for i, row in enumerate(rows):
+        by_group.setdefault(str(row.get("group") or f"row:{i}"), []).append(row)
+    keys = sorted(by_group); rng.shuffle(keys)
+    cut = max(1, int(len(keys) * .85))
+    train = [r for k in keys[:cut] for r in by_group[k]]
+    valid = [r for k in keys[cut:] for r in by_group[k]]
     def pack(rows):
         return (torch.from_numpy(np.stack([vectorize(r["context"]) for r in rows])),
                 torch.tensor([LABELS.index(r["label"]) for r in rows]))

@@ -70,11 +70,22 @@ def main() -> None:
         return np.vstack(result).astype(np.float32)
     x = embed(train); xa = embed(acceptance)
     y = np.array([LABELS.index(r['label']) for r in train]); ya = np.array([LABELS.index(r['label']) for r in acceptance])
-    # 验收集完全隔离：只在训练数据内按类别切出验证集，用其选择最佳 checkpoint。
+    # H3（REVIEW-2026-09-04）：按变体族（group=种子句）切分——同一 seed 的
+    # 前后缀变体近重复，行级随机切分让变体族跨 train/valid，validation F1
+    # 虚高且 best checkpoint 被泄漏指标驱动（0.992 vs acceptance 0.911 的
+    # 差值即泄漏量）。旧数据行无 group 字段时按文本分组（等价单行组）。
     rng = np.random.default_rng(args.seed); train_ix, valid_ix = [], []
     for label in range(len(LABELS)):
-        indices = np.flatnonzero(y == label); rng.shuffle(indices)
-        cut = max(1, int(len(indices) * .85)); train_ix.extend(indices[:cut]); valid_ix.extend(indices[cut:])
+        indices = np.flatnonzero(y == label)
+        by_group: dict[str, list[int]] = {}
+        for ix in indices:
+            row = train[int(ix)]
+            by_group.setdefault(str(row.get("group") or row["text"]), []).append(int(ix))
+        keys = sorted(by_group); rng.shuffle(keys)
+        cut = max(1, int(len(keys) * .85))
+        for k in keys[:cut]: train_ix.extend(by_group[k])
+        for k in keys[cut:]: valid_ix.extend(by_group[k])
+    if not valid_ix: raise SystemExit("分组切分后验证集为空；请检查数据 group 字段")
     train_ix, valid_ix = np.asarray(train_ix), np.asarray(valid_ix)
     head = nn.Linear(x.shape[1], len(LABELS)).to(device); opt = torch.optim.AdamW(head.parameters(), lr=2e-3, weight_decay=.01)
     loss_fn = nn.CrossEntropyLoss(); xt, yt = torch.from_numpy(x[train_ix]).to(device), torch.from_numpy(y[train_ix]).to(device)
@@ -114,11 +125,34 @@ def main() -> None:
         quantize_dynamic(str(onnx_path), str(args.out_dir / "encoder.int8.onnx"), weight_type=QuantType.QInt8)
         onnx_path.unlink()
     except Exception as exc:
+        onnx_path.unlink(missing_ok=True)  # L20：不留 fp32 中间物被误当发布物打包
         raise SystemExit(f"ONNX 量化失败，拒绝导出未量化部署模型：{exc}") from exc
+    # M8（REVIEW-2026-09-04）：部署物 int8 ONNX 参与评估——旧版 report 指标
+    # 全部算在 fp32 embedding 上，运行时真正加载的量化模型误差无任何门禁
+    import onnxruntime as _ort
+    sess = _ort.InferenceSession(str(args.out_dir / "encoder.int8.onnx"),
+                                 providers=["CPUExecutionProvider"])
+    emb_a8: list = []
+    for start in range(0, len(acceptance), args.batch_size):
+        batch = tokenizer([r['text'] for r in acceptance[start:start + args.batch_size]],
+                          padding=True, truncation=True, max_length=args.max_length,
+                          return_tensors="np")
+        ids = np.asarray(batch["input_ids"], dtype=np.int64)
+        mask = np.asarray(batch["attention_mask"], dtype=np.int64)
+        types = (np.asarray(batch["token_type_ids"], dtype=np.int64)
+                 if "token_type_ids" in batch else np.zeros_like(ids))
+        emb_a8.append(sess.run(["embedding"], {"input_ids": ids, "attention_mask": mask,
+                                               "token_type_ids": types})[0])
+    logits8 = (np.vstack(emb_a8).astype(np.float32) @ head.weight.detach().cpu().numpy().T
+               + head.bias.detach().cpu().numpy())
     report = {"validation": metrics(yv, head(xv).argmax(1).cpu().numpy()),
-              "acceptance": metrics(ya, head(torch.from_numpy(xa).to(device)).argmax(1).cpu().numpy())}
+              "acceptance": metrics(ya, head(torch.from_numpy(xa).to(device)).argmax(1).cpu().numpy()),
+              "acceptance_int8": metrics(ya, logits8.argmax(1))}
+    drop = report["acceptance"]["macro_f1"] - report["acceptance_int8"]["macro_f1"]
+    if drop > 0.05:
+        raise SystemExit(f"int8 量化劣化超阈值：acceptance macro_f1 下降 {drop:.4f} > 0.05")
     (args.out_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(report, ensure_ascii=False)); print(f"saved={args.out_dir}")
+    print(json.dumps(report, ensure_ascii=False)); print(f"saved={args.out_dir} int8_drop={drop:.4f}")
 
 
 if __name__ == '__main__': main()

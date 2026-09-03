@@ -38,13 +38,14 @@ PREFIX = ("", "我觉得", "说实话，", "刚刚", "今天", "现在", "唉，
 SUFFIX = ("", "。", "！", "，想和你说说", "，怎么办呀", "，不过没关系")
 
 
-def variants(label: str) -> list[str]:
-    out = set()
+def variants(label: str) -> list[tuple[str, str]]:
+    """(变体文本, 种子句) 列表——group=种子句供训练侧做变体族分组切分（H3）。"""
+    out: dict[str, str] = {}
     for seed in SEEDS[label]:
         for prefix in PREFIX:
             for suffix in SUFFIX:
-                out.add(f"{prefix}{seed}{suffix}")
-    return sorted(out)
+                out[f"{prefix}{seed}{suffix}"] = seed
+    return sorted(out.items())
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -62,18 +63,24 @@ def main() -> None:
                     help="模板预训练样本数；正式训练须与人工审核公开语料合并至每类至少数千条")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args(); rng = random.Random(args.seed)
+    # H2（REVIEW-2026-09-04）：验收文本先从采样池整体剔除——ACCEPTANCE 的
+    # 部分句子逐字存在于 SEEDS，旧版无排除，"绝不混训"承诺结构性失效
+    acceptance_texts = {text for text, _ in ACCEPTANCE}
     train = []
     for label in LABELS:
-        pool = variants(label)
+        pool = [(t, g) for t, g in variants(label) if t not in acceptance_texts]
         if args.per_label > len(pool):
             raise SystemExit(f"{label} 仅有 {len(pool)} 个去重模板；请先补充人工审核语料，不要复制凑数")
         chosen = rng.sample(pool, args.per_label)
-        train.extend({"text": text, "label": label, "source": "curated_template"} for text in chosen)
+        assert not ({t for t, _ in chosen} & acceptance_texts), "验收文本混入训练集"
+        train.extend({"text": text, "label": label, "source": "curated_template",
+                      "group": group} for text, group in chosen)
     rng.shuffle(train)
     acceptance = [{"text": text, "label": label, "source": "manual_acceptance"}
                   for text, label in ACCEPTANCE]
     write_jsonl(args.train_out, train); write_jsonl(args.acceptance_out, acceptance)
-    print(f"train={len(train)} acceptance={len(acceptance)}")
+    print(f"train={len(train)} acceptance={len(acceptance)} "
+          f"overlap={len({r['text'] for r in train} & acceptance_texts)}")
 
 
 if __name__ == "__main__":
