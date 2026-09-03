@@ -405,6 +405,8 @@ class PetApp:
 
         # v0.9/v0.8 面板 singleton 预注册：必须在 _build_chat_panel 创建首个
         # QQmlApplicationEngine 前注册，否则 PySide6 6.10 下后注册的 singleton
+        # （约束实测于 6.10；requirements 钉 >=6.5,<6.8，先注册在旧版无害，
+        # 按 L24/REVIEW-2026-09-04 留档防御性保留）
         # 不被后续 engine 解析 → perm/mem.qml 报 "Cannot assign QQuickText
         # to list property data"。bridge 实例留存，_show_mem/_show_perm 复用。
         from pet.ui.mem_bridge import MemBridge, register_mem_singleton
@@ -1206,6 +1208,18 @@ class PetApp:
         """FSM 模式 → 帧：walk 交替 / fall 空中 / 落地瞬帧 / 吃鼠标咀嚼循环。"""
         provider = self.provider
         if not isinstance(provider, AIArtProvider):
+            # L4（REVIEW-2026-09-04）：emoji 档行走 2 帧交替恢复——v0.10.15
+            # 收帧驱动后 get_frames(MOVE_TO) 全仓零调用，行走中 emoji 宠物
+            # 是静止贴图（v0.3 行为回归）。paperdoll/降级实例不受影响。
+            if mode == "walk" and isinstance(provider, EmojiProvider):
+                frames = provider.get_frames(
+                    self.store.get(), ActionType.MOVE_TO)
+                if len(frames) > 1:
+                    self._play_key("emoji_walk", frames, loop=True,
+                                   interval=260)
+                    return
+            if getattr(self, "_anim_key", None) == "emoji_walk":
+                self._stop_anim()
             return
         stage = self.store.get().stage.value
         if prev_mode in ("fall", "thrown") and mode not in ("fall", "thrown"):

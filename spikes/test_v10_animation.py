@@ -137,6 +137,46 @@ def main() -> int:
     check("L21a stretch 不受影响照常播帧",
           stub2._anim_key == "stretch" and len(stub2.window.played) == 1)
 
+    # ---- L4（REVIEW-2026-09-04）：emoji 档行走 2 帧交替恢复 ----
+    from pet.asset_provider import EmojiProvider
+
+    class _EmojiWin:
+        def __init__(self):
+            self.seq = []
+
+        def width(self):
+            return 64
+
+        def height(self):
+            return 64
+
+        def is_playing(self):
+            return True
+
+        def play_frames(self, frames, loop=False, interval_ms=150):
+            self.seq.append((tuple(f.path for f in frames), loop))
+
+        def stop_frames(self):
+            self.seq.append(("stop",))
+
+    stub3 = _AppStub(EmojiProvider(), window, Stage.YOUNG)
+    stub3._SMALL_ANIM_KEYS = PetApp._SMALL_ANIM_KEYS
+    for name in ("_play_animate", "_play_key", "_stop_anim", "_frame_tick"):
+        setattr(stub3, name, types.MethodType(getattr(PetApp, name), stub3))
+    ewin = _EmojiWin()
+    stub3.window = ewin
+    stub3.store = types.SimpleNamespace(
+        get=lambda: types.SimpleNamespace(
+            stage=Stage.YOUNG, branch=Branch.HEALTHY,
+            mood=80, fullness=80))
+    stub3._frame_tick(None, "walk", "idle")
+    check("L4a emoji 行走帧交替启动（v0.10.15 后静默丢失的行为回归）",
+          stub3._anim_key == "emoji_walk" and len(ewin.seq) == 1
+          and len(ewin.seq[0][0]) == 2)
+    stub3._frame_tick(None, "idle", "walk")
+    check("L4b 离开行走停帧", stub3._anim_key is None
+          and ewin.seq[-1] == ("stop",))
+
     # ---- T3 blink 到期自停（2 轮 × 2 帧 × 300ms + 120ms 余量） ----
     stub._play_animate("blink")
     QTest.qWait(300)   # 播放中：key 仍在

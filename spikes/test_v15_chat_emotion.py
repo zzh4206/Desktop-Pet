@@ -157,4 +157,48 @@ with tempfile.TemporaryDirectory() as d:
           np.allclose(eng_mid._features(six),
                       ngram_vector([m["text"] for m in six[1:]])))
 
+    # ---- M10（REVIEW-2026-09-04）覆盖缺口补强 ----
+    check("M10a 阈值边界 conf==threshold 触发（>=）",
+          is_significant(EmotionResult("happy", 0.5), 0.5))
+
+    reset_calls: list = []
+    fake_reset = types.SimpleNamespace(
+        _chat_emotion_store=types.SimpleNamespace(
+            clear_current=lambda: reset_calls.append("cleared")),
+        _chat_emotion_active="happy",
+        window=types.SimpleNamespace(
+            set_conversation_mood=lambda m: reset_calls.append(m)),
+        logger=logging.getLogger("t15r"),
+    )
+    app_mod.PetApp._reset_chat_emotion_to_neutral(fake_reset)
+    check("M10b 到期恢复清状态+置中性（五分钟回中链路）",
+          "cleared" in reset_calls and reset_calls[-1].value == "neutral"
+          and fake_reset._chat_emotion_active == "neutral")
+
+    import pet.chat_emotion as ce
+
+    obv_seen: list = []
+    _orig_obv = ce.obvious_emotion
+    ce.obvious_emotion = lambda t: obv_seen.append(t) or None
+
+    def _mk_engine(version):
+        return types.SimpleNamespace(
+            version=version,
+            evaluate=lambda *a, **k: EmotionResult("neutral", 0.0, True, version))
+
+    try:
+        fake_ev = types.SimpleNamespace(
+            _chat_emotion_store=types.SimpleNamespace(
+                recent_messages=lambda: [{"text": "我好难过", "at": now}]),
+            _chat_emotion_engine=_mk_engine(2),
+            _chat_emotion_cfg={"event_confidence_threshold": .5},
+        )
+        app_mod.PetApp._evaluate_message_emotion(fake_ev)
+        check("M10c v2 fallback 不被 obvious_emotion 短路", not obv_seen)
+        fake_ev._chat_emotion_engine = _mk_engine(1)
+        app_mod.PetApp._evaluate_message_emotion(fake_ev)
+        check("M10d v1 fallback 仍走 obvious 兜底", len(obv_seen) == 1)
+    finally:
+        ce.obvious_emotion = _orig_obv
+
 print("聊天情绪检查完成")

@@ -70,8 +70,10 @@ def build_rig_window(base_cls, sprite: SpriteRef, stage: str,
 
     ``defer_quick=True``（app 实装用）：QQuickWidget/引擎延到事件循环首拍
     再建 —— v0.13.3 修：QQuickWidget 构造即建全进程**首个 QML 引擎**，而
-    mem/perm/chat 三个 QML singleton 按 PySide6 6.10 约束必须在首个引擎前
-    注册（app.py:349 注释），否则聊天面板 "Cannot assign..." 载入失败。
+    mem/perm/chat 三个 QML singleton 必须在首个引擎前注册（app.py 同源
+    约束，实测于 PySide6 6.10；requirements 钉 >=6.5,<6.8，先注册在钉内
+    版本无害，按 REVIEW-2026-09-04 L24 留档防御性保留），否则聊天面板
+    "Cannot assign..." 载入失败。
     延迟后聊天引擎（_setup_chat 同步建）保持首位，rig 引擎退居其次。
     此路径下rig_active 在构造期尚为 False，以 ``_rig_pending`` 表示待就绪。
     """
