@@ -133,6 +133,12 @@ class PetStateStore:
             float(last_update) if last_update is not None else time.time()
         )
         self._lock = threading.Lock()  # v0.5.3：保护 update/save/_notify 线程安全
+        self._dirty = False  # H1（REVIEW-2026-09-04）：有未落盘变更
+
+    @property
+    def dirty(self) -> bool:
+        """update/reset 置位，save 成功清零——app 周期/防抖落盘的前置判断。"""
+        return self._dirty
 
     # ---- 冻结接口（签名不动） ----
     def get(self) -> PetState:
@@ -170,6 +176,7 @@ class PetStateStore:
                 self._last_update = time.time()
                 return
             self._state = new_state
+            self._dirty = True
             self._last_update = time.time()
             observers = list(self._observers)
         for cb in observers:
@@ -219,6 +226,7 @@ class PetStateStore:
                 except OSError:
                     pass
             os.replace(tmp, path)
+            self._dirty = False  # H1：落盘成功才清 dirty（失败保持，下轮重试）
             # POSIX 下 fsync 目录项变更持久化（Windows 无需，跳过）
             if os.name != "nt":
                 try:
@@ -331,8 +339,30 @@ class PetStateStore:
             log.warning("age_speed_multiplier 非法 %r，按 1.0", age_speed_multiplier)
             deltas["age"] = dt_days
         if deltas:
+            # H1（REVIEW-2026-09-04）：亚粒度衰减不触发 update——age 每秒微增
+            # 会让 on_change 每秒触发、500ms 防抖必然到期，全量落盘
+            # （dump+fsync+bak+replace）每秒一次 24/7。未跨档整体跳过：
+            # 不推 _last_update，wall-clock 自然累计到跨档为止，增量只延后不丢。
+            if not self._decay_meaningful(deltas):
+                return
             # update 会把 _last_update 推到 now 并触发 observer
             self.update(**deltas)
+
+    _DECAY_NUM_STEP = 0.1              # 数值跨一个 0.1 档才算有意义
+    _DECAY_AGE_STEP_DAYS = 1.0 / 1440.0  # age 长 1 分钟才算有意义
+
+    def _decay_meaningful(self, deltas: dict) -> bool:
+        state = self._state
+        for key, delta in deltas.items():
+            if key == "age":
+                if abs(float(delta)) >= self._DECAY_AGE_STEP_DAYS:
+                    return True
+            elif key in _NUMERIC_FIELDS:
+                cur = float(getattr(state, key))
+                new = max(0.0, min(100.0, cur + float(delta)))
+                if round(new, 1) != round(cur, 1):
+                    return True
+        return False
 
     # ---- v0.5 进化（非冻结接口，app apply_decay 后调） ----
     _STAGE_ORDER: tuple = (Stage.YOUNG, Stage.ADULT, Stage.FINAL)
@@ -402,6 +432,7 @@ class PetStateStore:
         with self._lock:
             self._state = PetState.default()
             self._last_update = time.time()
+            self._dirty = True
         self._notify()
 
     @property

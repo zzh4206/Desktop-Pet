@@ -975,10 +975,14 @@ class PetApp:
         self._save_timer.start(_SAVE_DEBOUNCE_MS)
 
     def _save_now(self) -> None:
-        try:
-            self.store.save(self._state_path)
-        except Exception:
-            self.logger.exception("存档失败")
+        # H1（REVIEW-2026-09-04）：零变更不落盘——旧版周期档（30s）与防抖档
+        # 都无条件 dump+fsync+bak+replace。dirty 由 update/reset 置位、save
+        # 成功清零；getattr 兼容测试桩 store（无 dirty 视为恒脏，保持旧行为）。
+        if getattr(self.store, "dirty", True):
+            try:
+                self.store.save(self._state_path)
+            except Exception:
+                self.logger.exception("存档失败")
         # 批次D/F16（REVIEW-2026-08-28）：记忆随周期存档落盘——旧版仅
         # shutdown/记忆页操作触发，进程崩溃即丢整段会话学到的记忆
         # （违背 v0.9"跨会话不丢"Must）。见脏才写，空转零 IO。

@@ -177,6 +177,41 @@ def main() -> int:
     check("健壮 check_evolve返回值可json.dumps",
           ev_json is not None and _json2.dumps(ev_json) is not None)
 
+    # ---- H1（REVIEW-2026-09-04）衰减粒度门 + dirty 落盘节流 ----
+    import time as _time
+
+    s_h1 = PetStateStore(PetState.default())
+    hits_h1 = [0]
+
+    def _h1_cb(_s):
+        hits_h1[0] += 1
+
+    s_h1.on_change(_h1_cb)
+    s_h1._last_update -= 1  # 1s：数值增量 ~0.0008、age ~1s，全在粒度内
+    s_h1.apply_decay({"mood": 2, "fullness": 3, "cleanliness": 1.5},
+                     age_speed_multiplier=1)
+    check("H1a 亚粒度衰减不触发 on_change", hits_h1[0] == 0)
+    check("H1b 亚粒度不推 last_update（时间累计不丢）",
+          s_h1.last_update < _time.time() - 0.5)
+    s_h1._last_update -= 61  # 累计 62s：age > 1 分钟 → 跨档
+    s_h1.apply_decay({"mood": 2, "fullness": 3, "cleanliness": 1.5},
+                     age_speed_multiplier=1)
+    check("H1c age 跨 1 分钟档触发一次 on_change", hits_h1[0] == 1)
+    s_h1.update(mood=5)
+    check("H1d 交互级增量照常触发", hits_h1[0] == 2)
+
+    check("H1e update 置 dirty", s_h1.dirty is True)
+    p_h1 = os.path.join(tempfile.gettempdir(), "dp_test_v05_h1.json")
+    s_h1.save(p_h1)
+    check("H1f save 成功清 dirty", s_h1.dirty is False)
+    s_h1.reset()
+    check("H1g reset 置 dirty", s_h1.dirty is True)
+    for p in (p_h1, p_h1 + ".bak", p_h1 + ".tmp"):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
     for p in (tmp, tmp + ".bak", tmp2, tmp2 + ".bak",
               tmp3, tmp3 + ".bak"):
         try:
