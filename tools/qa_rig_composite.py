@@ -46,6 +46,14 @@ def part_overlap_px(rig_dir: str, manifest: dict, figure: str) -> list:
         ok_b = (b.get("split", {}) or {}).get("overlap_ok_with") or []
         return a["id"] in ok_b or b["id"] in ok_a
 
+    # C3（REVIEW-2026-09-04）：豁免引用存在性校验——拼错的 id 静默不生效
+    ids = {p["id"] for p in parts}
+    for p in parts:
+        for ref in (p.get("split", {}) or {}).get("overlap_ok_with") or []:
+            if ref not in ids:
+                print(f"⚠️ overlap_ok_with 引用不存在的部件 "
+                      f"{p['id']}→{ref}（豁免不生效，疑似拼错）")
+
     loaded = []
     max_w = max_h = 0
     for p in parts:
@@ -74,21 +82,6 @@ def part_overlap_px(rig_dir: str, manifest: dict, figure: str) -> list:
     return out
 
 
-def check_overlap(rig_dir: str, manifest: dict, figure: str,
-                  max_px: int = _OVERLAP_MAX_PX) -> bool:
-    """门禁：同 figure 任意两部件 α 交叠 ≤ max_px。打印报告，返回是否通过。"""
-    rows = part_overlap_px(rig_dir, manifest, figure)
-    bad = [(a, b, n) for (a, b, n) in rows if n > max_px]
-    for (a, b, n) in rows:
-        flag = "❌" if n > max_px else ("⚠️ " if n > 0 else "  ")
-        print(f"  {flag}{a} × {b}: 交叠 {n}px")
-    if bad:
-        print(f"❌ 部件交叠超限（>{max_px}px）：{bad}——疑似同一连通域拆了"
-              f"两遍（split_parts --claim 按 x 分界重切）")
-        return False
-    return True
-
-
 def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
              max_pct: float = 0.5, exclude: str = "",
              write_qa: bool = True) -> dict:
@@ -112,6 +105,35 @@ def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
         return {"ok": False, "figure": f"{stage}/{figure}",
                 "reason": "manifest 无此 figure（未拆件）或原图缺失"}
     orig = Image.open(orig_path).convert("RGBA")
+
+    # M5（REVIEW-2026-09-04）：blink 豁免护栏——blink 件不参与静止/交叠
+    # 门禁，无约束的 kind=blink 是双盲后门。约束：必须 over_core
+    # （under_core 恒不可见=资产错误）+ px_rect 面积 ≤ 全图 2%
+    # （现眼睑贴片 ~0.6%）
+    for p in manifest["parts"]:
+        if p.get("kind") != "blink" or p["source_figure"] != figure:
+            continue
+        if p.get("z") != "over_core":
+            return {"ok": False, "figure": f"{stage}/{figure}",
+                    "reason": f"blink 件 {p['id']} 必须 over_core（under_core 恒不可见）"}
+        bxa0, bya0, bxa1, bya1 = p["px_rect"]
+        if (bxa1 - bxa0) * (bya1 - bya0) > 0.02 * orig.width * orig.height:
+            return {"ok": False, "figure": f"{stage}/{figure}",
+                    "reason": f"blink 件 {p['id']} 面积 {(bxa1-bxa0)*(bya1-bya0)}px 超全图 2%"}
+
+    # C3（REVIEW-2026-09-04）：exclude 格式校验——坏值直接崩门禁（ValueError
+    # 抛进 evaluate），T10 常驻跑全灭
+    ex = None
+    if exclude:
+        try:
+            vals = [int(v) for v in exclude.split(",")]
+            if len(vals) != 4 or any(v < 0 for v in vals):
+                raise ValueError
+            ex = tuple(vals)
+        except ValueError:
+            return {"ok": False, "figure": f"{stage}/{figure}",
+                    "reason": f"exclude 格式非法 {exclude!r}（须 x0,y0,x1,y1 非负整数）"}
+
     core = Image.open(os.path.join(rig_dir, core_path)).convert("RGBA")
 
     layer = Image.new("RGBA", orig.size, (0, 0, 0, 0))
@@ -145,13 +167,26 @@ def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
     bin_o = a_o.point(lambda v: 255 if v > 128 else 0)
     interior = bin_o.filter(ImageFilter.MinFilter(5))
     da_strong = da.point(lambda v: 255 if v > alpha_thr else 0)
-    if exclude:
-        ex = tuple(int(v) for v in exclude.split(","))
+    # M6（REVIEW-2026-09-04）：豁免预算——final/healthy_neutral 的 exclude
+    # 恰等于尾件全 bbox（半调抖动残留散布全尾段，无窄带可收敛），尾件回归
+    # （挖除错位/PNG 损坏）会被静默掩掉；被豁免的失配本身也受 manifest
+    # qa.exclude_budget_px 上限约束，超预算=FAIL
+    inter_full = ImageStat.Stat(da_strong, interior).sum[0] // 255
+    inter_mism, excluded_mism = inter_full, 0
+    if ex is not None:
         da_strong.paste(0, box=ex)
         interior.paste(0, box=ex)
-    inter_mism = ImageStat.Stat(da_strong, interior).sum[0] // 255
+        inter_mism = ImageStat.Stat(da_strong, interior).sum[0] // 255
+        excluded_mism = inter_full - inter_mism
     inter_opaque = sum(interior.histogram()[1:])   # 桶值=像素数，不再除 255
     inter_pct = inter_mism * 100.0 / max(1, inter_opaque)
+    budget = int((manifest.get("qa", {}) or {}).get("exclude_budget_px", {})
+                 .get(figure, 0) or 0)
+    budget_ok = True
+    if ex is not None and budget > 0:
+        budget_ok = excluded_mism <= budget
+    elif ex is not None:
+        print(f"⚠️ {figure} 豁免区无 exclude_budget_px 预算（建议补档防回归静默）")
 
     # 不透明双区（α>128）RGB 平均差（ImageStat 支持 L 掩码）
     mask = ImageChops.multiply(
@@ -182,11 +217,13 @@ def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
     # 批次F/C1：部件交叠门禁（静止合成对"同域拆两遍"失明，必须独立挡）
     rows = part_overlap_px(rig_dir, manifest, figure)
     overlap_ok = all(n <= _OVERLAP_MAX_PX for _a, _b, n in rows)
-    ok = inter_pct <= max_pct and overlap_ok
+    ok = inter_pct <= max_pct and overlap_ok and budget_ok
     return {
         "ok": ok, "figure": f"{stage}/{figure}", "n_parts": n_parts,
         "inter_pct": inter_pct, "inter_mism": inter_mism, "mism": mism,
         "pct": pct, "max_da": max_da, "rgb_d": rgb_d, "exclude": exclude,
+        "excluded_mism": excluded_mism, "exclude_budget": budget,
+        "budget_ok": budget_ok,
         "overlap_rows": rows, "overlap_ok": overlap_ok, "qa": qa_rel,
         "reason": "",
     }
@@ -218,7 +255,10 @@ def main() -> int:
           + (f"  exclude={r['exclude']}" if r["exclude"] else ""))
     print(f"全图: |Δα|>{args.alpha_thr} 失配={r['mism']} "
           f"({r['pct']:.3f}%)  maxΔα={r['max_da']}  平均ΔRGB={r['rgb_d']:.2f}")
-    print(f"内部(腐蚀2px): 失配={r['inter_mism']} ({r['inter_pct']:.3f}%)")
+    print(f"内部(腐蚀2px): 失配={r['inter_mism']} ({r['inter_pct']:.3f}%)"
+          + (f"  豁免区失配={r['excluded_mism']}/预算{r['exclude_budget']}"
+             f"{'❌超' if not r['budget_ok'] else '✅'}"
+             if r["exclude"] else ""))
     print(f"部件交叠检查（≤{_OVERLAP_MAX_PX}px）：")
     for (a, b, n) in r["overlap_rows"]:
         flag = "❌" if n > _OVERLAP_MAX_PX else ("⚠️ " if n > 0 else "  ")

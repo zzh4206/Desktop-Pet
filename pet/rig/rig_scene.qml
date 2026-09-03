@@ -143,11 +143,10 @@ Item {
         id: dlg
         required property var modelData
         property var d: modelData
-        anchors.fill: parent
+        anchors.fill: parent   // L25：anchors 优先于显式 width/height 绑定，
+                              // 旧版双写是死代码+QML 告警源，显式绑定已删
         visible: !!d && d.source_figure === root.activeFigure
             && (d.kind !== "blink" || root.blinkOn)
-        width: parent ? parent.width : 0
-        height: parent ? parent.height : 0
 
         Image {
             source: dlg.d && dlg.d._url ? dlg.d._url : ""

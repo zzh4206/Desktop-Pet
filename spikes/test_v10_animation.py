@@ -94,6 +94,49 @@ def main() -> int:
     stub._frame_tick(None, "idle", "idle")
     check("T4f 非小动作/非 land 的遗留 key 兜底停", stub._anim_key is None)
 
+    # ---- L3（REVIEW-2026-09-04）：land 单帧 520ms 到期自停 ----
+    stub._frame_tick(None, "fall", "idle")
+    stub._frame_tick(None, "idle", "fall")
+    check("L3a 落地分支 land", stub._anim_key == "land")
+    QTest.qWait(700)          # 越过 520ms 到期点
+    check("L3b land 到期自停（旧版定格 5-35s）", stub._anim_key is None)
+
+    # ---- L21（REVIEW-2026-09-04）：paperdoll 档跳过帧版 blink ----
+    class _FakePaperWin:
+        def __init__(self):
+            self.played = []
+
+        def width(self):
+            return 192
+
+        def height(self):
+            return 192
+
+        def part_walk_active(self):
+            return True
+
+        def is_playing(self):
+            return False
+
+        def play_frames(self, frames, loop=False, interval_ms=150):
+            self.played.append((list(frames), loop))
+
+        def stop_frames(self):
+            pass
+
+    stub2 = _AppStub(provider, window, Stage.YOUNG)
+    stub2._SMALL_ANIM_KEYS = PetApp._SMALL_ANIM_KEYS
+    for name in ("_play_animate", "_play_key", "_stop_anim", "_frame_tick"):
+        setattr(stub2, name, types.MethodType(getattr(PetApp, name), stub2))
+    stub2._part_walk = True
+    stub2.window = _FakePaperWin()
+    stub2._play_animate("blink")
+    check("L21 paperdoll 档跳过帧版 blink（引擎贴片已在场景内）",
+          stub2._anim_key is None and not stub2.window.played)
+    stub2._play_animate("stretch")
+    check("L21a stretch 不受影响照常播帧",
+          stub2._anim_key == "stretch" and len(stub2.window.played) == 1)
+
     # ---- T3 blink 到期自停（2 轮 × 2 帧 × 300ms + 120ms 余量） ----
     stub._play_animate("blink")
     QTest.qWait(300)   # 播放中：key 仍在

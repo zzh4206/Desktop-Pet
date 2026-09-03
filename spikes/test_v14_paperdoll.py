@@ -364,6 +364,24 @@ def main() -> int:
     check(f"T10 静止合成门禁 7 figure 全过（最差 {worst['figure']} "
           f"{worst['inter_pct']:.3f}%）" + (f"，FAIL={bad}" if bad else ""),
           not bad)
+    hn = next((r for r in gate_rows if r["figure"] == "final/healthy_neutral"),
+              None)
+    check(f"T10b 尾件豁免预算在限（{hn['excluded_mism']}px ≤ "
+          f"{hn['exclude_budget']}px）",
+          hn is not None and hn["budget_ok"]
+          and 0 < hn["exclude_budget"] <= 8100
+          and hn["excluded_mism"] <= hn["exclude_budget"])
+
+    # ---- 批次E L2/L5（REVIEW-2026-09-04）----
+    win._frames = []
+    win._walk_showing = True
+    win.set_walk_figure(None)
+    check("L5 行走中覆盖图置 None 自愈（不卡 _walk_showing）",
+          win._walk_showing is False)
+    win.play_frames([SpriteRef(path="😺", width=320, height=320)])
+    check("L2 emoji 帧走基类 label 路径（场景不吞垃圾 URL）",
+          win._frames and win._frames[0].path == "😺")
+    win.stop_frames()
 
     # 收尾清理定时器，防 Qt teardown 抖（对齐 v04/v13 教训）
     win.stop_frames()

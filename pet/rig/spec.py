@@ -37,7 +37,10 @@ _MANIFEST_SCHEMA: dict = {
         "figures": {
             "type": "object",
             "minProperties": 1,
-            "additionalProperties": {"type": "string"},
+            # L23（REVIEW-2026-09-04）：至少禁空串——曾考虑连反斜杠一并
+            # 禁（仓内 manifest 约定正斜杠），但 Windows 绝对路径（测试
+            # 脚手架/工具注入）天然含反斜杠，误伤面大于收益，仅收空值
+            "additionalProperties": {"type": "string", "minLength": 1},
         },
         # 批次G/rL6（REVIEW-2026-08-31）：门禁基线段——qa.exclude 记已知
         # 工艺残留区（如尾件保护带），qa_rig_composite 自动读取；
@@ -186,6 +189,19 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
                 log.warning("rig part %s 是 limb 但缺 sway/amp/period "
                             "（会冻结腿+压制帧回退），弃件", item["id"])
                 continue
+        # M5（REVIEW-2026-09-04）：blink 是瞬态覆盖件，under_core 会被核心
+        # 图整张压住恒不可见=资产错误，弃件（门禁侧另有面积护栏）
+        if kind == "blink" and item["z"] != "over_core":
+            log.warning("rig part %s 是 blink 但 z=%s（恒不可见），弃件",
+                        item["id"], item["z"])
+            continue
+        # L23（REVIEW-2026-09-04）：pivot 远离 px_rect 时摆轴大概率画飞
+        # （不弃件——摆轴在 bbox 外本身合法，只留告警请人工复核清单）
+        piv_x, piv_y = (float(v) for v in item["pivot"])
+        if not (x0 - 4 <= piv_x <= x1 + 4 and y0 - 4 <= piv_y <= y1 + 4):
+            log.warning("rig part %s pivot %s 距 px_rect %s 超出 ±4px，"
+                        "请复核摆轴坐标", item["id"], item["pivot"],
+                        item["px_rect"])
         parts.append(RigPart(
             id=item["id"], path=pp,
             source_figure=item["source_figure"],

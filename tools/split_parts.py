@@ -300,8 +300,12 @@ def main() -> int:
     panel.paste(co, (tw3 + 8, 0), co)
     panel.paste(pt, ((tw3 + 8) * 2, 0), pt)
     d = ImageDraw.Draw(panel)
-    d.line([(args.pivot[0] / 3 + (tw3 + 8) * 2, args.pivot[1] / 3),
-            ((bx0) / 3 + (tw3 + 8) * 2, (by0) / 3)],
+    # 批次E/C4（REVIEW-2026-09-04）：第三张缩略图只含部件 bbox 区域——
+    # pivot/角点须先减 bbox 原点再 /3（旧版 rL2 只做 /3 未减原点，
+    # final leg_front 的连线画在 x≈972 的空白区）
+    d.line([((args.pivot[0] - bx0) / 3 + (tw3 + 8) * 2,
+             (args.pivot[1] - by0) / 3),
+            ((tw3 + 8) * 2, 0.0)],
            fill=(255, 80, 80, 255), width=2)
     qa_path = os.path.join(
         qa_dir, f"split_{args.stage}_{figure_key}_{args.part}.png")

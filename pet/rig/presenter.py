@@ -194,6 +194,13 @@ class RigWindow(WindowBase):
             self._set_prop("facing", int(getattr(self, "_facing", 1)))
             if os.path.isfile(self._sprite.path):
                 self._show_now(self._sprite.path)
+            else:
+                # L2（REVIEW-2026-09-04）：rig+emoji 组合——初始 sprite 是
+                # emoji 文本，场景让位 label 接管；旧版隐藏 label 又不上图，
+                # 启动后 ~1s（首个 decay tick 前）画面空白
+                self._quick.setVisible(False)
+                self._label.show()
+                super().set_sprite(self._sprite)
         except Exception as e:            # pragma: no cover - 环境缺件
             log.warning("Qt Quick 初始化失败，rig 回退 QLabel 路径：%s",
                         e, exc_info=True)
@@ -273,7 +280,11 @@ class RigWindow(WindowBase):
         经典 2/4 帧小跑的正确播法是快速硬切。表情类变化连续、淡化才丝滑。
         判定按首帧行为文件名前缀，零配置数据。
         """
-        if not frames or not self.rig_active:
+        if not frames or not self.rig_active \
+                or not os.path.isfile(frames[0].path):
+            # L2（REVIEW-2026-09-04）：非文件帧（emoji 文本，rig+emoji 组合
+            # 或 AI 静态缺档降级）走基类 label 路径——旧版 emoji 串直接进
+            # QImage/figASrc=垃圾 URL 污染场景状态
             super().play_frames(frames, loop, interval_ms)
             return
         if not self._frames:
@@ -383,6 +394,13 @@ class RigWindow(WindowBase):
         self._walk_sprite = sprite
         if self._walk_showing and self.rig_active and sprite is not None:
             self._show_now(sprite.path)   # 覆盖图热替换（阶段进化换档）
+        elif sprite is None and self._walk_showing:
+            # L5（REVIEW-2026-09-04）：行走中覆盖图变 None（新档缺 side/
+            # neutral 静态图）——旧版 _walk_edge 从此永早退，_walk_showing
+            # 卡 True，on_state_change 只更新恢复目标不刷画面=冻结在旧图
+            self._walk_showing = False    # 恢复目标切回静态图
+            if not self._frames:
+                self.set_sprite(getattr(self, "_static_sprite", self._sprite))
 
     def _walk_edge(self, walking: bool) -> None:
         if not self.rig_active or self._walk_sprite is None:

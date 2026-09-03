@@ -1158,6 +1158,12 @@ class PetApp:
         if key is None:
             return
         if isinstance(self.provider, AIArtProvider):
+            # L21（REVIEW-2026-09-04）：paperdoll 档已有引擎级 blinkOn 贴片
+            # （场景每 4.7s 自脉冲），帧版 blink 会切到烤死全帧渲染，6 sway
+            # 件+腿件微动骤停 ~1.3s——重复且劣化，跳过（stretch/roll 保留）
+            if name == "blink" and getattr(self, "_part_walk", False) \
+                    and self.window.part_walk_active():
+                return
             frames = self.provider.frames_for(self.store.get().stage.value, key)
             if frames:
                 interval = self.provider.frame_interval(key)
@@ -1208,6 +1214,15 @@ class PetApp:
                 self._anim_key = None  # 允许覆盖 air 循环
                 self._play_key("land", [land[-1]], loop=False,
                                interval=provider.frame_interval("fall"))
+
+                # L3（REVIEW-2026-09-04）：land 单帧序列无终止路径——旧版
+                # 落地蹲伏定格到下次游走（free 5-15s）/随机小动作（edge
+                # 15-35s），对齐小动作的到期 singleShot 工艺
+                def _end_land() -> None:
+                    if getattr(self, "_anim_key", None) == "land":
+                        self._stop_anim()
+
+                QTimer.singleShot(520, _end_land)
                 return
             self._stop_anim()
             return

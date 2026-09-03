@@ -124,6 +124,31 @@ def main() -> int:
           len(spec2.parts) == 1 and spec2.parts[0].z == "over_core"
           and abs(spec2.parts[0].amp_deg - 2.0) < 1e-6)
 
+    # ---- 批次E（REVIEW-2026-09-04）：spec 防线 L23/M5 ----
+    tmp_l23 = tempfile.mkdtemp()
+    _write_manifest(tmp_l23, {"bad": ""}, [])
+    check("L23a figure 空串值整单拒绝",
+          load_rig_spec(tmp_l23, "final") is None)
+    _write_manifest(tmp_l23, {"neglected_neutral": fig_rel}, [{
+        "id": "blink_u", "file": fig_rel,
+        "source_figure": "neglected_neutral",
+        "px_rect": [1, 2, 3, 4], "pivot": [2, 3], "z": "under_core",
+        "kind": "blink",
+    }])
+    spec_bu = load_rig_spec(tmp_l23, "final")
+    check("L23b blink+under_core 弃件（恒不可见=资产错误）",
+          spec_bu is not None and len(spec_bu.parts) == 0)
+    _write_manifest(tmp_l23, {"neglected_neutral": fig_rel}, [{
+        "id": "piv_far", "file": fig_rel,
+        "source_figure": "neglected_neutral",
+        "px_rect": [1, 2, 3, 4], "pivot": [5000, 5000],
+        "z": "over_core",
+        "sway": {"amp_deg": 2, "period_ms": 1000},
+    }])
+    spec_piv = load_rig_spec(tmp_l23, "final")
+    check("L23c pivot 越界仅告警不弃件（摆轴出 bbox 合法）",
+          spec_piv is not None and len(spec_piv.parts) == 1)
+
     # ---- T3 装配 ----
     base_sprite = SpriteRef(path=src_neutral, width=320, height=320)
     # v0.14 起三阶段均有清单——"无清单回退"用空 rig_root 验证同一降级语义
@@ -333,6 +358,41 @@ def main() -> int:
         open(os.path.join(tmp_blink, "manifest.json"), encoding="utf-8")),
         "neglected_neutral")
     check("T12d 交叠门禁跳过 blink 件（单件无对→空）", rows_b == [])
+
+    # ---- 批次E M5/C3（REVIEW-2026-09-04）：门禁 blink 护栏 + exclude 校验 ----
+    import shutil as _sh
+
+    tmp_repo = tempfile.mkdtemp()
+    os.makedirs(os.path.join(tmp_repo, "assets", "rig", "final"))
+    os.makedirs(os.path.join(tmp_repo, "assets", "ai"))
+    _sh.copy(src_neutral, os.path.join(tmp_repo, "assets", "ai",
+                                       "final_neglected_neutral.png"))
+    _sh.copy(src_neutral, os.path.join(tmp_repo, "assets", "rig",
+                                       "final", "core.png"))
+    _write_manifest(os.path.join(tmp_repo, "assets", "rig", "final"),
+                    {"neglected_neutral": "core.png"},
+                    [{"id": "bl_big", "file": "core.png",
+                      "source_figure": "neglected_neutral",
+                      "px_rect": [0, 0, 1023, 1535], "pivot": [1, 1],
+                      "z": "over_core", "kind": "blink"}])
+    old_repo = qa2.REPO
+    qa2.REPO = tmp_repo
+    try:
+        r_big = qa2.evaluate("final", "neglected", "neutral", write_qa=False)
+        check("M5a blink 面积超全图 2% 门禁 FAIL",
+              r_big["ok"] is False and "blink" in (r_big["reason"] or ""))
+        _write_manifest(os.path.join(tmp_repo, "assets", "rig", "final"),
+                        {"neglected_neutral": "core.png"},
+                        [{"id": "bl_ok", "file": "core.png",
+                          "source_figure": "neglected_neutral",
+                          "px_rect": [10, 10, 40, 40], "pivot": [20, 20],
+                          "z": "over_core", "kind": "blink"}])
+        r_bad = qa2.evaluate("final", "neglected", "neutral",
+                             exclude="717,595,1024", write_qa=False)
+        check("C3a exclude 三段格式非法 FAIL（不崩）",
+              r_bad["ok"] is False and "exclude" in (r_bad["reason"] or ""))
+    finally:
+        qa2.REPO = old_repo
 
     # 收尾清理定时器，防 Qt teardown 抖（对齐 v04 教训）
     win.stop_frames()

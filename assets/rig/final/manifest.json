@@ -518,6 +518,9 @@
   "qa": {
     "exclude": {
       "healthy_neutral": "717,595,1024,1046"
+    },
+    "exclude_budget_px": {
+      "healthy_neutral": 8100
     }
   }
 }
