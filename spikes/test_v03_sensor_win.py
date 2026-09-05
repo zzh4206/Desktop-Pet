@@ -87,6 +87,16 @@ def main() -> int:
         check("T-g 实测 dpr（物理/逻辑宽）与 Qt devicePixelRatio 偏差<0.05",
               abs(dpr_meas - s0.devicePixelRatio()) < 0.05)
 
+    # ---- 批次B/P2-3+P2-7（REVIEW-2026-09-05）真桌面冒烟 ----
+    _fs_info = sw.foreground_fullscreen()
+    check("P2-3 前台全屏判定（样式+cloak 过滤后）返回 (bool, str)",
+          isinstance(_fs_info, tuple) and len(_fs_info) == 2
+          and isinstance(_fs_info[0], bool) and isinstance(_fs_info[1], str))
+    _srs = sw.screen_rects()
+    check("P2-7 逐屏几何非空且含四键",
+          bool(_srs) and all({"x", "y", "width", "height"} <= set(r)
+                             for r in _srs))
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

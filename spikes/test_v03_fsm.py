@@ -780,6 +780,36 @@ def main() -> int:
     check("T38b dt=0.05 单子步逐拍等价（6px）",
           abs(fsm2.pos[0] - 506) < 1e-6)
 
+    # ---- 批次B/P2-7（REVIEW-2026-09-05）：逐屏几何——不等高多屏无死区 ----
+    _SR = [
+        {"x": 0, "y": 0, "width": 1000, "height": 800},
+        {"x": 1000, "y": 0, "width": 1000, "height": 1000},
+    ]
+    _WA2 = {"x": 0, "y": 0, "width": 2000, "height": 1000}
+    _fsm2p = BehaviorFSM(dict(_WA2))
+    _sr_sensors = Sensors(mouse_pos=(0, 0), work_area=dict(_WA2), windows=[],
+                          screen_rects=[dict(r) for r in _SR])
+    _fsm2p._pos = (500.0, 400.0)
+    _fsm2p.step(PetState.default(), _sr_sensors, DT)
+    check("P2-7a 屏底取 x 所在屏（x=500 → 800 而非合集 1000）",
+          _fsm2p._bottom() == 800)
+    _fsm2p._pos = (1500.0, 500.0)
+    _fsm2p.step(PetState.default(), _sr_sensors, DT)
+    check("P2-7b 屏底取 x 所在屏（x=1500 → 1000）", _fsm2p._bottom() == 1000)
+    import random as _r2
+    _r2.seed(7)
+    _oks = True
+    for _ in range(60):
+        _x, _y = _fsm2p._new_target()
+        _oks = _oks and any(
+            r["x"] + 40 <= _x <= r["x"] + r["width"] - 40 for r in _SR)
+    check("P2-7c 游走目标恒落某屏可用区间（60 次采样）", _oks)
+    _fsm3p = BehaviorFSM(dict(_WA2))
+    _fsm3p._pos = (500.0, 400.0)
+    _fsm3p.step(PetState.default(), sensors(), DT)
+    check("P2-7d 无 screen_rects 退合集底（旧行为不变）",
+          _fsm3p._bottom() == 1080)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

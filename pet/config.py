@@ -314,9 +314,13 @@ def load_config(config_path: str) -> dict:
                 log.warning("用户 config 顶层非 dict，回退默认值")
                 return _validate_sections(cfg, defaults)
             cfg = _deep_merge(cfg, user)
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
+            # 批次B/P2-1（REVIEW-2026-09-05）：补 ValueError——用户手编 config
+            # 存成 GBK/含坏字节时 open(...encoding="utf-8") 抛 UnicodeDecodeError
+            # （是 ValueError 不是 JSONDecodeError），旧版逃出 except →
+            # app.py 裸调 load_config 启动即崩，删文件才能恢复。非法也过校验
+            # （防默认值本身非法）
             log.warning("用户 config 非法，回退默认值: %s", e)
-            # 非法 JSON 也过校验（防默认值本身非法）
             return _validate_sections(cfg, defaults)
     cfg = _migrate(cfg, defaults)
     return _validate_sections(cfg, defaults)

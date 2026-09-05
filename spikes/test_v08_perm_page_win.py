@@ -77,6 +77,30 @@ def main() -> int:
     check("T4 二次 refresh 再出结果", len(b._items) == 6
           and b._worker is None)
 
+    # ---- 批次B/P2-2（REVIEW-2026-09-05）：权限页剪贴板自检零内容访问 ----
+    import pet.ui.perm_bridge as _pbm
+    # 真方法（_StubBridge 覆盖不影响类方法）：offscreen 下无内容探测应健康通过
+    _real = _pbm.PermBridge._check_clipboard(None)
+    check("P2-2a 剪贴板自检零内容探测（序号/开合探针）", _real[0] is True)
+    # 旧实现经 ClipboardHandler 真读内容——毒化模块后调用不得受其影响
+    class _Poison:
+        def __getattr__(self, item):
+            raise AssertionError("权限页不得 import/执行剪贴板内容读取")
+
+    _saved = sys.modules.get("pet.tools_win")
+    sys.modules["pet.tools_win"] = _Poison()
+    try:
+        _pbm.PermBridge._check_clipboard(None)
+        _untouched = True
+    except AssertionError:
+        _untouched = False
+    finally:
+        if _saved is None:
+            sys.modules.pop("pet.tools_win", None)
+        else:
+            sys.modules["pet.tools_win"] = _saved
+    check("P2-2b 不再经 ClipboardHandler 读剪贴板内容", _untouched)
+
     print(f"\n权限页异步: {len(PASS)} 通过, {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

@@ -255,7 +255,10 @@ class PetStateStore:
                     raw = json.load(f)
             except FileNotFoundError:
                 continue
-            except (json.JSONDecodeError, OSError) as e:
+            except (OSError, ValueError) as e:
+                # 批次B/P2-1（REVIEW-2026-09-05）：补 ValueError——坏字节编码的
+                # 存档抛 UnicodeDecodeError（ValueError 子类，非 JSONDecodeError），
+                # 旧版逃出 except 直接崩 __init__（memory/config 同批修）
                 log.warning("存档 %s 解析失败，尝试下一份: %s", p, e)
                 continue
             if not isinstance(raw, dict):

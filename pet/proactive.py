@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import sys
 import re
 import time
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
@@ -162,6 +163,8 @@ class ProactiveScheduler:
         prompt_accessibility_fn=None,     # callable() -> None 深链系统设置
         fullscreen_fn=None,              # 批次C（REVIEW-2026-08-28 H2）：
         #   callable() -> bool 前台全屏/演示（win adapter.is_fullscreen_active）
+        state_path: str | None = None,   # 批次B/P2-6（REVIEW-2026-09-05）：
+        #   问候/节日/follow-up/唤醒链持久化档案路径；None=不持久化（测试）
     ) -> None:
         self._store = store
         self._bubble = bubble_fn
@@ -223,8 +226,13 @@ class ProactiveScheduler:
         self._greeted = {"morning": None, "night": None}  # date -> 当天已发
         self._festivaled = None
         self._last_bubble_at: float = 0.0            # 连发气泡间隔限速（v0.6.2）
-        # 启动即排首次唤醒（本地范围随机）
-        self.schedule_wake(random.uniform(*_LOCAL_WAKE_RANGE), {"boot": True})
+        # 批次B/P2-6（REVIEW-2026-09-05）：重启状态持久化——旧版全内存，
+        # 重启重发早安/晚安/节日、follow-up 全部静默丢失、唤醒链重排。
+        self._persist_path = state_path
+        self._load_persisted()
+        # 启动即排首次唤醒（本地范围随机）；持久化档案有有效的下次唤醒则保留
+        if self._next_wake_at is None:
+            self.schedule_wake(random.uniform(*_LOCAL_WAKE_RANGE), {"boot": True})
 
     # ---- 链式唤醒 ----
 
@@ -232,6 +240,7 @@ class ProactiveScheduler:
         """排定下次唤醒。delay 钳制 [10, 360] min；reason_ctx 仅入日志。"""
         delay = min(_WAKE_MIN_MAX, max(_WAKE_MIN_MIN, float(delay_min)))
         self._next_wake_at = self._now() + delay * 60.0
+        self._persist()
         _log.info("[主动] 排定唤醒 %.0f 分钟后(ctx=%s)", delay, reason_ctx)
 
     def follow_up(self, event: str, when: float) -> None:
@@ -242,8 +251,74 @@ class ProactiveScheduler:
         """
         self._followups.append((float(when), event))
         self._followups = deque(sorted(self._followups))
+        self._persist()
         _log.info("[主动] follow-up 排定 %s @%s",
                   event, datetime.fromtimestamp(when).strftime("%H:%M"))
+
+    # ---- 批次B/P2-6：重启状态持久化（tmp+replace 原子写） ----
+
+    def _persist(self) -> None:
+        if not self._persist_path:
+            return
+        try:
+            data = {
+                "version": 1,
+                "greeted": {k: (v.isoformat() if isinstance(v, date) else None)
+                            for k, v in self._greeted.items()},
+                "festivaled": self._festivaled,
+                "next_wake_at": self._next_wake_at,
+                "followups": [[float(w), str(m)] for w, m in self._followups],
+            }
+            tmp = self._persist_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self._persist_path)
+        except OSError:
+            _log.warning("[主动] 状态持久化失败", exc_info=True)
+
+    def _load_persisted(self) -> None:
+        if not self._persist_path or not os.path.isfile(self._persist_path):
+            return
+        try:
+            with open(self._persist_path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                return
+            g = raw.get("greeted")
+            if isinstance(g, dict):
+                for k, v in g.items():
+                    if k in ("morning", "night") and v:
+                        try:
+                            self._greeted[k] = datetime.fromisoformat(
+                                str(v)).date()
+                        except ValueError:
+                            pass
+            fest = raw.get("festivaled")
+            if isinstance(fest, str) and fest:
+                self._festivaled = fest
+            wa = raw.get("next_wake_at")
+            # 12h 内的过期唤醒也接受（poll 到点即触发，休眠跨夜场景）；
+            # 更陈旧的视为失效重排
+            if isinstance(wa, (int, float)) and wa > self._now() - 12 * 3600:
+                self._next_wake_at = float(wa)
+            fups = raw.get("followups")
+            now = self._now()
+            if isinstance(fups, list):
+                for item in fups[:20]:
+                    if (isinstance(item, (list, tuple)) and len(item) == 2
+                            and isinstance(item[0], (int, float))
+                            and item[0] > now):
+                        self._followups.append((float(item[0]), str(item[1])))
+                if self._followups:
+                    self._followups = deque(sorted(self._followups))
+            _log.info("[主动] 恢复持久状态（followup=%d，下次唤醒=%s）",
+                      len(self._followups),
+                      datetime.fromtimestamp(self._next_wake_at).strftime(
+                          "%m-%d %H:%M") if self._next_wake_at else "无")
+        except (OSError, ValueError):
+            _log.warning("[主动] 状态档案损坏，忽略", exc_info=True)
 
     def eat_mouse(self, duration_s: float) -> EatMouseSession:
         """v0.7 吃鼠标入口（§2.2 冻结签名）。四门禁全过 → 抑制鼠标 + 切
@@ -431,6 +506,16 @@ class ProactiveScheduler:
             self._eat_session.sync_release()
         except Exception:
             _log.warning("[吃鼠标] sync_release 异常", exc_info=True)
+        # 批次B/P2-5（REVIEW-2026-09-05）：会话中途 DND 生效 → 立即吐出。
+        # 旧版 on_dnd_active 只有 eat_mouse 入口门禁一处调用点，勿扰在吃
+        # 鼠标中途开启（config 手动开关翻转/未来系统级检测）永远不会打断
+        # 进行中的抑制——铁律4"勿扰不吃"只挡入口不断中途。未在吃时
+        # on_dnd_active 是 no-op（返 False）。
+        try:
+            if self._dnd_active():
+                self._eat_session.on_dnd_active()
+        except Exception:
+            _log.warning("[吃鼠标] DND 中途复查异常", exc_info=True)
         if self._eat_pending is None:
             return
         if self._now() >= self._eat_pending[1]:
@@ -534,11 +619,13 @@ class ProactiveScheduler:
         if _MORNING_HOURS[0] <= d.hour < _MORNING_HOURS[1] \
                 and self._greeted["morning"] != today:
             self._greeted["morning"] = today
+            self._persist()  # 批次B/P2-6：重启不重发
             self._emit_bubble("早上好呀～新的一天元气满满！", now)
             _log.info("[主动] 早安")
         if _NIGHT_HOURS[0] <= d.hour < _NIGHT_HOURS[1] \
                 and self._greeted["night"] != today:
             self._greeted["night"] = today
+            self._persist()
             self._emit_bubble("夜深了，早点休息哦～", now)
             _log.info("[主动] 晚安")
 
@@ -546,6 +633,7 @@ class ProactiveScheduler:
         md = d.strftime("%m-%d")
         if md in self._festivals and self._festivaled != today:
             self._festivaled = today
+            self._persist()
             self._emit_bubble(f"{self._festivals[md]}快乐！🎉", now)
             _log.info("[主动] 节日: %s", self._festivals[md])
 

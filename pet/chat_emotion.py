@@ -134,6 +134,13 @@ class ConversationEmotionStore:
             except OSError:
                 pass
         os.replace(tmp, self.path)
+        # 批次B/P2-11（REVIEW-2026-09-05）：消息清空（或禁用后清残档）时
+        # .bak 仍留旧文本——空档同步移除 .bak，与"隐私最小化档案"承诺一致。
+        if not self.messages:
+            try:
+                os.remove(self.path + ".bak")
+            except OSError:
+                pass
 
     def add_user_message(self, text: str, at: float | None = None) -> None:
         text = (text or "").strip()
@@ -255,17 +262,28 @@ class ChatEmotionEngine:
         cut = self.threshold if threshold is None else float(threshold)
         messages = list(messages)
         if self.session is not None:
-            text = "\n".join(str(x.get("text", "")) for x in messages[-3:]).strip()
-            if not text: return EmotionResult(fallback, 0., True, self.version)
-            encoded = self.tokenizer.encode_batch([text])
+            # 批次B/P2-8（REVIEW-2026-09-05）：逐句推理、概率平均——encoder
+            # 训练分布是单句（build_chat_emotion_v2_data 每 row 一个 text），
+            # 旧版把最近 3 句 "\n".join 成单串喂入，tokenize 后空白折叠 =
+            # 模型从未见过的分布外输入，每日定时路径（48h 档取尾 3 句）恒
+            # 跑偏。单句（即时路径）行为不变。
+            texts = [str(x.get("text", "")).strip() for x in messages[-3:]]
+            texts = [t for t in texts if t]
+            if not texts:
+                return EmotionResult(fallback, 0., True, self.version)
+            encoded = self.tokenizer.encode_batch(texts)
             ids = np.asarray([x.ids for x in encoded], dtype=np.int64)
             mask = np.asarray([x.attention_mask for x in encoded], dtype=np.int64)
             types = np.asarray([x.type_ids for x in encoded], dtype=np.int64)
             emb = self.session.run(["embedding"], {"input_ids": ids, "attention_mask": mask,
                                                      "token_type_ids": types})[0]
-            weight, bias, _ = self.classifier; logits = emb @ weight + bias
-            logits -= logits.max(); probs = np.exp(logits); probs /= probs.sum()
-            idx = int(np.argmax(probs)); confidence = float(probs[0, idx])
+            weight, bias, _ = self.classifier
+            logits = emb @ weight + bias                     # (n, 5)
+            logits -= logits.max(axis=1, keepdims=True)
+            probs = np.exp(logits)
+            probs /= probs.sum(axis=1, keepdims=True)
+            probs = probs.mean(axis=0)                        # 逐句概率平均
+            idx = int(np.argmax(probs)); confidence = float(probs[idx])
             if confidence < cut:
                 return EmotionResult(fallback, confidence, True, self.version)
             return EmotionResult(LABELS[idx], confidence, False, self.version)

@@ -341,6 +341,35 @@ def main() -> int:
         fake._mem_engine.deleteLater()
     QTest.qWait(200)
 
+    # ---- 批次B/P2-1（REVIEW-2026-09-05）：坏字节编码不崩 load ----
+    _d1 = tempfile.mkdtemp(prefix="pet_p21_")
+    _bad_cfg = os.path.join(_d1, "config.json")
+    with open(_bad_cfg, "wb") as f:
+        f.write(b'{"log_level": "\xff\xfe\xfa"}')
+    from pet.config import load_config as _lc
+    _cfg = _lc(_bad_cfg)
+    check("P2-1a 坏字节 config.json 回退默认不崩",
+          isinstance(_cfg, dict) and "behavior" in _cfg)
+    _bad_mem = os.path.join(_d1, "memory.json")
+    with open(_bad_mem, "wb") as f:
+        f.write(b'{"memories": [{"fact": "\xff\xfe"}]}')
+    _ms = MemoryStore.load(_bad_mem)
+    check("P2-1b 坏字节 memory.json 降级不崩", isinstance(_ms, MemoryStore))
+    _good_bak = os.path.join(_d1, "memory2.json.bak")
+    with open(_good_bak, "w", encoding="utf-8") as f:
+        f.write('{"memories": [{"id": "m_1", "fact": "好档", "importance": 0.5}]}')
+    _ms2 = MemoryStore.load(os.path.join(_d1, "memory2.json"))
+    check("P2-1c 坏字节主档走 .bak 兜底",
+          len(_ms2._mem) == 1 and _ms2._mem[0]["fact"] == "好档")
+    _bad_ps = os.path.join(_d1, "pet_state.json")
+    with open(_bad_ps, "wb") as f:
+        f.write(b'{"version": 4, "state": "\xff"}')
+    from pet.pet_state import PetStateStore as _PSS
+    check("P2-1d 坏字节 pet_state.json 回退默认不崩",
+          _PSS.load(_bad_ps) is not None)
+    import shutil as _sh
+    _sh.rmtree(_d1, ignore_errors=True)
+
     for suffix in ("", ".bak", ".tmp"):
         try:
             os.remove(tmp + suffix)

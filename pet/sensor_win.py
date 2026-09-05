@@ -194,6 +194,8 @@ _kernel32.CloseHandle.restype = wintypes.BOOL
 
 _GWL_STYLE = -16
 _GWL_EXSTYLE = -20
+_WS_CAPTION = 0x00C00000
+_WS_THICKFRAME = 0x00040000
 _WS_EX_TOOLWINDOW = 0x00000080
 _WS_EX_NOACTIVATE = 0x08000000
 _DWMWA_CLOAKED = 14
@@ -473,6 +475,16 @@ def foreground_fullscreen() -> tuple[bool, str]:
         return (False, "")
     if _window_class(hwnd) in _DESKTOP_CLASSES:
         return (False, "")
+    # 批次B/P2-3（REVIEW-2026-09-05）：最大化窗口误判全屏——自动隐藏任务
+    # 栏下工作区=整屏，任意最大化前台窗口的矩形（Win32 最大化带 ±8px 隐形
+    # 边框缓冲）即覆盖整屏 → 宠物被无限期隐藏。带标题栏/厚边框样式的一律
+    # 不是无边框全屏（游戏/放映/F11 全屏无这两个样式，照常判定）。
+    # cloaked 前台窗（UWP 挂起/虚拟桌面壳）同样排除，与枚举口径一致。
+    style = _user32.GetWindowLongW(hwnd, _GWL_STYLE)
+    if style & (_WS_CAPTION | _WS_THICKFRAME):
+        return (False, "")
+    if _is_cloaked(hwnd):
+        return (False, "")
     rc = _RECT()
     if not _user32.GetWindowRect(hwnd, ctypes.byref(rc)):
         return (False, "")
@@ -535,6 +547,27 @@ def work_area() -> dict:
     }
 
 
+def screen_rects() -> list[dict]:
+    """逐屏 availableGeometry（Qt top-left 原点，已排除任务栏）。
+
+    批次B/P2-7（REVIEW-2026-09-05）：bounding-box 工作区在不等高/纵向错位
+    多屏下含无屏死区——FSM 游走目标/坠落屏底按屏取几何（behavior 端消费），
+    双端同实现保证 Sensors.screen_rects 同格式。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    out = []
+    for s in QGuiApplication.screens():
+        g = s.availableGeometry()
+        out.append({
+            "x": int(g.x()),
+            "y": int(g.y()),
+            "width": int(g.width()),
+            "height": int(g.height()),
+        })
+    return out
+
+
 def window_alive(ref: dict) -> bool:
     """窗口实时存活（未关闭/未最小化），O(1)。
 
@@ -572,4 +605,5 @@ def build_sensors() -> Sensors:
         solid_at=solid_at,
         alive_at=window_alive,
         rect_at=window_rect,
+        screen_rects=screen_rects(),
     )

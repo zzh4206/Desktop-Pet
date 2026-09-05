@@ -121,7 +121,11 @@ class MemoryStore:
                         store._mem.append(m)
                     _log.info("记忆载入 %d 条（%s）", len(store._mem), p)
                     return store
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):
+                # 批次B/P2-1（REVIEW-2026-09-05）：补 ValueError——坏字节编码
+                # 的记忆档抛 UnicodeDecodeError（ValueError 子类，非
+                # JSONDecodeError），旧版逃出 except 连 .bak 兜底都被跳过
+                # （_setup_chat 兜底接住但聊天永久禁用且不自愈）
                 continue
         _log.info("无记忆档（%s），从空开始", path)
         return store

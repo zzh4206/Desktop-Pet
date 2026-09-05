@@ -39,6 +39,18 @@ def map_label(raw: str) -> str | None:
     return None
 
 
+def _utt_id_key(row: dict):
+    """批次B/P2-9（REVIEW-2026-09-05）：Utterance_ID 按数值排序——旧版
+    字典序把 "1","10","11","2" 排成 1,10,11,2，≥10 句对话的上下文窗口
+    （rows[i-4:i+1]）含乱序台词，v1 训练上下文失真。非数字 id 退回
+    字典序（元组首元素防 mixed-type 比较）。"""
+    v = (row.get("Utterance_ID") or "").strip()
+    try:
+        return (0, int(v), "")
+    except ValueError:
+        return (1, 0, v)
+
+
 def read_cped(root: Path) -> dict[str, list[dict]]:
     by_label: dict[str, list[dict]] = defaultdict(list)
     for split in ("train", "valid", "test"):
@@ -46,7 +58,7 @@ def read_cped(root: Path) -> dict[str, list[dict]]:
             dialogs: dict[str, list[dict]] = defaultdict(list)
             for row in csv.DictReader(f): dialogs[row["Dialogue_ID"]].append(row)
         for rows in dialogs.values():
-            rows.sort(key=lambda r: r["Utterance_ID"])
+            rows.sort(key=_utt_id_key)
             for i, row in enumerate(rows):
                 label = map_label(row.get("Emotion", ""))
                 text = (row.get("Utterance") or "").strip()

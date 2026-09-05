@@ -263,6 +263,47 @@ def main() -> int:
           len(bubbles27) == 1 and s27._next_wake_at is not None)
     s27.shutdown()
 
+    # ---- 批次B/P2-6（REVIEW-2026-09-05）：重启状态持久化 ----
+    import os as _os
+    import tempfile as _tmpmod
+
+    _pdir = _tmpmod.mkdtemp(prefix="pet_p26_")
+    _ppath = _os.path.join(_pdir, "proactive_state.json")
+    clock_p = FakeClock("2026-08-17 10:00")
+    sp28 = ProactiveScheduler(
+        store=PetStateStore(PetState.default()), bubble_fn=lambda t: None,
+        idle_fn=lambda: 0.0, cfg={}, now_fn=clock_p, state_path=_ppath)
+    sp28._greeted["morning"] = datetime.fromisoformat("2026-08-17").date()
+    sp28.follow_up("饭点到了～", clock_p() + 1800)
+    sp28.schedule_wake(45, {"test": True})
+    _wk = sp28._next_wake_at
+    sp28.shutdown()
+
+    # 重启：新实例从档案恢复（问候/回访/唤醒链不再重排/丢失）
+    sp28b = ProactiveScheduler(
+        store=PetStateStore(PetState.default()), bubble_fn=lambda t: None,
+        idle_fn=lambda: 0.0, cfg={}, now_fn=clock_p, state_path=_ppath)
+    check("P2-6a follow-up 跨重启恢复",
+          any(m == "饭点到了～" and abs(w - (clock_p() + 1800)) < 1
+              for w, m in sp28b._followups))
+    check("P2-6b 唤醒链跨重启保留（不重排 boot 唤醒）",
+          sp28b._next_wake_at is not None
+          and abs(sp28b._next_wake_at - _wk) < 1)
+    check("P2-6c 已问候标记跨重启保留",
+          sp28b._greeted["morning"]
+          == datetime.fromisoformat("2026-08-17").date())
+    sp28b.shutdown()
+
+    clock_p.advance(120)  # 2h 后再重启：过期 follow-up 不复活
+    sp28c = ProactiveScheduler(
+        store=PetStateStore(PetState.default()), bubble_fn=lambda t: None,
+        idle_fn=lambda: 0.0, cfg={}, now_fn=clock_p, state_path=_ppath)
+    check("P2-6d 过期 follow-up 不复活",
+          all(w > clock_p() for w, _m in sp28c._followups))
+    sp28c.shutdown()
+    import shutil as _sh
+    _sh.rmtree(_pdir, ignore_errors=True)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

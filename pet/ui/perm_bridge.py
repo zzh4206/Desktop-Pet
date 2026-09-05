@@ -149,15 +149,25 @@ class PermBridge(QObject):
             return (False, "状态查询失败")
 
     def _check_clipboard(self):
-        # M4 修：只读探测（旧版写 "perm-check" 覆盖用户剪贴板数据）
-        from pet.tools_win import ClipboardHandler
-        from pet.tools_schema import ToolContext
+        # M4 修：不写覆盖用户剪贴板数据。
+        # 批次B/P2-2（REVIEW-2026-09-05）：也不读——旧版经 ClipboardHandler
+        # 真跑 Get-Clipboard（工具层同操作是 dangerous=True"剪贴板常含密码
+        # /token"，权限页却每次唤出免确认读全内容即弃）。改无内容探测：
+        # GetClipboardSequenceNumber（只读序号计数，不打开剪贴板）+
+        # OpenClipboard/CloseClipboard 开合探测；序号>0 或能开合即通道健康。
+        import ctypes
 
-        ctx = ToolContext(pet_state=None, user_name="u", config={},
-                          window_info=None)
-        r = ClipboardHandler().execute({"action": "get"}, ctx)
-        # get 成功即读写通道健康（不修改内容）
-        return (r.success, "" if r.success else r.message[:60])
+        try:
+            user32 = ctypes.windll.user32
+            seq = user32.GetClipboardSequenceNumber()
+            opened = bool(user32.OpenClipboard(None))
+            if opened:
+                user32.CloseClipboard()
+            if opened or seq > 0:
+                return (True, "")
+            return (False, f"剪贴板探测失败（seq={seq} 且无法打开）")
+        except Exception as e:
+            return (False, str(e)[:60])
 
     def _check_volume(self):
         from pet.tools_win import VolumeHandler

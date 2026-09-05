@@ -163,6 +163,28 @@ def _work_area_qt() -> dict:
     }
 
 
+def screen_rects() -> list[dict]:
+    """逐屏 availableGeometry（Qt top-left 原点，已排除菜单栏/Dock）。
+
+    批次B/P2-7（REVIEW-2026-09-05）：与 sensor_win.screen_rects 同实现——
+    bounding-box 工作区在不等高/纵向错位多屏下含无屏死区，FSM 游走目标/
+    坠落屏底按屏取几何（behavior 端消费）。Qt availableGeometry 已按屏
+    排除菜单栏/Dock，无需 NS 翻转。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    out = []
+    for s in QGuiApplication.screens():
+        g = s.availableGeometry()
+        out.append({
+            "x": int(g.x()),
+            "y": int(g.y()),
+            "width": int(g.width()),
+            "height": int(g.height()),
+        })
+    return out
+
+
 def _screen_full_frames() -> list[tuple[int, int, int, int]]:
     """各屏**全 frame**（含菜单栏区域，Y=0；用于全屏判定——全屏窗覆盖全 frame
     而非 visibleFrame）。NS→Qt 翻转。无 pyobjc 时用 QScreen.geometry 兜底。"""
@@ -442,4 +464,5 @@ def build_sensors() -> Sensors:
         solid_at=solid_at,
         alive_at=alive_at,
         rect_at=rect_at,
+        screen_rects=screen_rects(),
     )

@@ -270,7 +270,7 @@ class PetApp:
         proactive_cfg = self.cfg.get("proactive", {})
         self._proactive = ProactiveScheduler(
             store=self.store,
-            bubble_fn=lambda t: self.bubble.show(t, anchor=self._pet_anchor()),
+            bubble_fn=self._auto_bubble,
             idle_fn=lambda: self.sensors.idle_time,
             # M5：独立决策客户端（见 _setup_chat 注释），不与聊天共享 _resp
             client=getattr(self, "_proactive_client", None),
@@ -288,6 +288,9 @@ class PetApp:
             # 批次C（REVIEW-2026-08-28 H2）：吃鼠标第五门禁——前台全屏
             # （演示/放映）不抑制；到达点复查同函数
             fullscreen_fn=self.adapter.is_fullscreen_active,
+            # 批次B/P2-6（REVIEW-2026-09-05）：问候/节日/follow-up/唤醒链
+            # 持久化——旧版全内存，重启重发早晚安/节日、回访静默丢失
+            state_path=os.path.join(paths["data_dir"], "proactive_state.json"),
         )
         # v0.7 托盘「强制吐出」→ EatMouseSession.force_spit（停 CGEventTap + 回 idle）
         self.tray.set_spit_callback(self._proactive.force_spit)
@@ -366,6 +369,21 @@ class PetApp:
         """气泡锚点：宠物当前 bottom_center + 窗口高。"""
         x, y = self.fsm.pos
         return (x, y, self.window.height())
+
+    def _auto_bubble(self, text: str, kind=BubbleType.INFO,
+                     duration_ms: int = 5000, anchor: tuple | None = None) -> None:
+        """自动路径气泡统一入口（批次B/P2-4，REVIEW-2026-09-05）——全屏
+        期间丢弃并留痕。H2 只挡了进入全屏瞬间的 hide（window+bubble），
+        此后久坐提醒/早晚安/聊天情绪等新气泡 bubble.show 照常 show+raise，
+        盖在演示/放映上（气泡是独立 Tool|StaysOnTop 窗，不随 window.hide
+        收）。用户主动路径（托盘/右键/设置弹窗反馈）不走此入口不受限；
+        退出全屏后下一轮周期照常发。"""
+        if getattr(self, "_fullscreen", False):
+            self.logger.info("全屏中丢弃气泡: %s", (text or "")[:40])
+            return
+        self.bubble.show(text, kind=kind, duration_ms=duration_ms,
+                         anchor=anchor if anchor is not None
+                         else self._pet_anchor())
 
     # ---- v0.4 聊天 ----
     def _setup_chat(self) -> None:
@@ -666,7 +684,7 @@ class PetApp:
         if delta and confidence >= float(self._chat_emotion_cfg.get("confidence_threshold", .55)):
             self.store.update(mood=delta)
         import random
-        self.bubble.show(random.choice(_CHAT_EMOTION_BUBBLES[label]), anchor=self._pet_anchor())
+        self._auto_bubble(random.choice(_CHAT_EMOTION_BUBBLES[label]))
 
     def _maybe_followup(self, text: str) -> None:
         """v0.6：聊天消息启发式排 follow-up（30min 后回访气泡）。"""
@@ -793,7 +811,8 @@ class PetApp:
     def _show_chat_emotion_settings(self) -> None:
         """跨平台 Qt 小设置窗；避免给共享情绪模块引入任何平台 UI 依赖。"""
         from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
-                                       QFormLayout, QLineEdit, QMessageBox)
+                                       QFormLayout, QLabel, QLineEdit,
+                                       QMessageBox)
         dialog = QDialog()
         dialog.setWindowTitle("聊天情绪设置")
         layout = QFormLayout(dialog)
@@ -801,7 +820,11 @@ class PetApp:
         enabled.setChecked(bool(self._chat_emotion_cfg.get("enabled", True)))
         schedule = QLineEdit(", ".join(self._chat_emotion_cfg.get("schedule", ["22:00"])))
         schedule.setPlaceholderText("例如：22:00")
+        note = QLabel("消息文本仅在本机保留最近 48 小时；关闭开关即停止记录，"
+                      "档案可随时删除。")
+        note.setWordWrap(True)
         layout.addRow(enabled); layout.addRow("每天推理时段：", schedule)
+        layout.addRow(note)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         layout.addRow(buttons); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
         if dialog.exec() != QDialog.Accepted:
@@ -823,7 +846,7 @@ class PetApp:
                 json.dump(raw, f, ensure_ascii=False, indent=2); f.flush(); os.fsync(f.fileno())
             os.replace(tmp, path)
             self._chat_emotion_cfg = new_cfg
-            self.bubble.show("聊天情绪设置已保存，重启后完全生效～", anchor=self._pet_anchor())
+            self.bubble.show("聊天情绪设置已保存～", anchor=self._pet_anchor())
         except Exception:
             self.logger.warning("聊天情绪设置保存失败", exc_info=True)
             QMessageBox.warning(dialog, "聊天情绪设置", "保存失败，请检查配置文件权限。")
@@ -898,11 +921,7 @@ class PetApp:
 
     def _on_chat_offline(self) -> None:
         """断网/无 key：气泡提示，宠物仍 WANDER/交互/长大（T8）。"""
-        self.bubble.show(
-            "当前离线，聊天暂不可用～",
-            kind=BubbleType.WARNING,
-            anchor=self._pet_anchor(),
-        )
+        self._auto_bubble("当前离线，聊天暂不可用～", kind=BubbleType.WARNING)
 
     def _on_pet_moved(self, x: float, y: float, h: int) -> None:
         self.bubble.follow((x, y, h))

@@ -63,6 +63,11 @@ class Sensors:
     # win 端 GetWindowRect 新鲜读——宠物站窗顶时每 tick 刷新，窗口上移/下移
     # 即时骑乘跟随、移走即坠落（消除 2s 枚举缓存不敏感）。mac 不填 → 几何兜底。
     rect_at: object = None
+    # 批次B/P2-7（REVIEW-2026-09-05）：逐屏 availableGeometry（Qt top-left
+    # 原点，双端 sensor_*.screen_rects 同格式）。FSM 游走目标/屏底按屏取
+    # 几何——bounding-box 工作区在不等高/纵向错位多屏下含无屏死区。空列表
+    # =未提供（测试假件/旧 Sensors 构造）退回 bounding-box 旧行为。
+    screen_rects: list = field(default_factory=list)
 
 
 _IDLE = "idle"
@@ -134,6 +139,7 @@ class BehaviorFSM:
         self._stand_win: dict | None = None  # 当前脚下的支撑窗（骑乘跟随用）
         self._bounce_count = 0            # 落地反弹计数（重置于新抛掷/静止）
         self._solid_at = None             # 图层双检查（Sensors.solid_at 注入）
+        self._screen_rects: list = []     # 逐屏 availableGeometry（P2-7）
 
         # v0.2 数值调制因子（on_state_change 更新；默认 1.0 即不调制）
         self._hunger_factor = 1.0   # 饱食低 → 缩短 idle（觅食感），>1 更频繁走动
@@ -167,7 +173,14 @@ class BehaviorFSM:
     # ---- 几何 / 表面 ----
 
     def _bottom(self) -> float:
-        return self._work_area["y"] + self._work_area["height"]
+        # 批次B/P2-7（REVIEW-2026-09-05）：屏底取当前 x 所在屏的屏底——
+        # bounding-box 底在不等高多屏下低于所在屏（高处屏坠落/行走钳制会
+        # 穿到无屏死区）。x 无屏命中（屏间隙/未提供）退合集底。
+        for r in self._screen_rects:
+            if r["x"] <= self._pos[0] < r["x"] + r["width"]:
+                return r["y"] + r["height"]
+        wa = self._work_area
+        return wa["y"] + wa["height"]
 
     def _left(self) -> float:
         return self._work_area["x"]
@@ -250,10 +263,30 @@ class BehaviorFSM:
     # ---- WANDER ----
 
     def _new_target(self) -> tuple[float, float]:
-        wa = self._work_area
-        x = random.uniform(
-            wa["x"] + self._margin, wa["x"] + wa["width"] - self._margin
-        )
+        # 批次B/P2-7（REVIEW-2026-09-05）：游走目标按屏采样——旧版在合集
+        # bounding-box 里随机取 x，不等高/纵向错位多屏可选中无屏死区，宠物
+        # 走进真空区整轮隐形（可见性看门狗只查 isVisible 救不了）。宽度加权
+        # 随机选屏，再在该屏 availableGeometry 内取 x；无 screen_rects（测试
+        # 假件）退回旧行为。
+        rects = self._screen_rects
+        if rects:
+            total = sum(r["width"] for r in rects)
+            pick = random.uniform(0.0, total)
+            acc = 0.0
+            rect = rects[-1]
+            for r in rects:
+                acc += r["width"]
+                if pick <= acc:
+                    rect = r
+                    break
+            lo = rect["x"] + self._margin
+            hi = max(lo, rect["x"] + rect["width"] - self._margin)
+            x = random.uniform(lo, hi)
+        else:
+            wa = self._work_area
+            x = random.uniform(
+                wa["x"] + self._margin, wa["x"] + wa["width"] - self._margin
+            )
         return (x, self._surface_y(x))
 
     def _new_idle(self) -> float:
@@ -484,6 +517,8 @@ class BehaviorFSM:
         # 跟随工作区变化（Dock 显隐 / 多屏）；窗口列表每 tick 换引用零成本
         if sensors.work_area:
             self._work_area = sensors.work_area
+        rects = getattr(sensors, "screen_rects", None)
+        self._screen_rects = [dict(r) for r in rects] if rects else []
         self._windows = sensors.windows or []
         self._last_mouse_pos = sensors.mouse_pos or self._pos
         self._solid_at = sensors.solid_at

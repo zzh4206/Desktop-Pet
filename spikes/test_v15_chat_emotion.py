@@ -201,4 +201,47 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         ce.obvious_emotion = _orig_obv
 
+# ---- 批次B/P2-8（REVIEW-2026-09-05）：v2 定时路径逐句推理（训练分布=单句） ----
+_eng = ChatEmotionEngine.__new__(ChatEmotionEngine)
+_eng.version = 2
+_eng.threshold = 0.55
+
+
+class _Tok:
+    def __init__(self):
+        self.seen = None
+
+    def encode_batch(self, texts):
+        self.seen = list(texts)
+
+        class _E:
+            def __init__(self, t):
+                # 定长编码：真实 tokenizer enable_padding 后批内等长，
+                # 不定长会让推理侧 np.asarray 拼出 inhomogeneous 数组
+                self.ids = [1] * 8
+                self.attention_mask = [1] * 8
+                self.type_ids = [0] * 8
+
+        return [_E(t) for t in texts]
+
+
+class _Sess:
+    def run(self, _names, feed):
+        return [np.zeros((len(feed["input_ids"]), 8), dtype=np.float32)]
+
+
+_eng.tokenizer = _Tok()
+_eng.session = _Sess()
+_eng.classifier = (np.zeros((8, 5), dtype=np.float32),
+                   np.zeros(5, dtype=np.float32), 32)
+
+_msgs3 = [{"text": "今天好开心"}, {"text": "有点累"}, {"text": "肚子饿了"}]
+_r3 = _eng.evaluate(_msgs3, "22:00")
+check("P2-8a v2 定时路径逐句喂入（不拼接单串）",
+      _eng.tokenizer.seen == ["今天好开心", "有点累", "肚子饿了"])
+check("P2-8b 聚合后阈值/兜底语义不变",
+      _r3.used_fallback is True and _r3.label == "sleepy")
+_r1 = _eng.evaluate([{"text": "单句"}])
+check("P2-8c v2 即时路径单句喂入不变", _eng.tokenizer.seen == ["单句"])
+
 print("聊天情绪检查完成")

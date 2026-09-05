@@ -136,6 +136,7 @@ class ToolRegistry:
         self._schemas: dict[str, ToolSchema] = {}
         self._confirm_fn = confirm_fn
         self._confirm_caller = None  # 主线程 QObject helper（惰性创建）
+        self._confirm_lock = threading.Lock()  # P2-10：懒初始化并发防护
 
     def register(self, schema: ToolSchema, handler: ToolHandler) -> None:
         if schema.name in self._schemas:
@@ -176,9 +177,14 @@ class ToolRegistry:
             if QThread.currentThread() is app.thread():
                 return self._confirm_fn(title, command, risk)  # 已在主线程
             # 子线程 → 派到主线程
+            # 批次B/P2-10（REVIEW-2026-09-05）：懒初始化加锁——旧版
+            # check-then-act 无锁，两 worker 并发 dispatch 可双构造，泄漏
+            # dangling QObject 到主线程
             if self._confirm_caller is None:
-                self._confirm_caller = _ConfirmCaller(self._confirm_fn)
-                self._confirm_caller.moveToThread(app.thread())
+                with self._confirm_lock:
+                    if self._confirm_caller is None:
+                        self._confirm_caller = _ConfirmCaller(self._confirm_fn)
+                        self._confirm_caller.moveToThread(app.thread())
             return self._confirm_caller.call_blocking(title, command, risk)
         except Exception as exc:
             log.warning("confirm 跨线程派发失败，fail-closed 拒绝: %s", exc)
@@ -262,16 +268,36 @@ class _ConfirmCaller:
     def moveToThread(self, thread) -> None:
         self._inner.moveToThread(thread)
 
-    def call_blocking(self, title: str, command: str, risk: str) -> bool:
-        from PySide6.QtCore import QEventLoop, Qt
+    def call_blocking(self, title: str, command: str, risk: str,
+                      timeout_ms: int = 60_000) -> bool:
+        """子线程阻塞等主线程 confirm 结果。
+
+        批次B/P2-10（REVIEW-2026-09-05）：加超时——旧版无超时，主线程被
+        模态框/卡死占住时 ChatWorker 在此永久阻塞（shutdown 只能强杀线程、
+        _dying 引用悬挂）。超时视为拒绝（fail-closed）。计时器建在本线程，
+        由下方 loop.exec 驱动；done 先到则后续超时回调空转。
+        """
+        from PySide6.QtCore import QEventLoop, QThread, QTimer
 
         loop = QEventLoop()
-        self._inner.done.connect(loop.quit)
+        state = {"settled": False}
+        result = {"ok": False}  # 按次记录——旧实现回读 _inner.result 会拿到
+        # 上一轮确认的陈旧值（上轮通过 + 本轮超时 = 陈旧 True 放行，fail-open）
+
+        def _on_done(ok: bool) -> None:
+            result["ok"] = bool(ok)
+            state["settled"] = True
+            loop.quit()
+
+        def _on_timeout() -> None:
+            if not state["settled"]:
+                loop.quit()
+
+        self._inner.done.connect(_on_done)
+        if timeout_ms and timeout_ms > 0:
+            QTimer.singleShot(timeout_ms, _on_timeout)
         # BlockingQueuedConnection：等主线程槽执行完
         self._inner.requested.emit(title, command, risk)
-        if self._inner.thread() is not __import__("PySide6.QtCore", fromlist=["QThread"]).QThread.currentThread():
-            loop.exec()  # 子线程阻塞等主线程 done
-        else:
-            # 信号同步派发（同线程直连）
-            pass
-        return self._inner.result
+        if self._inner.thread() is not QThread.currentThread():
+            loop.exec()  # 子线程阻塞等主线程 done（或超时）
+        return result["ok"]

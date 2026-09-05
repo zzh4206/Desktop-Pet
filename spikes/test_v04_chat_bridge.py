@@ -251,6 +251,32 @@ def main() -> int:
     check("M4 空文本 send 返回 False", b4.send("   ") is False)
     b4._worker = None
 
+    # ---- 批次B/P2-10（REVIEW-2026-09-05）：confirm 阻塞等待有超时兜底 ----
+    import time as _time
+    from pet.tools_schema import _ConfirmCaller
+    _app = QApplication.instance()
+    _caller = _ConfirmCaller(lambda t, c, r: True)  # 若主线程能处理即通过
+    _caller.moveToThread(_app.thread())
+    # 同线程（caller 已在主线程）→ 信号直连，行为不变
+    _r_same = _caller.call_blocking("t2", "c2", "r2", timeout_ms=1000)
+    check("P2-10a 同线程 confirm 直连路径不变", _r_same is True)
+
+    class _WaitWorker(QThread):
+        def __init__(self):
+            super().__init__(_app)
+            self.result = None
+
+        def run(self):
+            self.result = _caller.call_blocking("t", "c", "r", timeout_ms=150)
+
+    _w = _WaitWorker()
+    _w.finished.connect(_w.deleteLater)
+    _w.start()
+    _time.sleep(0.4)  # 主线程忙睡——queued 槽不执行，只能等 worker 侧超时
+    _w.wait(2000)
+    check("P2-10b confirm 超时 fail-closed（主线程被占住时不再永久阻塞）",
+          _w.result is False)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 
