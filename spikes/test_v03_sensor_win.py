@@ -97,6 +97,40 @@ def main() -> int:
           bool(_srs) and all({"x", "y", "width", "height"} <= set(r)
                              for r in _srs))
 
+    # ---- 批次D/E1+E5（REVIEW-2026-09-05）：真实探针层冒烟 ----
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtTest import QTest as _QTest
+    from PySide6.QtWidgets import QLabel as _QLabel
+
+    _probe = _QLabel("probe")
+    _probe.setWindowFlags(_Qt.Tool | _Qt.FramelessWindowHint
+                          | _Qt.WindowStaysOnTopHint)
+    _probe.resize(80, 60)
+    _probe.move(10, 10)
+    _probe.show()
+    _probe.raise_()
+    _QTest.qWait(300)
+    _ref = {"hwnd": int(_probe.winId()), "x": _probe.x(), "y": _probe.y(),
+            "width": _probe.width(), "height": _probe.height()}
+    check("E1a window_alive 实窗 True", sw.window_alive(_ref) is True)
+    check("E1b window_alive 死句柄 False",
+          sw.window_alive({"hwnd": 0x1DEADBEEF}) is False)
+    _r = sw.window_rect(_ref)
+    check("E1c window_rect 实时矩形有效",
+          isinstance(_r, dict) and _r["width"] > 0 and _r["height"] > 0)
+    # Z 序下探函数真实执行（命中受桌面遮挡状态影响，只验可调用不炸）
+    _cx, _cy = _probe.x() + 40, _probe.y() + 30
+    _hit = sw.solid_at(_cx, _cy, _ref)
+    check("E1d solid_at 实窗探针可调用且返 bool", isinstance(_hit, bool))
+    check("E1e solid_at 命中自身实窗（置顶探针窗）", _hit is True)
+    _probe.close()
+    _probe.deleteLater()
+
+    # ---- E5：idle 秒数 32bit 回绕安全域 ----
+    _idle = sw.get_idle_seconds()
+    check("E5 get_idle_seconds 安全域（0 ≤ idle < 2^32/1000）",
+          0.0 <= _idle < 4294967.295)
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

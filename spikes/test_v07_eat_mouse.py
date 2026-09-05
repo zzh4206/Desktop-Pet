@@ -86,8 +86,10 @@ def section_structural() -> None:
 
 def _make(fake_lock, idle_s=999.0, cfg=None, dnd_fn=None,
           active_content_fn=None, accessibility_fn=None,
-          fsm_events=None, prompt=None, fullscreen_fn=None):
-    """建 ProactiveScheduler + 注入 fake mouse_lock / 各门禁 fn。"""
+          fsm_events=None, prompt=None, fullscreen_fn=None, idle_fn=None):
+    """建 ProactiveScheduler + 注入 fake mouse_lock / 各门禁 fn。
+
+    批次D/E3：idle_fn 覆写（异常注入用；缺省仍 lambda: idle_s）。"""
     from datetime import datetime
     from pet.proactive import ProactiveScheduler
     from pet.pet_state import PetState, PetStateStore
@@ -103,7 +105,7 @@ def _make(fake_lock, idle_s=999.0, cfg=None, dnd_fn=None,
     s = ProactiveScheduler(
         store=PetStateStore(PetState.default()),
         bubble_fn=bubbles.append,
-        idle_fn=lambda: idle_s,
+        idle_fn=idle_fn if idle_fn is not None else (lambda: idle_s),
         cfg=cfg or {},
         now_fn=FakeClock(),
         mouse_lock=fake_lock,
@@ -246,6 +248,56 @@ def section_gates() -> None:
     check("G7 force_spit 吐出（spits=1, active False）",
           lock.spits == 1 and not lock.active)
     check("G7 force_spit 发 eat_mouse_off", evs == ["eat_mouse", "eat_mouse_off"])
+
+    # ---- 批次D/E3（REVIEW-2026-09-05）：门禁检查器异常 fail-closed 分支 ----
+    def _boom():
+        raise RuntimeError("boom")
+
+    lock = FakeMouseLock()
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
+                 active_content_fn=_boom, accessibility_fn=lambda: True)
+    s.eat_mouse(10)
+    check("E3a active_content_fn 异常保守不吃", lock.starts == 0)
+
+    lock = FakeMouseLock()
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
+                 fullscreen_fn=_boom, accessibility_fn=lambda: True)
+    s.eat_mouse(10)
+    check("E3b fullscreen_fn 异常保守不吃", lock.starts == 0)
+
+    lock = FakeMouseLock()
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5,
+                                            "dnd": False}, dnd_fn=_boom,
+                 accessibility_fn=lambda: True)
+    s.eat_mouse(10)
+    check("E3c dnd_fn 异常按 DND 处理（不吃）", lock.starts == 0)
+
+    lock = FakeMouseLock()
+    s, _ = _make(lock, cfg={"idle_threshold_min": 5}, idle_fn=_boom,
+                 accessibility_fn=lambda: True)
+    s.eat_mouse(10)
+    check("E3d idle_fn 异常跳过本轮（不吃）", lock.starts == 0)
+
+    # E3e 到达复查 fullscreen_fn 异常 → 放弃抑制（fail-closed，对齐 L11）
+    # 门禁态正常过（发 approach），仅到达复查时抛异常
+    lock = FakeMouseLock()
+    evs = []
+    _fs_mode = {"v": "off"}   # off=正常 False / boom=抛异常 / on=True
+
+    def _fs():
+        if _fs_mode["v"] == "boom":
+            raise RuntimeError("boom")
+        return _fs_mode["v"] == "on"
+
+    s, _ = _make(lock, idle_s=30 * 60, cfg={"idle_threshold_min": 5},
+                 accessibility_fn=lambda: True, fsm_events=evs,
+                 fullscreen_fn=_fs)
+    s.eat_mouse(10)
+    _fs_mode["v"] = "boom"
+    s.eat_mouse_arrived()
+    check("E3e 到达复查异常放弃抑制（starts=0, off 收场）",
+          lock.starts == 0 and "eat_mouse_off" in evs
+          and s._eat_pending is None)
 
     # G8 EatMouseSession.on_dnd_active 返是否刚才在吃
     from pet.proactive import EatMouseSession

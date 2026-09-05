@@ -204,6 +204,42 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         ce.obvious_emotion = _orig_obv
 
+# ---- 批次D/E4（REVIEW-2026-09-05）：ConversationEmotionStore 损坏档/.bak/跨年 ----
+with tempfile.TemporaryDirectory() as _d4:
+    _p4 = os.path.join(_d4, "emo.json")
+    with open(_p4, "wb") as f:
+        f.write(b"\xff\xfe bad bytes")           # 双档均坏字节
+    with open(_p4 + ".bak", "wb") as f:
+        f.write(b"\xff\xfe bad bytes")
+    _st4 = ConversationEmotionStore(_p4, retention_hours=48)
+    check("E4a 双档均坏降级空档不崩", _st4.messages == [] and _st4.current is None)
+    _p5 = os.path.join(_d4, "none.json")
+    _st5 = ConversationEmotionStore(_p5, retention_hours=48)
+    _st5.add_user_message("hello")
+    _st5.add_user_message("world")  # 首存无旧档可备——第二次落盘才轮换出 .bak
+    check("E4b 落盘后 .bak 轮换生成", os.path.exists(_p5 + ".bak"))
+    _st5.clear_messages()
+    check("E4c 清空后 .bak 同步移除（P2-11）",
+          not os.path.exists(_p5 + ".bak") and not _st5.messages)
+    # 主档坏字节 + 好的 .bak → 从 .bak 恢复
+    _p6 = os.path.join(_d4, "mix.json")
+    _st6 = ConversationEmotionStore(_p6, retention_hours=48)
+    _st6.add_user_message("好档内容")
+    _st6.add_user_message("第二条")  # 第二次落盘才有 .bak 可兜底
+    with open(_p6, "wb") as f:
+        f.write(b"\xff\xfe corrupt")
+    _st7 = ConversationEmotionStore(_p6, retention_hours=48)
+    # .bak=覆写前一代（首存内容 1 条）——恢复出 save#1 状态
+    check("E4d 主档损坏走 .bak 兜底恢复",
+          len(_st7.messages) == 1 and _st7.messages[0]["text"] == "好档内容")
+    # 跨年 ran_slots 清理（保留当年）
+    _st8 = ConversationEmotionStore(_p4, retention_hours=48)
+    _st8.messages = []
+    _st8.ran_slots = {"2025-12-31": ["22:00"], "2026-01-01": ["22:00"]}
+    _st8.prune(time.time(), save=False)
+    check("E4e 跨年 ran_slots 清上一年",
+          "2025-12-31" not in _st8.ran_slots and "2026-01-01" in _st8.ran_slots)
+
 # ---- 批次B/P2-8（REVIEW-2026-09-05）：v2 定时路径逐句推理（训练分布=单句） ----
 _eng = ChatEmotionEngine.__new__(ChatEmotionEngine)
 _eng.version = 2

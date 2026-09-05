@@ -434,8 +434,19 @@ class ProactiveScheduler:
                         self._fsm_event_fn("eat_mouse_off")
                     return
             except Exception:
-                _log.warning("[吃鼠标] 到达复查 fullscreen_fn 异常，放行",
+                # 批次D/E3（REVIEW-2026-09-05）：fail-closed 对齐 L11——
+                # 旧版异常"放行（继续抑制）"与入口三处门禁语义相反；演示
+                # 中途异常吞掉演示者鼠标是事故级观感，保守放弃抑制
+                _log.warning("[吃鼠标] 到达复查 fullscreen_fn 异常，保守放弃抑制",
                              exc_info=True)
+                self._eat_pending = None
+                if self._fsm_event_fn is not None:
+                    try:
+                        self._fsm_event_fn("eat_mouse_off")
+                    except Exception:
+                        _log.warning("[吃鼠标] 到达复查退出事件派发异常",
+                                     exc_info=True)
+                return
         duration_s, _dl = self._eat_pending
         self._eat_pending = None
         sess = self._eat_session

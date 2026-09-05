@@ -304,6 +304,34 @@ def main() -> int:
     import shutil as _sh
     _sh.rmtree(_pdir, ignore_errors=True)
 
+    # ---- 批次D/E3（REVIEW-2026-09-05）：next_min 钳制与 worker 占用顺延 ----
+    s28, _ = make(FakeClock("2026-08-17 10:00"))
+    s28._client = JsonClient('{"message": "喝口水", "next_min": 99999}')
+    s28._fire_wake(s28._now())
+    _pump(400)
+    check("E3a next_min 越界钳到 360min",
+          s28._next_wake_at is not None
+          and abs(s28._next_wake_at - (s28._now() + 360 * 60)) < 1)
+    s28.shutdown()
+
+    s29, _ = make(FakeClock("2026-08-17 10:00"))
+    s29._client = JsonClient('{"message": "喝口水", "next_min": "abc"}')
+    s29._fire_wake(s29._now())
+    _pump(400)
+    check("E3b next_min 非数值退罐头（链仍排定不断）",
+          s29._next_wake_at is not None)
+    s29.shutdown()
+
+    s30, _ = make(FakeClock("2026-08-17 10:00"))
+    s30._client = JsonClient('{"message": "喝口水", "next_min": 30}')
+    s30._wake_worker = object()  # 伪装上一轮 worker 占用
+    s30._fire_wake(s30._now())
+    check("E3c worker 占用顺延 10min（链不断，不再静默丢弃）",
+          s30._next_wake_at is not None
+          and abs(s30._next_wake_at - (s30._now() + 600)) < 1)
+    s30._wake_worker = None
+    s30.shutdown()
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 
