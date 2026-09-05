@@ -190,18 +190,33 @@ class ToolRegistry:
             return ToolResult(False, f"未知工具: {name}")
         schema = self._schemas[name]
 
+        # 批次A/P1-4（REVIEW-2026-09-05）：非 dict 参数防御归一——llm 解析层
+        # 已归一，此处兜其他调用方（测试/未来路径），空参进 handler 由其校验。
+        if not isinstance(args, dict):
+            log.warning("工具 %s 收到非 dict 参数（%s），按空参处理",
+                        name, type(args).__name__)
+            args = {}
+
         # 参数黑名单校验（注入防护，递归扫 dict/list；L10：纯文本字段豁免）
-        bad = _scan_args_unsafe(args or {},
+        bad = _scan_args_unsafe(args,
                                 skip=frozenset(schema.text_fields))
         if bad is not None:
             log.warning("工具 %s 参数命中黑名单: %r", name, bad)
             return ToolResult(False, "参数包含不安全的路径或命令。")
 
         # 危险操作确认（v0.4 open_app 不危险，框架就位；批次A 补
-        # dangerous_when 按参数判定：open_app url 这类"部分参数危险"）
-        if schema.dangerous or (
-            schema.dangerous_when is not None and schema.dangerous_when(args or {})
-        ):
+        # dangerous_when 按参数判定：open_app url 这类"部分参数危险"）。
+        # 批次A/P1-4：dangerous_when 判定异常按危险处理（fail-closed）——
+        # 旧版谓词异常直接逃出 dispatch 致整轮聊天降级。
+        dangerous = schema.dangerous
+        if not dangerous and schema.dangerous_when is not None:
+            try:
+                dangerous = bool(schema.dangerous_when(args))
+            except Exception:
+                log.warning("工具 %s dangerous_when 判定异常，按危险处理"
+                            "（fail-closed）", name, exc_info=True)
+                dangerous = True
+        if dangerous:
             cmd_repr = f"{name}({args})"
             ok = self._confirm_on_main("危险操作确认", cmd_repr, "该操作不可撤销。")
             if not ok:

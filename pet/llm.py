@@ -316,6 +316,15 @@ class OpenAICompatibleClient(LLMClient):
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
+            # 批次A/P1-4（REVIEW-2026-09-05）：畸形模型输出可解析出非对象
+            # （str/list/数字）——旧版直传 dispatch，INFO 日志 `(args or {}).items()`
+            # 与 open_app 的 dangerous_when(a.get(...)) 双处 AttributeError 逃出
+            # dispatch 保护段 → 整轮聊天降级 FALLBACK（模型无从纠正）。归一空参
+            # 并留痕，让模型收到工具失败结果后自行改参数重试。
+            if not isinstance(args, dict):
+                log.warning("DS 工具 %s 参数非对象（%s），按空参处理",
+                            name, type(args).__name__)
+                args = {}
             if log.isEnabledFor(logging.INFO):
                 # 批次E/M8（REVIEW-2026-08-31 F5）：工具参数可含剪贴板文本/
                 # 记忆事实等隐私内容——日志只留截断形态（值 ≤24 字符）

@@ -217,6 +217,58 @@ def main() -> int:
     check("mac _APP_NAME 禁 '..'", MAC_APP.match("..") is None)
     check("mac _APP_NAME 接受 'Safari'", MAC_APP.match("Safari") is not None)
 
+    # ---- 批次A/P1-1+P1-2（REVIEW-2026-09-05）：尾点归一化绕过封堵 + ----
+    # ---- 交互 shell/系统工具黑名单扩充 ----
+    for _bad in ("cmd.", "cmd..", "cmd.exe.", "regedit..", "powershell.exe.",
+                 "wsl", "bash", "sh", "conhost", "python", "pythonw", "py",
+                 "wmic", "mmc", "certutil", "bitsadmin", "curl", "msiexec",
+                 "winget", "ssh", "ftp"):
+        _r = OpenAppHandler().execute({"app": _bad}, _octx)
+        check(f"P1 open_app 拒绝 {_bad!r}", _r.success is False
+              and "系统程序" in _r.message)
+    from pet.tools_win import _app_denylisted
+    check("P1 归一化命中 cmd.com 变体", _app_denylisted("cmd.com"))
+    check("P1 正常应用名不误伤",
+          not _app_denylisted("notepad") and not _app_denylisted("calc")
+          and not _app_denylisted("Code.exe")
+          and not _app_denylisted("Everything"))
+    # mac 端黑名单（静态断言集合内容；execute 真 subprocess 本机不可跑）
+    import pet.tools_mac as _tmac
+    check("P1 mac open_app 黑名单拦 Terminal/Script Editor/Automator",
+          all(n in _tmac._APP_DENYLIST
+              for n in ("terminal", "script editor", "automator")))
+    check("P1 mac open_app 不误伤 Safari/访达",
+          "safari" not in _tmac._APP_DENYLIST
+          and "finder" not in _tmac._APP_DENYLIST)
+
+    # ---- 批次A/P1-4：非 dict 工具参数不崩 dispatch / dangerous_when 异常 ----
+    reg7 = ToolRegistry()
+    # 真实 OpenAppHandler（空参走"需要 app 或 url 参数"错误路径，不会真启动）
+    reg7.register(WIN_SCHEMA, OpenAppHandler())
+    r14 = reg7.dispatch("open_app", "notepad", _octx)  # 旧版此步 AttributeError
+    check("P1 非 dict 参数归一空参（handler 报参数缺失而非崩）",
+          r14.success is False and "需要 app 或 url" in r14.message)
+    _boom_when = ToolSchema(name="when_boom", description="d", parameters={},
+                            dangerous_when=lambda a: 1 / 0)
+    reg7.register(_boom_when, StubHandler(ToolResult(True, "done")))
+    r15 = reg7.dispatch("when_boom", {}, _octx)
+    check("P1 dangerous_when 异常按危险处理（无 confirm_fn fail-closed）",
+          r15.success is False and "取消" in r15.message)
+    # llm 解析层同源修复：畸形 arguments（JSON 字符串/数组）回灌工具失败结果
+    from pet.llm import OpenAICompatibleClient
+    _c = OpenAICompatibleClient(
+        "k", reg7, base_url="https://example.invalid", model="m")
+    _msgs = _c._dispatch_tool_calls(
+        [{"id": "call_x", "function": {"name": "open_app",
+                                       "arguments": '"notepad"'}},
+         {"id": "call_y", "function": {"name": "open_app",
+                                       "arguments": "[1,2]"}}],
+        _octx)
+    check("P1 llm 畸形参数回灌工具失败而非崩整轮",
+          len(_msgs) == 2
+          and "需要 app 或 url" in _msgs[0]["content"]
+          and "需要 app 或 url" in _msgs[1]["content"])
+
     print(f"\n结果：{len(PASS)} 通过 / {len(FAIL)} 失败")
     return 1 if FAIL else 0
 

@@ -37,15 +37,40 @@ _PROC_DENYLIST = frozenset({
 # 批次F/L12（REVIEW-2026-09-04）：open_app 系统程序黑名单——_APP_NAME 放行
 # "cmd"/"regedit" 等（regex 禁 / 无参数面，危害限开窗口，但提示注入可借
 # 记忆通道诱导开系统程序，process 有 denylist 而 open_app 无=防护不对称）
+# 批次A/P1-1+P1-2（REVIEW-2026-09-05）：集合改存裸名，命中走 _app_denylisted
+# 归一化——旧版精确名比对被 Win32 尾点归一化绕过（"cmd."/"cmd.." 过
+# _APP_NAME 且不在名单，os.startfile 剥尾点照常启动 cmd.exe）；并补
+# L12 注释本要防的"包装器绕过"类交互 shell/系统工具（wsl/bash/conhost/
+# python/wmic/mmc/certutil 等）。
 _APP_DENYLIST = frozenset({
-    "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
-    "regedit", "regedit.exe", "reg", "reg.exe", "taskmgr", "taskmgr.exe",
-    "msconfig", "msconfig.exe", "diskpart", "diskpart.exe", "shutdown",
-    "shutdown.exe", "vssadmin", "vssadmin.exe", "bcdedit", "bcdedit.exe",
-    "netsh", "netsh.exe", "schtasks", "schtasks.exe", "sc", "sc.exe",
-    "wscript", "wscript.exe", "cscript", "cscript.exe", "mshta", "mshta.exe",
-    "rundll32", "rundll32.exe", "control", "control.exe",
+    # shell / 脚本宿主
+    "cmd", "powershell", "pwsh", "powershell_ise", "wscript", "cscript",
+    "mshta", "rundll32",
+    # 交互 shell / 控制台（P1-2）
+    "wsl", "wslg", "bash", "sh", "conhost", "openconsole",
+    "python", "pythonw", "py", "pyw",
+    # 注册表 / 系统配置 / 磁盘
+    "regedit", "reg", "taskmgr", "msconfig", "diskpart", "control",
+    # 系统管理 CLI（P1-2）
+    "shutdown", "vssadmin", "bcdedit", "netsh", "schtasks", "sc",
+    "wmic", "mmc", "certutil", "bitsadmin", "msbuild", "installutil",
+    "msiexec", "winget",
+    # 远程 / 传输（P1-2）
+    "ssh", "scp", "ftp", "telnet", "curl",
 })
+
+
+def _app_denylisted(app: str) -> bool:
+    """open_app 黑名单命中判定（批次A/P1-1）。
+
+    大小写不敏感；尾部点/空格剥除（Win32 文件名归一化会把 "cmd." 解析成
+    "cmd"，判定侧先归一才不被绕）；exe 等后缀再剥一层兜 "cmd.com" 变体。
+    """
+    probe = app.lower().rstrip(". ")
+    if probe in _APP_DENYLIST:
+        return True
+    bare = os.path.splitext(probe)[0]
+    return bool(bare) and bare != probe and bare in _APP_DENYLIST
 
 OPEN_APP_SCHEMA = ToolSchema(
     name="open_app",
@@ -86,8 +111,8 @@ class OpenAppHandler:
         if app:
             if not _APP_NAME.match(app):
                 return ToolResult(False, f"应用名不合法: {app!r}")
-            # L12：系统程序黑名单（大小写归一，含 .exe 形态）
-            if app.lower() in _APP_DENYLIST:
+            # L12+批次A/P1-1：系统程序黑名单（归一化命中，防尾点绕过）
+            if _app_denylisted(app):
                 return ToolResult(
                     False,
                     f"出于安全考虑不能代开系统程序 {app}，请自行从开始菜单打开。",

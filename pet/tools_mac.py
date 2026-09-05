@@ -40,6 +40,15 @@ _PROC_DENYLIST = {
 _PROC_DENYLIST_LOWER = frozenset(d.lower() for d in _PROC_DENYLIST)
 # mdfind 结果上限（§五 文件数上限，防一次性灌爆 DS 上下文）
 _MDFIND_CAP = 20
+# 批次A/P1-3（REVIEW-2026-09-05）：open -a 系统程序黑名单——win 端 open_app
+# 有 _APP_DENYLIST（批次F/L12）而 mac 端无的不对称封堵：open -a Terminal/
+# Script Editor/Automator 等于免确认启动脚本环境。open -a 按显示名解析
+# （无 .exe 形态），集合存小写裸名。
+_APP_DENYLIST = frozenset({
+    "terminal", "iterm", "iterm2", "warp", "script editor",
+    "automator", "console", "activity monitor", "disk utility",
+    "shortcuts",
+})
 
 OPEN_APP_SCHEMA = ToolSchema(
     name="open_app",
@@ -79,6 +88,12 @@ class OpenAppHandler:
         if app:
             if not _APP_NAME.match(app):
                 return ToolResult(False, f"应用名不合法: {app!r}")
+            # 批次A/P1-3：系统程序黑名单（大小写不敏感）
+            if app.lower() in _APP_DENYLIST:
+                return ToolResult(
+                    False,
+                    f"出于安全考虑不能代开系统程序 {app}，请自行打开。",
+                )
             argv = ["open", "-a", app]
             label = app
         elif url:
