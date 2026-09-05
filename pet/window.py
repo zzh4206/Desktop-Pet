@@ -41,7 +41,12 @@ def _mtime_cached(path: str) -> float:
     hit = _mtime_memo.get(path)
     if hit is not None and now - hit[0] < _MTIME_TTL_S:
         return hit[1]
-    mt = os.path.getmtime(path) if os.path.isfile(path) else 0.0
+    try:
+        mt = os.path.getmtime(path) if os.path.isfile(path) else 0.0
+    except OSError:
+        # 批次C/P3-4（REVIEW-2026-09-05）：isfile→getmtime TOCTOU（帧资产
+        # 热替换窗口内被删）——OSError 冒进 150ms 帧计时槽会反复炸该槽
+        mt = 0.0
     if len(_mtime_memo) > 256:
         _mtime_memo.clear()
     _mtime_memo[path] = (now, mt)
@@ -204,6 +209,9 @@ class WindowBase(QWidget):
         set_sprite 打断；interval_ms 帧间隔。
         """
         if not frames:
+            # 批次C/P3-3（REVIEW-2026-09-05）：显式空帧=停帧防御（旧版直接
+            # return，遗留的循环计时器存续）
+            self._frame_timer.stop()
             return
         # L4 修（REVIEW-2026-08-25）：动画→动画切换（walk→chew）时保留进入
         # 播放前真正的静帧作恢复目标——旧版把"当前动画帧"捕获为
@@ -214,6 +222,11 @@ class WindowBase(QWidget):
         self._frame_idx = 0
         self._frame_loop = bool(loop)
         self._frame_timer.setInterval(interval_ms)
+        # 批次C/P3-3（REVIEW-2026-09-05）：无条件熄旧计时器再按需重启——
+        # 旧版 1 帧序列不 start 也不 stop，上一循环动画（如 fall_air）的
+        # 计时器存续，land 单帧只显示一个帧距（~150ms）即被 _advance_frame
+        # 收尾，app 层 520ms 到期停帧名存实亡
+        self._frame_timer.stop()
         self.set_sprite(self._frames[0])
         if len(self._frames) > 1:
             self._frame_timer.start()

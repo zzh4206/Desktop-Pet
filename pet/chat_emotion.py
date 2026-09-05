@@ -81,14 +81,20 @@ _OBVIOUS_SIGNALS = {
 }
 
 
-def obvious_emotion(text: str) -> EmotionResult | None:
-    """识别最新一条消息中的明确情绪词，供即时交互作可靠兜底。"""
+def obvious_emotion(text: str, model_version: int = MODEL_VERSION
+                    ) -> EmotionResult | None:
+    """识别最新一条消息中的明确情绪词，供即时交互作可靠兜底。
+
+    批次C/P3-17（REVIEW-2026-09-05）：model_version 默认仍 MODEL_VERSION
+    （v1 兜底语义不变，直调方/测试兼容）；app 即时路径显式传 engine.version，
+    v2 引擎激活时元数据不再错标（该函数本就只在 v1 分支被调用）。
+    """
     compact = "".join((text or "").split()).lower()
     if compact == "neutral":
-        return EmotionResult("neutral", 1.0, False, MODEL_VERSION)
+        return EmotionResult("neutral", 1.0, False, model_version)
     for label, signals in _OBVIOUS_SIGNALS.items():
         if any(signal in compact for signal in signals):
-            return EmotionResult(label, 1.0, False, MODEL_VERSION)
+            return EmotionResult(label, 1.0, False, model_version)
     return None
 
 

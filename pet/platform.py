@@ -356,9 +356,21 @@ if sys.platform == "darwin":
             return mouse_lock_mac.MouseLockMac.accessibility_trusted()
 
         def open_path(self, path: str) -> tuple:
-            """``open`` 打开文件/文件夹（Finder 关联程序）。"""
+            """``open`` 打开文件/文件夹（Finder 关联程序）。
+
+            批次C/P3-15（REVIEW-2026-09-05）：可执行/脚本扩展名走二次确认
+            （NSAlert，拖放是用户主动行为但与 win 端同护栏）。"""
             import subprocess as _sp
 
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".app", ".command", ".scpt", ".dmg", ".pkg",
+                       ".workflow", ".terminal", ".jar"):
+                if not self.confirm_dangerous(
+                    "打开可执行文件",
+                    f"拖放打开 {os.path.basename(path)}",
+                    "可执行/脚本文件可能运行任意代码。",
+                ):
+                    return (False, "已取消打开可执行文件。")
             try:
                 _sp.run(["open", path], check=True, capture_output=True,
                         timeout=10)
@@ -662,7 +674,20 @@ elif sys.platform == "win32":
             return hotkey_win.is_autostart_enabled()
 
         def open_path(self, path: str) -> tuple:
-            """os.startfile 打开文件/文件夹/文档（关联程序）。"""
+            """os.startfile 打开文件/文件夹/文档（关联程序）。
+
+            批次C/P3-15（REVIEW-2026-09-05）：可执行/脚本扩展名走二次确认
+            （拖放是用户主动行为，但 .exe 一类与双击等权的任意代码执行面
+            挂一道确认，成本极低）。"""
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".exe", ".bat", ".cmd", ".com", ".pif", ".scr",
+                       ".ps1", ".vbs", ".js", ".jar", ".msi"):
+                if not self.confirm_dangerous(
+                    "打开可执行文件",
+                    f"拖放打开 {os.path.basename(path)}",
+                    "可执行/脚本文件可能运行任意代码。",
+                ):
+                    return (False, "已取消打开可执行文件。")
             try:
                 os.startfile(path)
                 return (True, f"已打开 {os.path.basename(path)}")

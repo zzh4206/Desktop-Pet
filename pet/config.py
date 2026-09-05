@@ -50,7 +50,8 @@ _SAFE_DEFAULTS: dict = {
         "first_idle_s": 3,
         "edge_margin_px": 40,
         "climb_min_depth_px": 30,
-        "pet_height_px": 64,
+        # pet_height_px 不再入默认（批次C/P3-10：开机即被真实显示尺寸覆盖
+        # 的死旋钮，example 已移除；behavior.py 仍留作启动前初始兜底）
     },
     "proactive": {
         "quiet_hours": [23, 8],
@@ -194,6 +195,10 @@ _SECTION_SCHEMAS: dict[str, dict] = {
     "provider": {"enum": ["emoji", "ai", "commission"]},
     "presentation": {"enum": ["frames", "rig", "paperdoll"]},
     "log_level": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+    # 批次C/P3-10（REVIEW-2026-09-05）：user_name 入 schema——此前只被
+    # app 读取（ToolContext.user_name）却无处可配（示例/校验双缺，改值
+    # 静默绕过校验）
+    "user_name": {"type": "string", "minLength": 1, "maxLength": 32},
     # L8（REVIEW-2026-09-04）：0=禁用睡姿（旧版 0 → 门限 0s 恒 SLEEPY，
     # 且配置值此前从未真正接入判定——见 asset_provider._mood_from_state）
     "sleepy_idle_minutes": {"type": "number", "minimum": 0,

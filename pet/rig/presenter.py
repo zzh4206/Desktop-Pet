@@ -289,6 +289,12 @@ class RigWindow(WindowBase):
             # QImage/figASrc=垃圾 URL 污染场景状态
             super().play_frames(frames, loop, interval_ms)
             return
+        # 批次C/P3-26（REVIEW-2026-09-05）：文件帧播前重显场景——emoji 降
+        # 级 set_sprite 曾隐藏 _quick（场景让位 label），后续文件帧序列不
+        # 重显则动画画进隐藏场景、label 停在旧 emoji（rig+emoji+文件帧组合）
+        if not self._quick.isVisible():
+            self._label.hide()
+            self._quick.setVisible(True)
         if not self._frames:
             self._static_sprite = self._sprite
         self._frames = list(frames)

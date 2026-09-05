@@ -213,6 +213,7 @@ class PetStateStore:
                 "last_update": self._last_update,
                 "state": _state_to_dict(self._state),
             }
+            snap_last = self._last_update
         tmp = path + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
@@ -226,7 +227,13 @@ class PetStateStore:
                 except OSError:
                     pass
             os.replace(tmp, path)
-            self._dirty = False  # H1：落盘成功才清 dirty（失败保持，下轮重试）
+            # H1：落盘成功才清 dirty（失败保持，下轮重试）。
+            # 批次C/P3-9（REVIEW-2026-09-05）：清 dirty 进锁内并复核快照——
+            # 旧版锁外无条件清零，快照后新到的 update() 会被静默推迟到下个
+            # 周期（类自述线程安全，未来任何 worker 调 update 即触发）
+            with self._lock:
+                if self._last_update == snap_last:
+                    self._dirty = False
             # POSIX 下 fsync 目录项变更持久化（Windows 无需，跳过）
             if os.name != "nt":
                 try:

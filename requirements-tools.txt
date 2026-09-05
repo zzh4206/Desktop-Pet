@@ -1,0 +1,4 @@
+# tools/ 产线脚本依赖（运行时 pet/ 不需要；test_v14 门禁经 qa_rig_composite/split_parts 间接需要 Pillow）
+# 批次C/P3-21（REVIEW-2026-09-05）：此前 7 个 tools 脚本 import PIL 而依赖无处声明
+Pillow>=10,<13
+scipy>=1.11,<2; python_version >= "3.10"  # import_layers（α 连通域拆分）

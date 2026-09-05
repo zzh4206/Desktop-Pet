@@ -31,7 +31,10 @@ def main() -> int:
     stage_dir = os.path.join(REPO, "assets", "rig", args.stage)
     manifest_path = os.path.join(stage_dir, "manifest.json")
     manifest = json.load(open(manifest_path, encoding="utf-8"))
-    info = next(p for p in manifest["parts"] if p["id"] == args.part)
+    # 批次C/P3-20（REVIEW-2026-09-05）：id 不存在裸 StopIteration → 明确报错
+    info = next((p for p in manifest["parts"] if p["id"] == args.part), None)
+    if info is None:
+        raise SystemExit(f"部件 id {args.part!r} 不在 {manifest_path} 中")
     part_path = os.path.join(stage_dir, info["file"])
     part = Image.open(part_path).convert("RGBA")
     w, h = part.size

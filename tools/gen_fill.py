@@ -127,7 +127,16 @@ def patch(args) -> int:
     """回贴：mask 不透明(α>0)处取 filled 像素，其余 = original。"""
     orig = Image.open(args.original).convert("RGBA")
     filled = Image.open(args.filled).convert("RGBA")
-    mask = Image.open(args.mask).convert("RGBA")
+    mask = Image.open(args.mask)
+    # 批次C/P3-19（REVIEW-2026-09-05）：掩码必须有真实 alpha 通道——
+    # RGB/L 掩码 convert("RGBA") 后 α 恒 255，"区域外逐字节=原图"的
+    # 构造性零漂移静默失效为全图回贴且仍报成功
+    if mask.mode not in ("RGBA", "LA", "PA") \
+            and "transparency" not in mask.info:
+        raise SystemExit(
+            f"掩码 {args.mask} 无 alpha 通道（mode={mask.mode}）——"
+            "改用带透明的 PNG 掩码，否则无法界定补绘岛")
+    mask = mask.convert("RGBA")
     if mask.size != orig.size or filled.size != orig.size:
         raise SystemExit(f"尺寸不一致 o={orig.size} f={filled.size} m={mask.size}")
     op, fp, mp = orig.load(), filled.load(), mask.load()
@@ -137,8 +146,11 @@ def patch(args) -> int:
             if mp[x, y][3] > 0:          # 掩码可见 ⇒ 该像素属于补绘岛
                 op[x, y] = fp[x, y]
                 copied += 1
-    orig.save(args.out)
     total = orig.width * orig.height
+    if copied >= total:
+        raise SystemExit("回贴覆盖全图（掩码无透明区），拒绝落盘——"
+                         "零漂移保证失效，请检查掩码")
+    orig.save(args.out)
     print(f"✅ 回贴完成 {args.out} —— 改动 {copied}/{total} 像素"
           f"（{copied * 100.0 / total:.2f}%），区域外逐字节=原图（构造性零漂移）")
     return 0

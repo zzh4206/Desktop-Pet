@@ -39,6 +39,9 @@ OFFLINE_REPLY = "当前离线，聊天暂时不可用。"
 # 批次A（REVIEW-2026-08-28 F12）：回灌 DS 的工具结果上限——clipboard get
 # 等可返回任意大文本，一次打爆上下文/费用；截断只影响回灌消息，data 全量。
 _TOOL_RESULT_MAX_CHARS = 4000
+# 批次C/P3-7（REVIEW-2026-09-05）：流式累计上限——慢滴流有总时长帽，但
+# 故障/恶意端点仍可在时限内（180s）以全速灌爆内存
+_STREAM_MAX_CHARS = 1_000_000
 
 
 def truncate_tool_result(content: str,
@@ -200,6 +203,8 @@ class OpenAICompatibleClient(LLMClient):
             return FALLBACK_REPLY, [], {}
 
         full = []
+        full_len = 0
+        overflow = False
         tool_calls: dict[int, dict] = {}  # index 聚合 DS 分片 tool_call
         usage = {}
         t0 = time.monotonic()   # 批次E/M9：流式总时长计时
@@ -226,9 +231,15 @@ class OpenAICompatibleClient(LLMClient):
                     delta = choice.get("delta", {})
                     content = delta.get("content")
                     if content:
-                        full.append(content)
-                        if on_delta:
-                            on_delta(content)
+                        # 批次C/P3-7：累计超上限丢弃后续（回显同步停，防
+                        # history 与 UI 显示不一致）
+                        if full_len < _STREAM_MAX_CHARS:
+                            full.append(content)
+                            full_len += len(content)
+                            if on_delta:
+                                on_delta(content)
+                        else:
+                            overflow = True
                     for tc in delta.get("tool_calls", []) or []:
                         idx = tc.get("index", 0)
                         slot = tool_calls.setdefault(
@@ -255,7 +266,10 @@ class OpenAICompatibleClient(LLMClient):
             raise OfflineError("流式中断（用户取消或连接断开）")
         finally:
             self._resp = None
-        return "".join(full), list(tool_calls.values()), usage
+        text = "".join(full)
+        if overflow:
+            text += f"\n[回复超过 {_STREAM_MAX_CHARS} 字符已截断]"
+        return text, list(tool_calls.values()), usage
 
     def _non_stream_once(
         self, messages: list, tools: Optional[list]
@@ -481,8 +495,11 @@ class ChatWorker(QThread):
             return
         except requests.Timeout:
             log.warning("DS 请求超时，降级预设回复")
-            self.delta.emit(FALLBACK_REPLY)
-            self.failed.emit(FALLBACK_REPLY)
+            # 批次C/P3-7（REVIEW-2026-09-05）：取消后不再发幽灵降级回复
+            # （旧版仅 OfflineError 分支有 _cancelled 守卫）
+            if not self._cancelled:
+                self.delta.emit(FALLBACK_REPLY)
+                self.failed.emit(FALLBACK_REPLY)
             return
         except requests.ConnectionError as exc:
             log.warning("DS 连接失败（疑似离线）: %s", exc)
@@ -490,8 +507,9 @@ class ChatWorker(QThread):
             return
         except Exception as exc:  # 任何未预期错误降级，不崩
             log.exception("DS 调用异常，降级")
-            self.delta.emit(FALLBACK_REPLY)
-            self.failed.emit(FALLBACK_REPLY)
+            if not self._cancelled:
+                self.delta.emit(FALLBACK_REPLY)
+                self.failed.emit(FALLBACK_REPLY)
             return
         if self._cancelled:
             return

@@ -166,10 +166,12 @@ def process(name: str, session) -> Image.Image:
 
 
 def main():
+    # 批次C/P3-20（REVIEW-2026-09-05）：global 声明前置——旧版 global 在
+    # SRC/DST 使用之后，SyntaxError 文件不可运行
+    global SRC, DST
     import sys
     src = sys.argv[1] if len(sys.argv) > 1 else SRC
     dst = sys.argv[2] if len(sys.argv) > 2 else DST
-    global SRC, DST
     SRC = src; DST = dst
     os.makedirs(DST, exist_ok=True)
     session = new_session("u2net")

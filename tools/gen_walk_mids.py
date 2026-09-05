@@ -50,7 +50,12 @@ def gen_two_refs(ref_a: str, ref_b: str) -> Image.Image:
                       headers={"Authorization": f"Bearer {KEY}"},
                       files=files, timeout=600)
     if r.status_code == 200:
-        d = r.json()
+        # 批次C/P3-20（REVIEW-2026-09-05）：200 非 JSON 不再裸崩（成功
+        # 花费后崩溃），留响应前 200 字符排障
+        try:
+            d = r.json()
+        except ValueError:
+            raise SystemExit(f"HTTP 200 但响应非 JSON: {r.text[:200]}")
         return Image.open(io.BytesIO(
             base64.b64decode(d["data"][0]["b64_json"]))).convert("RGBA")
     print(f"  多参考失败 HTTP {r.status_code}: {r.text[:200]} —— 降级单参考")
@@ -70,7 +75,10 @@ def gen_two_refs(ref_a: str, ref_b: str) -> Image.Image:
                       files=files, timeout=600)
     if r.status_code != 200:
         raise SystemExit(f"单参考也失败 {r.status_code}: {r.text[:300]}")
-    d = r.json()
+    try:
+        d = r.json()
+    except ValueError:
+        raise SystemExit(f"HTTP 200 但响应非 JSON: {r.text[:200]}")
     return Image.open(io.BytesIO(
         base64.b64decode(d["data"][0]["b64_json"]))).convert("RGBA")
 
@@ -139,7 +147,14 @@ SUBDIVIDE_PAIRS = [
 def subdivide() -> int:
     global PROMPT
     base_prompt = PROMPT
-    only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+    # 批次C/P3-20（REVIEW-2026-09-05）：--only 缺值 IndexError → 明确报错
+    _ai = sys.argv.index("--only") if "--only" in sys.argv else -1
+    if _ai >= 0:
+        if _ai + 1 >= len(sys.argv):
+            raise SystemExit("--only 需要值，如 --only walk_m4")
+        only = sys.argv[_ai + 1]
+    else:
+        only = None
     for out_name, ra_name, rb_name in SUBDIVIDE_PAIRS:
         if only and out_name != only:
             continue

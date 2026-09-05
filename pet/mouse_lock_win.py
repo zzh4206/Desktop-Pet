@@ -256,6 +256,11 @@ class MouseLockWin:
             self._cancel = True   # 尚未装好的钩子线程装好后复查自拆
             hook, tid = self._hook, self._hook_thread_id
             self._hook = None
+            # 批次C/P3-2（REVIEW-2026-09-05）：tid 消费后置零——旧版残留旧
+            # 线程 id，新会话启动到新钩子线程首行写 id 的窗口期再来一次
+            # _release/force_spit，会向已回收（可能被复用）的线程 id 投
+            # WM_QUIT
+            self._hook_thread_id = 0
         if hook:
             _user32.UnhookWindowsHookEx(hook)
         if tid:

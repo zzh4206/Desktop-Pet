@@ -56,6 +56,10 @@ def main() -> None:
     cut = max(1, int(len(keys) * .85))
     train = [r for k in keys[:cut] for r in by_group[k]]
     valid = [r for k in keys[cut:] for r in by_group[k]]
+    if not valid:
+        # 批次C/P3-18（REVIEW-2026-09-05）：对齐 v2 脚本守卫——单组/组粒度
+        # 过大时 valid=[]，旧版 np.stack([]) 裸 ValueError
+        raise SystemExit("分组切分后验证集为空；请增大数据或减小分组粒度")
     def pack(rows):
         return (torch.from_numpy(np.stack([vectorize(r["context"]) for r in rows])),
                 torch.tensor([LABELS.index(r["label"]) for r in rows]))

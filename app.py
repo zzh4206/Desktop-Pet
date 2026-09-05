@@ -611,13 +611,18 @@ class PetApp:
         messages = store.recent_messages()
         # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
         # v2 句向量模型必须先判断，不能被关键词规则短路；显式词仅保留给旧 v1 的安全回退。
+        # v1 即时路径刻意只喂 messages[-1:]（新情绪不被历史旧句稀释），
+        # 与 v1 训练的 2-5 句窗口有分布差异——取舍留档（批次C/P3-17 注）。
         # M3（REVIEW-2026-09-04）：evaluate 传 event 阈值——引擎内层默认
         # 0.55 截断先于 app 层判定生效，event_confidence_threshold<0.55 时是死旋钮
         result = engine.evaluate(
             messages[-1:],
             threshold=self._chat_emotion_cfg.get("event_confidence_threshold", .5))
         if result.used_fallback and engine.version != 2 and messages:
-            result = obvious_emotion(messages[-1]["text"]) or result
+            # P3-17：该分支只在 v1 引擎（version==1 或 None）走——元数据带
+            # 真实版本，v2 短路守卫（M10c）据此成立
+            result = obvious_emotion(messages[-1]["text"],
+                                     model_version=engine.version) or result
         if not is_significant(result, self._chat_emotion_cfg.get(
                 "event_confidence_threshold", .5)):
             return
@@ -676,8 +681,10 @@ class PetApp:
         except ValueError:
             return
         try:
-            self._chat_emotion_active = label
             self.window.set_conversation_mood(mood)
+            # 批次C/P3-8（REVIEW-2026-09-05）：成功后才置 active——旧版先置
+            # 再更新，更新失败时 change-detector 视为已应用，到期前永不重试
+            self._chat_emotion_active = label
         except Exception:
             self.logger.warning("聊天情绪立绘更新失败", exc_info=True)
         delta = float(self._chat_emotion_cfg.get("mood_delta", {}).get(label, 0))
@@ -899,7 +906,7 @@ class PetApp:
         加入桌面 Space（canJoinAllSpaces + moveToCurrentSpace 降级到桌面）。"""
         if self._chat_window is None:
             self.bubble.show(
-                "还没设置 DS key，聊天暂不可用～", anchor=self._pet_anchor()
+                "还没设置 API key，聊天暂不可用～", anchor=self._pet_anchor()
             )
             return
         self._chat_bridge.reset_offline()
@@ -1129,7 +1136,7 @@ class PetApp:
         # v0.7.3 两段式吃鼠标：FSM 奔到光标（EAT_APPROACH→EAT_MOUSE 转换）
         # 才真正启动抑制；eat_mouse_tick 处理追赶超时兜底
         mode = self.fsm.mode
-        if mode == "eat_mouse" and getattr(self, "_fsm_last_mode", "")                 != "eat_mouse":
+        if mode == "eat_mouse" and getattr(self, "_fsm_last_mode", "") != "eat_mouse":
             self._proactive.eat_mouse_arrived()
         # v0.13 rig 呈现层运动参数：速度倾斜/行走律动/空中标志/步频（frames
         # 后端的基类 no-op 缺省让该调用在旧模式下零成本旁路）。

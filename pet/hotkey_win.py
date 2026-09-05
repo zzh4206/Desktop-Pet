@@ -193,32 +193,49 @@ class HotkeyManager:
             _user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
         if self._thread:
             self._thread.join(timeout=2.0)
+            # 批次C/P3-1（REVIEW-2026-09-05）：join 后清引用/id——旧版残留
+            # 已死线程 id，二次 stop（shutdown 可重复调）向系统回收后可能
+            # 复用的线程 id 投 WM_QUIT（可命中任意进程的消息循环线程）；
+            # 引用不清也让幂等守卫（not _active and not _thread）失效
+            self._thread = None
+            self._thread_id = 0
 
     def _loop(self) -> None:
-        """热键线程体：注册 → GetMessage 循环 → 清理。"""
-        self._thread_id = _kernel32.GetCurrentThreadId()
-        # _reg_ok 已在 start() 内预创建（M11），此处只填结果
+        """热键线程体：注册 → GetMessage 循环 → 清理。
 
-        for hid, (mods, vk) in self._keys.items():
+        批次C/P3-1（REVIEW-2026-09-05）：入口局部快照共享状态——stop→start
+        复用时旧线程收尾读共享 self._keys 会注销新线程刚注册的热键（L15
+        只清了 _thread_id，注销侧仍共享引用）；回调/桥/键串快照隔离，死
+        线程不再触碰新会话属性。_reg_ok 保持共享（主线程 start 等 wait 读）。
+        """
+        self._thread_id = _kernel32.GetCurrentThreadId()
+        keys = dict(self._keys)
+        key_strs = dict(getattr(self, "_key_strs", {}) or {})
+        callbacks = dict(getattr(self, "_callbacks", {}) or {})
+        bridge = self._bridge
+        on_conflict = self._on_conflict
+        reg_ok = self._reg_ok  # dict 就地写：主线程 _ready.wait 后读取
+
+        for hid, (mods, vk) in keys.items():
             if (mods, vk) == (0, 0):
-                self._reg_ok[hid] = False
+                reg_ok[hid] = False
                 _log.warning("[热键] 无效组合 id=%d", hid)
                 continue
             ok = _user32.RegisterHotKey(None, hid, mods, vk)
-            self._reg_ok[hid] = bool(ok)
-            key_str = self._key_strs.get(hid, "?")
+            reg_ok[hid] = bool(ok)
+            key_str = key_strs.get(hid, "?")
             if not ok:
                 _log.warning("[热键] %s 注册失败(被占用?) err=%s",
                              key_str, ctypes.get_last_error())
-                if self._on_conflict:
+                if on_conflict:
                     name = "聊天" if hid == _ID_CHAT else "吐出"
                     # M12 修：经 bridge 信号转主线程（旧版热键线程直调
                     # on_conflict → bubble.show 跨线程 GUI 未定义行为）
-                    if self._bridge is not None:
-                        self._bridge.conflict.emit(name, key_str)
+                    if bridge is not None:
+                        bridge.conflict.emit(name, key_str)
                     else:
                         try:
-                            self._on_conflict(name, key_str)
+                            on_conflict(name, key_str)
                         except Exception:
                             pass
             else:
@@ -231,10 +248,10 @@ class HotkeyManager:
         while _user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             if msg.message == WM_HOTKEY:
                 hid = int(msg.wParam)
-                if self._bridge is not None:
-                    self._bridge.fired.emit(hid)   # M7: 经信号转主线程
+                if bridge is not None:
+                    bridge.fired.emit(hid)   # M7: 经信号转主线程
                 else:
-                    cb = self._callbacks.get(hid)
+                    cb = callbacks.get(hid)
                     if cb:
                         try:
                             cb()
@@ -243,7 +260,7 @@ class HotkeyManager:
             elif msg.message == WM_QUIT:
                 break
 
-        for hid in self._keys:
+        for hid in keys:
             _user32.UnregisterHotKey(None, hid)
 
 
@@ -257,30 +274,31 @@ import winreg
 def set_autostart(enabled: bool, exe_path: str = "") -> bool:
     """写/删 HKCU Run 键。enabled=False → 删。"""
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY,
-                             0, winreg.KEY_SET_VALUE)
-        if enabled:
-            import sys
+        # 批次C/P3-5（REVIEW-2026-09-05）：with 语法托管句柄——旧版
+        # SetValueEx 抛异常时 CloseKey 被跳过，HKEY 泄漏
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY,
+                            0, winreg.KEY_SET_VALUE) as key:
+            if enabled:
+                import sys
 
-            if not exe_path:
-                exe_path = sys.executable
-                # python app.py → 加引号
-                import os
+                if not exe_path:
+                    exe_path = sys.executable
+                    # python app.py → 加引号
+                    import os
 
-                script = os.path.abspath(
-                    os.path.join(os.path.dirname(__file__), "..", "app.py")
-                )
-                winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ,
-                                  f'"{exe_path}" "{script}"')
+                    script = os.path.abspath(
+                        os.path.join(os.path.dirname(__file__), "..", "app.py")
+                    )
+                    winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ,
+                                      f'"{exe_path}" "{script}"')
+                else:
+                    winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ,
+                                      f'"{exe_path}"')
             else:
-                winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ,
-                                  f'"{exe_path}"')
-        else:
-            try:
-                winreg.DeleteValue(key, _APP_NAME)
-            except FileNotFoundError:
-                pass
-        winreg.CloseKey(key)
+                try:
+                    winreg.DeleteValue(key, _APP_NAME)
+                except FileNotFoundError:
+                    pass
         _log.info("[自启] %s", "已启用" if enabled else "已关闭")
         return True
     except OSError as e:
@@ -291,10 +309,9 @@ def set_autostart(enabled: bool, exe_path: str = "") -> bool:
 def is_autostart_enabled() -> bool:
     """读 HKCU Run 键是否已写入。"""
     try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY,
-                             0, winreg.KEY_READ)
-        val, _ = winreg.QueryValueEx(key, _APP_NAME)
-        winreg.CloseKey(key)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY,
+                            0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, _APP_NAME)
         return bool(val)
     except (FileNotFoundError, OSError):
         return False

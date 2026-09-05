@@ -55,6 +55,14 @@ def main() -> None:
     if len(train) < 500 or len(acceptance) < 10: raise SystemExit("训练或独立验收集太小")
     if {r['label'] for r in train} != set(LABELS): raise SystemExit("训练集缺少类别")
     if {r['label'] for r in acceptance} != set(LABELS): raise SystemExit("验收集缺少类别")
+    # 批次C/P3-18（REVIEW-2026-09-05）：训练侧复验不相交——"绝不混训"的
+    # 结构性保证不再只依赖构建侧 assert（误喂预修复旧档/合并档时静默恢复
+    # 泄漏，acceptance 门禁被高估）
+    _overlap = {r["text"] for r in train} & {r["text"] for r in acceptance}
+    if _overlap:
+        raise SystemExit(
+            f"训练/验收集文本相交 {len(_overlap)} 条（严禁混训），"
+            f"示例: {sorted(_overlap)[:3]}")
     torch.manual_seed(args.seed); device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type != "cuda": raise SystemExit("拒绝在非 GPU 环境训练；请在用户指定服务器运行")
     tokenizer = AutoTokenizer.from_pretrained(args.encoder); encoder = AutoModel.from_pretrained(args.encoder).to(device).eval()

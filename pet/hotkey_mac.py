@@ -403,8 +403,13 @@ def set_autostart(enabled: bool, exe_path: str = "") -> bool:
                 "RunAtLoad": True,
                 "WorkingDirectory": repo,
             }
-            with open(path, "wb") as f:
+            # 批次C/P3-6（REVIEW-2026-09-05）：tmp+os.replace 原子写——旧版
+            # 直接覆盖 LaunchAgent，写途中崩溃即 plist 损坏（memory/pet_state
+            # 同工艺对齐）
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
                 plistlib.dump(plist, f)
+            os.replace(tmp, path)
         else:
             try:
                 os.remove(path)

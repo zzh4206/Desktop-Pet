@@ -13,10 +13,13 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import time
 from ctypes import wintypes
 
 from .behavior import Sensors
+
+log = logging.getLogger("pet")  # 批次C/P3-12：枚举回调异常留痕用
 
 # ---- Windows API 绑定（仅本文件可见，不泄漏到共享层） ----
 
@@ -117,13 +120,20 @@ def _monitor_map(screens=None) -> list:
 
     @_MONITORENUMPROC
     def _cb(hmon, _hdc, _rect, _data):
-        mi = _MONITORINFOEX()
-        mi.cbSize = ctypes.sizeof(_MONITORINFOEX)
-        if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
-            scr = by_name.get(mi.szDevice)
-            if scr is not None:
-                out.append((scr, (mi.rcMonitor.left, mi.rcMonitor.top,
-                                  mi.rcMonitor.right, mi.rcMonitor.bottom)))
+        # 批次C/P3-12（REVIEW-2026-09-05）：回调体包 try——ctypes 回调里
+        # 的 Python 异常被吞且返回 0 = EnumDisplayMonitors 视为"停止枚举"，
+        # 残缺配对表静默入缓存喂 FSM 几何判定
+        try:
+            mi = _MONITORINFOEX()
+            mi.cbSize = ctypes.sizeof(_MONITORINFOEX)
+            if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                scr = by_name.get(mi.szDevice)
+                if scr is not None:
+                    out.append((scr, (mi.rcMonitor.left, mi.rcMonitor.top,
+                                      mi.rcMonitor.right,
+                                      mi.rcMonitor.bottom)))
+        except Exception:
+            log.warning("EnumDisplayMonitors 回调异常，跳过该屏", exc_info=True)
         return True
 
     try:
@@ -145,11 +155,13 @@ def _cached_monitor_map(screens=None) -> list:
     global _monitor_cache
     now = time.monotonic()
     ts, mons = _monitor_cache
-    if mons and now - ts < _MONITOR_TTL_S:
+    if now - ts < _MONITOR_TTL_S:
         return mons
     mons = _monitor_map(screens)
-    if mons:
-        _monitor_cache = (now, mons)
+    # 批次C/P3-12（REVIEW-2026-09-05）：空结果同 TTL 缓存——旧版空结果不
+    # 缓存，配对失败（降级态）下 window_rect/solid_at 每 50ms tick 全速重
+    # 枚举，恰是 L17 缓存要消灭的模式
+    _monitor_cache = (now, mons)
     return mons
 
 
@@ -298,17 +310,23 @@ def visible_windows(refresh: bool = False) -> list[dict]:
 
     @_WNDENUMPROC
     def _on_hwnd(hwnd, _lparam):
-        if not _user32.IsWindowVisible(hwnd):
-            return True
-        ex_style = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-        if ex_style & (_WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE):
-            return True
-        if _is_cloaked(hwnd):
-            return True
-        rect = _hwnd_to_rect(hwnd, screens, mons)
-        if rect and rect["width"] > 40 and rect["height"] > 40:
-            rect["hwnd"] = int(hwnd)
-            found.append(rect)
+        # 批次C/P3-12（REVIEW-2026-09-05）：回调体包 try——ctypes 回调里
+        # 的 Python 异常被吞且返回 0 = EnumWindows 视为"停止枚举"，残缺窗
+        # 表静默缓存 2s（Qt 收尾期窗口对象回收等窄路径可触发）
+        try:
+            if not _user32.IsWindowVisible(hwnd):
+                return True
+            ex_style = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex_style & (_WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE):
+                return True
+            if _is_cloaked(hwnd):
+                return True
+            rect = _hwnd_to_rect(hwnd, screens, mons)
+            if rect and rect["width"] > 40 and rect["height"] > 40:
+                rect["hwnd"] = int(hwnd)
+                found.append(rect)
+        except Exception:
+            log.warning("EnumWindows 回调异常，跳过该窗", exc_info=True)
         return True
 
     _user32.EnumWindows(_on_hwnd, 0)
@@ -407,6 +425,9 @@ def solid_at(x: float, y: float, ref: dict | None = None) -> bool:
         return int(below) in {w.get("hwnd") for w in visible_windows()}
     if ref is not None:
         return root_i == ref.get("hwnd")
+    # P3-23（REVIEW-2026-09-05）：ref=None 分支用 2s 枚举缓存——新开 <2s
+    # 的窗会误否决攀爬；mac 端同分支对任意实体窗返 True。方向保守（宁可
+    # 拒绝攀爬），平台差异固化于此注释，FSM 测试假件按 mac 语义建模。
     valid = {w.get("hwnd") for w in visible_windows()}
     return root_i in valid
 

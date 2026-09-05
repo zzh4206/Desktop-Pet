@@ -326,8 +326,11 @@ class ProactiveScheduler:
         分支已发，此处不叠加，保持 v0.6 久坐提醒行为不变）。
 
         门禁（铁律）：idle≥idle_threshold_min(5) / 非 DND / 非活跃内容 /
-        Accessibility 已授权。无 platform mouse_lock（win / 未注入）→ 静默
-        返回，久坐 topic 气泡已发，不抑制不叠加。
+        Accessibility 已授权。无 platform mouse_lock（未注入/测试假件）→
+        静默返回，久坐 topic 气泡已发，不抑制不叠加。win 端实际注入
+        mouse_lock_win（platform.get_mouse_lock），mac 端注入 MouseLockMac
+        ——P3-24（REVIEW-2026-09-05）：旧注释"win/测试无 mouse_lock"为
+        v0.7 早期行为，已过时。
         """
         sess = self._eat_session
         # 无平台 mouse_lock → 不抑制，静默（久坐 topic 已气泡）
@@ -572,7 +575,16 @@ class ProactiveScheduler:
                 _log.info("[主动] 深夜唤醒顺延到 %s",
                           datetime.fromtimestamp(next_t).strftime("%m-%d %H:%M"))
             else:
-                self._fire_wake(now)
+                try:
+                    self._fire_wake(now)
+                except Exception:
+                    # 批次C/P3-14（REVIEW-2026-09-05）：_fire_wake 异常兜底
+                    # 重排——旧版异常冒出 poll（无 try）跳过后续段且链断到
+                    # 重启
+                    _log.warning("[主动] _fire_wake 异常，兜底重排唤醒链",
+                                 exc_info=True)
+                    self.schedule_wake(random.uniform(*_LOCAL_WAKE_RANGE),
+                                       {"recover": True})
 
         if quiet:
             return  # 深夜其余全静默
@@ -600,8 +612,9 @@ class ProactiveScheduler:
                 self._last_sedentary_at = now
                 # v0.7：休息提醒升级为吃鼠标（§七「把休息提醒+整蛊+养成缝成
                 # 一件」）。eat_mouse 内部四门禁（idle/DND/活跃内容/
-                # accessibility）+ mouse_lock 抑制；无平台 mouse_lock
-                # （win/测试）时静默，topic 气泡已发不叠加，保持 v0.6 行为。
+                # accessibility）+ mouse_lock 抑制；平台未注入 mouse_lock
+                # （测试假件）时静默，topic 气泡已发不叠加，保持 v0.6 行为。
+                # （P3-24：win 端实际有 mouse_lock_win，旧注释过时）
                 self.eat_mouse(self._eat_duration)
         else:
             self._sedentary_since = None
@@ -685,7 +698,11 @@ class ProactiveScheduler:
             return
         # 有 client：异步化（旧版同步 chat_once 阻塞主线程最长 120s）
         if self._wake_worker is not None:
-            _log.info("[主动] 上一轮决策 worker 仍在跑，跳过本次唤醒")
+            # 批次C/P3-14（REVIEW-2026-09-05）：顺延而非丢弃——旧版直接
+            # return 且 _next_wake_at 已置 None，worker 万一卡死/完成路径
+            # 异常则唤醒链断到重启（正常路径 worker done 会重排）
+            _log.info("[主动] 上一轮决策 worker 仍在跑，本次唤醒顺延 10 分钟")
+            self.schedule_wake(10, {"chain": True})
             return
         self._wake_ctx_pending = ctx
         # 批次H/M10（REVIEW-2026-08-31 F32）：worker 与测试共用同一条
@@ -704,6 +721,15 @@ class ProactiveScheduler:
     def _on_wake_done(self, delay_min: float, msg: str, ctx: object) -> None:
         """worker done：_decide 已含解析+罐头回退，这里只发气泡+排下一次。"""
         self._wake_worker = None
+        # 批次C/P3-14（REVIEW-2026-09-05）：决策完成时已入安静时段 → 气泡
+        # 顺延到安静结束（旧版 poll 侧深夜才挡，worker 慢一步就漏进来）
+        if self._quiet_now(self._now()):
+            next_t = self._quiet_end_after(self._now())
+            self._next_wake_at = next_t
+            self._persist()
+            _log.info("[主动] 决策完成恰入安静时段，气泡顺延 %s",
+                      datetime.fromtimestamp(next_t).strftime("%m-%d %H:%M"))
+            return
         self._emit_bubble(msg, self._now())
         _log.info("[主动] 唤醒(决策): %s → 下次 %.0fmin", ctx, delay_min)
         self.schedule_wake(delay_min, {"chain": True})
@@ -712,6 +738,11 @@ class ProactiveScheduler:
     def _on_wake_failed(self, ctx: object) -> None:
         """worker failed（超时/离线/异常）：退本地罐头。"""
         self._wake_worker = None
+        if self._quiet_now(self._now()):  # 批次C/P3-14：同 done 顺延
+            next_t = self._quiet_end_after(self._now())
+            self._next_wake_at = next_t
+            self._persist()
+            return
         d, m = self._local_canned()
         self._emit_bubble(m, self._now())
         _log.info("[主动] 唤醒(LLM失败退本地): %s → 下次 %.0fmin", ctx, d)

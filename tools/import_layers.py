@@ -23,6 +23,9 @@ from PIL import Image
 from scipy import ndimage
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 批次C/P3-20（REVIEW-2026-09-05）：缺参 IndexError → 用法提示
+if len(sys.argv) < 2:
+    raise SystemExit("用法: python tools/import_layers.py <see-through层PNG目录>")
 LAYERS = sys.argv[1]
 CANVAS = (1280, 1280)
 

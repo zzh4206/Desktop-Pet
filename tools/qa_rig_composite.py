@@ -158,7 +158,8 @@ def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
     mism = sum(hist[alpha_thr + 1:])
     opaque = sum(a_o.histogram()[1:])
     pct = mism * 100.0 / max(1, opaque)
-    max_da = max(i for i, n in enumerate(hist) if n)
+    # 批次C/P3-20：零像素图兜底（旧版 max() 空 ValueError）
+    max_da = max((i for i, n in enumerate(hist) if n), default=0)
 
     # 内部失配 = 实心区（α>128 二值化后腐蚀 2px）内的失配。两点原因：
     # ① 切缘羽化在轮廓外缘留 ~1px α 环（工艺固有、显示档不可辨）→ 只计环；
@@ -186,7 +187,10 @@ def evaluate(stage: str, branch: str, mood: str, alpha_thr: int = 32,
     if ex is not None and budget > 0:
         budget_ok = excluded_mism <= budget
     elif ex is not None:
-        print(f"⚠️ {figure} 豁免区无 exclude_budget_px 预算（建议补档防回归静默）")
+        # 批次C/P3-20（REVIEW-2026-09-05）：豁免区无预算=FAIL——旧版仅
+        # ⚠️ 提示放行，M6"失配被静默掩掉"的口子重新敞开
+        print(f"❌ {figure} 豁免区缺 exclude_budget_px 预算档（防回归静默）")
+        budget_ok = False
 
     # 不透明双区（α>128）RGB 平均差（ImageStat 支持 L 掩码）
     mask = ImageChops.multiply(

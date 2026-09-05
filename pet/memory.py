@@ -80,6 +80,9 @@ class MemoryStore:
         # 锁外窗口里若又发生变更，_gen 已前进，保存后不会误清脏态
         self._gen = 0
         self._saved_gen = 0
+        # 批次C/P3-9：上次衰减时刻（forget_expired 衰减锚点；0=从未衰减，
+        # 首次调用从 last_recalled 起算）
+        self._last_decay_at = 0.0
 
     @property
     def dirty(self) -> bool:
@@ -137,7 +140,11 @@ class MemoryStore:
         （_gen 已前进），不推进 _saved_gen，脏态留给下个周期。
         """
         with self._lock:
-            data = {"version": _VERSION, "memories": list(self._mem)}
+            # 批次C/P3-9（REVIEW-2026-09-05）：逐条浅拷贝——旧版 list(self._mem)
+            # 只拷壳，条目 dict 仍共享，锁外 json.dump 期间 recall 改写
+            # last_recalled 会产出撕裂档
+            data = {"version": _VERSION,
+                    "memories": [dict(m) for m in self._mem]}
             snap_gen = self._gen
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -264,21 +271,35 @@ class MemoryStore:
         _log.info("[记忆] 清空")
 
     def forget_expired(self) -> int:
-        """衰减+清理：importance 按天衰减，<0.1 物理删除。返删除数。"""
+        """衰减+清理：importance 按天衰减，<0.1 物理删除。返删除数。
+
+        批次C/P3-9（REVIEW-2026-09-05）：衰减锚定上次衰减时刻（实例内
+        ``_last_decay_at``）——旧版每次调用都从 last_recalled 全额重算衰减
+        （重复调用=同时段重复衰减），且 ``kept`` 恒非空使 _gen 无条件 bump
+        （无变化也置脏触发落盘）。
+        """
         now = time.time()
+        since = self._last_decay_at
+        self._last_decay_at = now
         kept, dropped = [], 0
         with self._lock:
+            changed = False
             for m in self._mem:
-                days = max(0.0, (now - m["last_recalled"]) / 86400.0)
-                m["importance"] *= _DECAY_PER_DAY ** days
-                if m["importance"] < _FORGET_BELOW:
+                anchor = max(float(m["last_recalled"]), since)
+                days = max(0.0, (now - anchor) / 86400.0)
+                old = float(m["importance"])
+                new = old * (_DECAY_PER_DAY ** days)
+                if abs(new - old) > 1e-9:
+                    changed = True
+                m["importance"] = new
+                if new < _FORGET_BELOW:
                     dropped += 1
                 else:
                     kept.append(m)
             self._mem = kept
             # 批次E/L12（REVIEW-2026-08-31）：衰减/删除也是变更——旧版不
             # bump _gen，纯遗忘永不触发 dirty，崩溃即丢（仅 shutdown 落盘）
-            if dropped or kept:
+            if dropped or changed:
                 self._gen += 1
         if dropped:
             _log.info("[记忆] 遗忘清理 %d 条", dropped)

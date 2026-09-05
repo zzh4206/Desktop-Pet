@@ -11,6 +11,7 @@
   },
   "provider": "ai",
   "presentation": "frames",
+  "user_name": "主人",
   "sleepy_idle_minutes": 10,
   "age_speed_multiplier": 1,
   "evolve_threshold_days": {
@@ -31,8 +32,7 @@
     "wander_idle_max_s": 15,
     "first_idle_s": 3,
     "edge_margin_px": 40,
-    "climb_min_depth_px": 30,
-    "pet_height_px": 64
+    "climb_min_depth_px": 30
   },
   "hotkeys": {
     "chat": "cmd+option+p",
@@ -63,7 +63,7 @@
       "firefox.exe",
       "brave.exe",
       "arc.exe",
-      "potplayer.exe"
+      "potplayermini64.exe"
     ],
     "eat_mouse_gain": {
       "fullness": 5,

@@ -153,6 +153,9 @@ def _ps_run(args: list, timeout: float = 10.0) -> tuple[bool, str]:
              "[Console]::OutputEncoding=[Text.Encoding]::UTF8;", *args],
             capture_output=True, text=True, timeout=timeout,
             encoding="utf-8", errors="replace",
+            # 批次C/P3-11（REVIEW-2026-09-05）：GUI 会话下每次工具调用
+            # 闪一闪控制台窗（无窗口的策略进程）
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return (r.returncode == 0, (r.stdout or r.stderr or "").strip())
     except subprocess.TimeoutExpired:
@@ -200,6 +203,7 @@ class ClipboardHandler:
                      "[Console]::In.ReadToEnd() | Set-Clipboard"],
                     input=text, text=True, timeout=10, encoding="utf-8",
                     errors="replace", capture_output=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,  # 批次C/P3-11
                 )
                 if r.returncode != 0:
                     return ToolResult(
@@ -344,6 +348,7 @@ def _volume_com(action: str, percent=None, mute=None):
 
     ole32 = ctypes.oledll.ole32
     ole32.CoInitializeEx(None, 2)   # APARTMENTTHREADED（幂等）
+    enum = device = endvol = None   # 批次C/P3-11：早退分支也要 Release
     try:
         enum = c_void_p()
         ole32.CoCreateInstance(
@@ -379,6 +384,15 @@ def _volume_com(action: str, percent=None, mute=None):
             return (False, f"GetScalar hr={hr:#x}")
         return (True, f"当前音量 {level.value * 100:.0f}%")
     finally:
+        # 批次C/P3-11（REVIEW-2026-09-05）：COM 对象逐个 Release（IUnknown
+        # vtable idx2）——旧版早退分支（hr!=0）泄漏引用计数，短命线程下靠
+        # 进程回收
+        for obj in (endvol, device, enum):
+            if obj is not None and obj.value:
+                try:
+                    call_as(obj, 2, ())
+                except Exception:
+                    pass
         ole32.CoUninitialize()
 
 
@@ -459,7 +473,8 @@ class ProcessHandler:
             return ToolResult(False, "需要 name 或 pid。")
         try:
             r = subprocess.run(argv, capture_output=True, text=True,
-                               timeout=10, encoding="utf-8", errors="replace")
+                               timeout=10, encoding="utf-8", errors="replace",
+                               creationflags=subprocess.CREATE_NO_WINDOW)  # 批次C/P3-11
         except (OSError, subprocess.TimeoutExpired) as e:
             return ToolResult(False, f"taskkill 失败: {e}")
         out = (r.stdout or r.stderr or "").strip()
@@ -484,6 +499,7 @@ class SleepHandler:
             subprocess.run(
                 ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
                 timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,  # 批次C/P3-11
             )
         except (OSError, subprocess.TimeoutExpired) as e:
             return ToolResult(False, f"睡眠失败: {e}")

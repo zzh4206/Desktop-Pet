@@ -179,7 +179,9 @@ with tempfile.TemporaryDirectory() as d:
 
     obv_seen: list = []
     _orig_obv = ce.obvious_emotion
-    ce.obvious_emotion = lambda t: obv_seen.append(t) or None
+    # 批次C/P3-17：app 即时路径显式传 model_version——lambda 补齐签名
+    ce.obvious_emotion = lambda t, model_version=1: (
+        obv_seen.append((t, model_version)) or None)
 
     def _mk_engine(version):
         return types.SimpleNamespace(
@@ -197,7 +199,8 @@ with tempfile.TemporaryDirectory() as d:
         check("M10c v2 fallback 不被 obvious_emotion 短路", not obv_seen)
         fake_ev._chat_emotion_engine = _mk_engine(1)
         app_mod.PetApp._evaluate_message_emotion(fake_ev)
-        check("M10d v1 fallback 仍走 obvious 兜底", len(obv_seen) == 1)
+        check("M10d v1 fallback 仍走 obvious 兜底",
+              len(obv_seen) == 1 and obv_seen[0][1] == 1)
     finally:
         ce.obvious_emotion = _orig_obv
 

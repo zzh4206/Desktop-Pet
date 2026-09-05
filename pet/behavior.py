@@ -107,6 +107,9 @@ class BehaviorFSM:
         self._speed = float(cfg.get("walk_speed", 120))        # px/s
         self._follow_speed = float(cfg.get("follow_speed", 600))  # px/s（follow 跟手，远快于 walk）
         self._climb_min_depth = float(cfg.get("climb_min_depth_px", _CLIMB_MIN_DEPTH))
+        # P3-10（REVIEW-2026-09-05）：pet_height_px 只是启动喂真实显示尺寸
+        # （app.set_pet_height(window.height())）前的初始兜底——app 启动即
+        # 覆盖并随进化档更新，改它不改变运行值（config.example 已移除该键）
         self._pet_height = float(cfg.get("pet_height_px", _PET_HEIGHT))
         self._idle_min = float(cfg.get("wander_idle_min_s", 5))
         self._idle_max = float(cfg.get("wander_idle_max_s", 15))
@@ -391,6 +394,9 @@ class BehaviorFSM:
         elif event == "fullscreen_off":
             self._suppressed = False
         elif event == "follow_toggle":
+            # P3-25（REVIEW-2026-09-05）：生产路径只发 motion_mode:<mode>
+            # （app._set_motion_mode），本分支仅 test_v03_fsm 在用——保留
+            # 作 API 兼容，勿再新增调用
             self._follow = not self._follow
             self._motion_mode = "follow" if self._follow else "free"
         elif event.startswith("motion_mode:"):
@@ -542,12 +548,20 @@ class BehaviorFSM:
         """单个子步（dt ≤ 0.05）的模式分派——原 step() 主体。"""
         # 防御钳制：任何状态下都在工作区内（防偶发消失）
         # y 下限 = 工作区顶+身位（头顶齐屏顶），与 drag_move/_step_air 撞顶
-        # 同语义——脚贴屏顶时头已穿出工作区顶，裸 work_area.y 会漏钳
+        # 同语义——脚贴屏顶时头已穿出工作区顶，裸 work_area.y 会漏钳。
+        # 批次C/P3-13（REVIEW-2026-09-05）：DRAG 态只钳 x——drag_move 已钳
+        # 危险方向（顶），此处再钳工作区底会与 app 的直挪窗位每 tick 拔河
+        # （拖过上下停靠任务栏时 20Hz 抖动、落点强制弹回）
         x, y = self._pos
         cx = self._clamp_x(x)
-        cy = min(max(y, self._work_area["y"] + self._pet_height), self._bottom())
-        if (cx, cy) != (x, y):
-            self._pos = (cx, cy)
+        if self._mode == _DRAG:
+            if (cx, y) != (x, y):
+                self._pos = (cx, y)
+        else:
+            cy = min(max(y, self._work_area["y"] + self._pet_height),
+                     self._bottom())
+            if (cx, cy) != (x, y):
+                self._pos = (cx, cy)
 
         # v0.7 吃鼠标态：冻结——不出 WANDER/物理/攀爬，就地咀嚼。
         # 返回 EAT_MOUSE action（app 仅按 fsm.pos 同步窗位=不动；
