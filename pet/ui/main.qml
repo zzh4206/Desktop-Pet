@@ -87,18 +87,48 @@ ApplicationWindow {
                         leftPadding: 12
                         rightPadding: 12
 
-                        // 头像位：pet=宠物 emoji 底；user=首字母圆标
-                        Rectangle {
+                        // 头像位：pet=宠物立绘（缺图回退 🐱）；user=首字母圆标
+                        Item {
                             id: avatar
-                            width: 30; height: 30; radius: 15
+                            width: 30; height: 30
                             anchors.verticalCenter: parent.verticalCenter
-                            color: model.role === "user" ? "#c8d4ea" : root.cAccent
-                            readonly property string petFace: "🐱"
-                            Text {
-                                anchors.centerIn: parent
-                                text: model.role === "user" ? "我" : parent.petFace
-                                font.pixelSize: model.role === "user" ? 12 : 18
-                                color: model.role === "user" ? "#44597e" : "white"
+
+                            // user：首字母圆标
+                            Rectangle {
+                                visible: model.role === "user"
+                                anchors.fill: parent
+                                radius: 15
+                                color: "#c8d4ea"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "我"
+                                    font.pixelSize: 12
+                                    color: "#44597e"
+                                }
+                            }
+                            // pet：当前立绘（透明底等比缩放）
+                            Image {
+                                visible: model.role !== "user"
+                                         && Chat.petAvatar !== ""
+                                anchors.fill: parent
+                                source: Chat.petAvatar
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
+                                mipmap: true
+                            }
+                            // pet 回退：🐱 圆标
+                            Rectangle {
+                                visible: model.role !== "user"
+                                         && Chat.petAvatar === ""
+                                anchors.fill: parent
+                                radius: 15
+                                color: root.cAccent
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "🐱"
+                                    font.pixelSize: 18
+                                    color: "white"
+                                }
                             }
                         }
 
@@ -157,15 +187,28 @@ ApplicationWindow {
                         leftPadding: 12
                         rightPadding: 12
 
-                        Rectangle {  // pet 头像
-                            width: 30; height: 30; radius: 15
+                        Item {  // pet 头像
+                            width: 30; height: 30
                             anchors.verticalCenter: parent.verticalCenter
-                            color: root.cAccent
-                            Text {
-                                anchors.centerIn: parent
-                                text: "🐱"
-                                font.pixelSize: 18
-                                color: "white"
+                            Image {
+                                visible: Chat.petAvatar !== ""
+                                anchors.fill: parent
+                                source: Chat.petAvatar
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
+                                mipmap: true
+                            }
+                            Rectangle {
+                                visible: Chat.petAvatar === ""
+                                anchors.fill: parent
+                                radius: 15
+                                color: root.cAccent
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "🐱"
+                                    font.pixelSize: 18
+                                    color: "white"
+                                }
                             }
                         }
 

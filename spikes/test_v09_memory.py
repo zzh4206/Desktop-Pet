@@ -237,8 +237,12 @@ def main() -> int:
 
     # dragEnter：本地文件 mime → 接受
     from PySide6.QtGui import QDragEnterEvent
+    # 批次G/实机：拖放路径按平台——win 用 C:/…，mac/linux 用 /tmp/…
+    # （mac 上 QUrl.fromLocalFile("C:/…").toLocalFile() 会带前导斜杠，
+    # 与 win 断言值不一致 → 用平台原生路径保证 round-trip）
+    _drop_path = "C:/tmp/test.txt" if sys.platform == "win32" else "/tmp/test.txt"
     md = QMimeData()
-    md.setUrls([QUrl.fromLocalFile("C:/tmp/test.txt")])
+    md.setUrls([QUrl.fromLocalFile(_drop_path)])
     ev_enter = QDragEnterEvent(
         win.rect().center(), Qt.CopyAction, md,
         Qt.LeftButton, Qt.NoModifier,
@@ -256,7 +260,7 @@ def main() -> int:
         Qt.LeftButton, Qt.NoModifier, QEvent.Drop,
     )
     win.dropEvent(ev_drop)
-    check("T12 dropEvent 发 fileDropped", dropped == ["C:/tmp/test.txt"])
+    check("T12 dropEvent 发 fileDropped", dropped == [_drop_path])
 
     # ---- T13 批次B/M3（REVIEW-2026-08-31）：损坏记忆档守卫 ----
     # 顶层非 dict（合法 JSON 如 []）旧版 data.get AttributeError 崩 _setup_chat

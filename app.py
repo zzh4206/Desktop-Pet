@@ -66,7 +66,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 from pet import __version__ as PKG_VERSION
-from pet.asset_provider import AIArtProvider, EmojiProvider
+from pet.asset_provider import AIArtProvider, EmojiProvider, _mood_from_state
 from pet.behavior import ActionType, BehaviorFSM
 from pet.bubble import BubbleType, BubbleWidget
 from pet.config import load_config
@@ -241,6 +241,9 @@ class PetApp:
         self._mem_window = None
         self._mem_engine = None
         self._mem_bridge = None
+        self._status_window = None
+        self._status_engine = None
+        self._status_bridge = None
         # v0.3 气泡跟随宠物（§2.4 头顶 20px / 靠顶翻下）
         self.window.petMoved.connect(self._on_pet_moved)
 
@@ -330,6 +333,7 @@ class PetApp:
         self.store.on_change(self.window.on_state_change)
         self.store.on_change(self.fsm.on_state_change)
         self.store.on_change(self._on_state_changed_persist)
+        self.store.on_change(lambda _s: self._sync_chat_avatar())
         # 用当前 state 调制一次（启动即对齐数值，不等首次衰减）
         self.fsm.on_state_change(self.store.get())
 
@@ -442,6 +446,11 @@ class PetApp:
             )
             self._perm_bridge = PermBridge(self.adapter)
             register_perm_singleton(self._perm_bridge)
+        # v0.15 状态板：诊断可视化（无需 key 也可用，故与 mem/perm 同级预注册）
+        from pet.ui.status_bridge import StatusBridge, register_status_singleton
+        self._status_bridge = StatusBridge(self._status_rows)
+        register_status_singleton(self._status_bridge)
+        self.tray.set_status_callback(self._show_status)
 
         providers_cfg = self.cfg.get("llm", {}).get("providers", {})
         # 扫描已注入 key 的 provider（Keychain + env）
@@ -531,6 +540,28 @@ class PetApp:
             return self.adapter.get_llm_key(provider, env_var) or text
         return None
 
+    def _chat_avatar_url(self) -> str:
+        """当前宠物立绘 → file:// URL（聊天面板"对方"头像）。
+
+        按当前 state 经 provider 解析静帧立绘；emoji provider/缺图返回空串
+        （QML 回退 🐱）。异常只降级不崩。
+        """
+        try:
+            sprite = self.provider.get_static(self.store.get())
+            path = getattr(sprite, "path", "") or ""
+            if path and os.path.isfile(path):
+                from PySide6.QtCore import QUrl
+
+                return QUrl.fromLocalFile(path).toString()
+        except Exception:
+            self.logger.warning("聊天头像立绘解析失败", exc_info=True)
+        return ""
+
+    def _sync_chat_avatar(self) -> None:
+        """把当前立绘路径推给聊天面板（进化/衰减/情绪变化时经 on_change 触发）。"""
+        if self._chat_bridge is not None:
+            self._chat_bridge.set_pet_avatar(self._chat_avatar_url())
+
     def _build_chat_panel(self, registry) -> None:
         """载入 QML 聊天面板（不可见，托盘/聚焦唤出）。
 
@@ -560,6 +591,8 @@ class PetApp:
         # v0.6 follow-up：用户消息含"去吃饭"等 → 30min 后回访（启发式）
         if self._chat_bridge is not None:
             self._chat_bridge.on_user_message = self._on_user_message
+        # 聊天面板"对方"头像 = 当前宠物立绘（首帧同步；后续经 on_change 更新）
+        self._sync_chat_avatar()
 
     def _make_tool_context(self) -> ToolContext:
         """按需取当前 state 作为工具上下文（v0.4 工具不真用 state）。"""
@@ -797,6 +830,132 @@ class PetApp:
             "开机自启已关闭" if ok else "自启设置失败",
             anchor=self._pet_anchor(),
         )
+
+    def _status_rows(self, dev_mode: bool = False) -> list:
+        """状态板行数据（诊断可视化用）。每段 try/except 兜底，绝不崩。
+
+        默认仅展示「养成」；行为/传感器/聊天情绪/呈现/主动关怀均为开发
+        诊断项，dev_mode=True 时才追加。"""
+        rows: list = []
+        # ---- 养成 ----
+        try:
+            state = self.store.get()
+            sc = self.cfg.get("score", {})
+            score = (float(sc.get("mood_weight", .4)) * state.mood
+                     + float(sc.get("fullness_weight", .4)) * state.fullness
+                     + float(sc.get("cleanliness_weight", .2)) * state.cleanliness)
+            raw_sleepy = float(self.cfg.get("sleepy_idle_minutes", 10))
+            sleepy_s = raw_sleepy * 60 if raw_sleepy > 0 else None
+            mood = _mood_from_state(state, self.sensors.idle_time, sleepy_s).value
+            healthy_thr = float(sc.get("healthy_threshold", 70))
+
+            rows.append({"type": "section", "name": "养成"})
+            rows.append({"type": "field", "name": "阶段", "value": state.stage.value, "level": "ok"})
+            rows.append({"type": "field", "name": "分支", "value": state.branch.value,
+                         "level": "ok" if state.branch.value == "healthy" else "warn"})
+            rows.append({"type": "field", "name": "心情", "value": f"{state.mood:.1f} · {mood}", "level": "ok"})
+            rows.append({"type": "field", "name": "饱食", "value": f"{state.fullness:.1f}",
+                         "level": "warn" if state.fullness < 20 else "ok"})
+            rows.append({"type": "field", "name": "清洁", "value": f"{state.cleanliness:.1f}",
+                         "level": "warn" if state.cleanliness < 20 else "ok"})
+            rows.append({"type": "field", "name": "年龄", "value": f"{state.age:.1f} 天", "level": "ok"})
+            rows.append({"type": "field", "name": "养护分", "value": f"{score:.1f}",
+                         "level": "ok" if score >= healthy_thr else "warn"})
+        except Exception as exc:
+            rows.append({"type": "field", "name": "养成", "value": f"读取失败 {exc}", "level": "bad"})
+
+        # ---- 行为（开发模式） ----
+        if dev_mode:
+            try:
+                fsm = self.fsm
+                cx, by = fsm.pos
+                vx, vy = fsm.velocity
+                rows.append({"type": "section", "name": "行为"})
+                rows.append({"type": "field", "name": "FSM 状态", "value": fsm.mode, "level": "ok"})
+                rows.append({"type": "field", "name": "移动模式", "value": fsm.motion_mode, "level": "ok"})
+                rows.append({"type": "field", "name": "位置", "value": f"({cx:.0f}, {by:.0f})", "level": "ok"})
+                rows.append({"type": "field", "name": "速度", "value": f"({vx:.0f}, {vy:.0f}) px/s", "level": "ok"})
+            except Exception as exc:
+                rows.append({"type": "field", "name": "行为", "value": f"读取失败 {exc}", "level": "bad"})
+
+        # ---- 传感器（开发模式） ----
+        if dev_mode:
+            try:
+                idle = float(getattr(self.sensors, "idle_time", 0.0))
+                mp = getattr(self.sensors, "mouse_pos", (0, 0))
+                fs = bool(getattr(self, "_fullscreen", False))
+                rows.append({"type": "section", "name": "传感器"})
+                rows.append({"type": "field", "name": "系统空闲", "value": f"{idle:.1f}s", "level": "ok"})
+                rows.append({"type": "field", "name": "鼠标", "value": f"({int(mp[0])}, {int(mp[1])})", "level": "ok"})
+                rows.append({"type": "field", "name": "全屏", "value": "是" if fs else "否",
+                             "level": "warn" if fs else "ok"})
+                if sys.platform == "darwin":
+                    try:
+                        from pet.mouse_lock_mac import frontmost_app_name
+                        rows.append({"type": "field", "name": "前台应用", "value": frontmost_app_name() or "-", "level": "ok"})
+                    except Exception:
+                        pass
+            except Exception as exc:
+                rows.append({"type": "field", "name": "传感器", "value": f"读取失败 {exc}", "level": "bad"})
+
+        # ---- 聊天情绪（开发模式） ----
+        if dev_mode:
+            try:
+                engine = self._chat_emotion_engine
+                store = self._chat_emotion_store
+                rows.append({"type": "section", "name": "聊天情绪"})
+                ver = getattr(engine, "version", None)
+                rows.append({"type": "field", "name": "引擎", "value": f"v{ver}" if ver else "禁用",
+                             "level": "ok" if ver else "warn"})
+                rows.append({"type": "field", "name": "当前情绪", "value": self._chat_emotion_active or "neutral", "level": "ok"})
+                rows.append({"type": "field", "name": "已存消息", "value": str(len(store.messages) if store else 0), "level": "ok"})
+            except Exception as exc:
+                rows.append({"type": "field", "name": "聊天情绪", "value": f"读取失败 {exc}", "level": "bad"})
+
+        # ---- 呈现（开发模式） ----
+        if dev_mode:
+            try:
+                rows.append({"type": "section", "name": "呈现"})
+                rows.append({"type": "field", "name": "立绘来源", "value": self.cfg.get("provider", "emoji"), "level": "ok"})
+                rows.append({"type": "field", "name": "展示后端", "value": self.cfg.get("presentation", "frames"), "level": "ok"})
+                w = self.window
+                rows.append({"type": "field", "name": "窗口", "value": f"{w.width()}×{w.height()} @ ({w.x()},{w.y()})", "level": "ok"})
+            except Exception as exc:
+                rows.append({"type": "field", "name": "呈现", "value": f"读取失败 {exc}", "level": "bad"})
+
+        # ---- 主动关怀（开发模式） ----
+        if dev_mode:
+            try:
+                proactive = getattr(self, "_proactive", None)
+                eat = bool(getattr(getattr(proactive, "_eat_session", None), "active", False))
+                rows.append({"type": "section", "name": "主动关怀"})
+                rows.append({"type": "field", "name": "吃鼠标", "value": "锁定中" if eat else "空闲",
+                             "level": "warn" if eat else "ok"})
+                nw = getattr(proactive, "_next_wake_at", None)
+                if nw:
+                    import time as _t
+                    secs = float(nw) - _t.time()
+                    rows.append({"type": "field", "name": "下次唤醒",
+                                 "value": f"{int(secs)}s 后" if secs >= 0 else "待定", "level": "ok"})
+                else:
+                    rows.append({"type": "field", "name": "下次唤醒", "value": "未排期", "level": "ok"})
+            except Exception as exc:
+                rows.append({"type": "field", "name": "主动关怀", "value": f"读取失败 {exc}", "level": "bad"})
+
+        return rows
+
+    def _show_status(self) -> None:
+        """v0.15 状态板（托盘'状态板'唤出；诊断可视化内部状态）。"""
+        if self._status_window is None:
+            from pet.ui.status_bridge import load_status_qml
+            self._status_engine, self._status_window = load_status_qml()
+        if self._status_window is None:
+            self.bubble.show("状态板加载失败～", anchor=self._pet_anchor())
+            return
+        self._status_bridge.refresh()
+        self._status_window.show()
+        self._status_window.raise_()
+        self._status_window.requestActivate()
 
     def _show_mem(self) -> None:
         """v0.9 记忆管理页（托盘'记忆管理'唤出；查看/删除/清空）。

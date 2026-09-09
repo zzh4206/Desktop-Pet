@@ -52,12 +52,13 @@ def section_structural() -> None:
     import Quartz
     key_bit = Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
     check("A2 鼠标 mask 不含键盘位（铁律1）", not (m._MOUSE_MASK & key_bit))
-    check("A3 键盘 mask 仅 KeyDown", m._KEY_MASK == key_bit)
-
-    # A4 热键常量：T=17，修饰=Cmd|Option
-    check("A4 吐出热键 T keycode=17", m._SPIT_KEYCODE == 17)
-    want = Quartz.kCGEventFlagMaskCommand | Quartz.kCGEventFlagMaskAlternate
-    check("A4 吐出热键修饰=Cmd|Option", m._SPIT_FLAGS == want)
+    # A3/A4 吐出热键：v0.11 起改走 Carbon RegisterEventHotKey（hotkey_mac），
+    # 不再经 mouse_lock 键盘 listen-tap（_KEY_MASK/_SPIT_KEYCODE/_SPIT_FLAGS
+    # 随键盘 tap 一并移除）——验 parse_hotkey("cmd+option+t") 等价语义。
+    import pet.hotkey_mac as hk
+    mods, kc = hk.parse_hotkey("cmd+option+t")
+    check("A3 吐出热键 T keycode=0x11(17)", kc == 0x11)
+    check("A4 吐出热键修饰=Cmd|Option", mods == (hk.cmdKey | hk.alphaKey))
 
     # A5 _release 幂等（inactive 上调不崩）
     lk = m.MouseLockMac()

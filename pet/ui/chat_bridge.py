@@ -123,6 +123,7 @@ class ChatBridge(QAbstractListModel):
     streamingChanged = Signal()
     offlineRequested = Signal()
     failedReply = Signal(str)
+    petAvatarChanged = Signal()
 
     def __init__(self, client, registry, make_ctx, parent=None,
                  sum_client=None) -> None:
@@ -146,6 +147,7 @@ class ChatBridge(QAbstractListModel):
         self._dying = None
         self.on_user_message = None  # v0.6 可选钩子：app 侧 follow-up 启发式
         self._offline = False
+        self._pet_avatar = ""  # 对方头像 file:// URL；空=未注入（QML 回退 🐱）
 
     # ---- QAbstractListModel ----
     def roleNames(self):
@@ -180,6 +182,18 @@ class ChatBridge(QAbstractListModel):
         return _md_to_html(self._streaming) if self._streaming else ""
 
     streamingText = Property(str, fget=streamingText, notify=streamingChanged)
+
+    # ---- 宠物头像（对方立绘 → file:// URL，QML Image 显示）----
+    def petAvatar(self) -> str:
+        return self._pet_avatar
+
+    def set_pet_avatar(self, url: str) -> None:
+        url = url or ""
+        if url != self._pet_avatar:
+            self._pet_avatar = url
+            self.petAvatarChanged.emit()
+
+    petAvatar = Property(str, fget=petAvatar, notify=petAvatarChanged)
 
     # ---- 发送一轮 ----
     @Slot(str, result=bool)
