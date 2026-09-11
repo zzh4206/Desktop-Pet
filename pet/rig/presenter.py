@@ -34,6 +34,7 @@ from PySide6.QtGui import QFont, QImage
 
 from ..asset_provider import SpriteRef
 from ..window import WindowBase
+from .motion import MotionEngine, MotionInputs
 from .spec import RigSpec, load_rig_spec
 
 log = logging.getLogger("pet")
@@ -121,8 +122,12 @@ class RigWindow(WindowBase):
         self._fade_ms = 110
         self._src_size_cache: dict[str, tuple[int, int]] = {}
         self._air_prev = False            # 空中标志边沿检测（落地压扁）
+        self._contact = 1.0               # P3 接触阴影：离地→收缩系数 lerp
         self._walk_sprite = None          # v0.14.4 行走覆盖图（neutral 核心）
         self._walk_showing = False
+        self._engine = MotionEngine(spec) if spec is not None else None
+        self._motion_inputs = MotionInputs()
+        self._motion_timer: QTimer | None = None
         if spec is not None:
             if defer_quick:
                 # 引擎延至事件循环首拍（见 build_rig_window docstring：
@@ -191,6 +196,10 @@ class RigWindow(WindowBase):
             self._label.hide()            # 场景接管后位图 label 不再参与
             self._quick_ok = True
             self._rig_pending = False
+            self._motion_timer = QTimer(self)
+            self._motion_timer.setInterval(33)
+            self._motion_timer.timeout.connect(self._motion_tick)
+            self._motion_timer.start()
             self._mix_anim = QPropertyAnimation(self._root, b"mix", self)
             self._root.setProperty("partsModel", parts)
             self._set_prop("facing", int(getattr(self, "_facing", 1)))
@@ -232,6 +241,7 @@ class RigWindow(WindowBase):
             return
         old = self._spec.stage if self._spec else None
         self._spec = spec
+        self._engine = MotionEngine(spec)
         self._src_size_cache.clear()
         log.info("rig 换档 %s → %s：%d figures / %d parts",
                  old, stage, len(spec.figures), len(spec.parts))
@@ -366,6 +376,8 @@ class RigWindow(WindowBase):
         """
         if d not in (-1, 1) or d == getattr(self, "_facing", 1):
             return
+        if self._motion_inputs is not None:
+            self._motion_inputs.facing = int(d)
         if self.rig_active and (self._walk_showing or self._frames):
             self._facing = d
             self._set_prop("facing", int(d))
@@ -376,20 +388,78 @@ class RigWindow(WindowBase):
 
     # ---------- v0.13 运动参数钩子（app._tick 每 tick 调用） ----------
     def set_motion_params(self, tilt_deg: float = 0.0, walking: bool = False,
-                          airborne: bool = False,
-                          walk_hz: float = 0.0) -> None:
+                          airborne: bool = False, walk_hz: float = 0.0,
+                          wind_gain: float = 1.0,
+                          wind_bias_deg: float = 0.0) -> None:
         """喂 FSM 实况：倾斜目标角 / 行走律动开关 / 空中标志（落地沿→squash）/
-        步态频率 Hz（v0.14，limb 部件与 bob/rot 共用；0=部件周期缺省）。"""
+        步态频率 Hz（v0.14，limb 部件与 bob/rot 共用；0=部件周期缺省）/
+        风通道（v0.16：sway 幅度倍率 + 顺风偏置）。
+
+        v0.15：运动数学已下沉 motion.MotionEngine——此处只更新引擎输入 +
+        回写镜像属性（bodyTilt/walking/walkHz/squashAt 供测试与门禁观察），
+        每帧姿态由 _motion_tick → engine.step 产出。
+        """
         if not self.rig_active:
             return
+        if self._motion_inputs is not None:
+            self._motion_inputs.tilt_deg = float(tilt_deg)
+            self._motion_inputs.walking = bool(walking)
+            self._motion_inputs.walk_hz = float(walk_hz)
+            self._motion_inputs.facing = int(getattr(self, "_facing", 1))
+            self._motion_inputs.wind_gain = float(wind_gain)
+            self._motion_inputs.wind_bias_deg = float(wind_bias_deg)
         self._set_prop("bodyTilt", float(tilt_deg))
-        if bool(walking) != bool(self._root.property("walking")):
-            self._set_prop("walking", bool(walking))
+        self._set_prop("walking", bool(walking))
         self._set_prop("walkHz", float(walk_hz))
         self._walk_edge(bool(walking))
         if (not airborne) and self._air_prev:
-            self._root.squash()           # 空中→地面 边沿触发压扁回弹
+            if self._engine is not None:
+                self._engine.trigger_squash()
+            self._set_prop("squashAt",
+                           float(self._engine.squash_at
+                                 if self._engine is not None else 0.0))
         self._air_prev = bool(airborne)
+
+    # ---------- v0.17 光影通道 ----------
+    def set_shadow(self, alpha: float = 0.0, offset_x: float = 0.0,
+                   scale_x: float = 1.0, scale_y: float = 0.08,
+                   airborne: bool = False) -> None:
+        """太阳位置 → 地面阴影参数（写 QML 阴影项，见 pet/sun.py）。
+
+        太阳是慢变量，app._tick 每 tick 重算并推入；QML 阴影项贴窗口底部、
+        不受 bodyAngle/bodyScale 影响（影随太阳走，不随身体摇晃）。
+        P3 接触阴影：离地（airborne=被抛/下落）时影子收缩变淡（lerp 0.6→1.0，
+        设计 §4.5 随距地高度反比缩放）。
+        """
+        if not self.rig_active:
+            return
+        target = 0.6 if airborne else 1.0
+        self._contact += (target - self._contact) * 0.15   # ~330ms 平滑
+        k = self._contact
+        self._set_prop("shadowAlpha", float(alpha) * (0.6 + 0.4 * k))
+        self._set_prop("shadowOffsetX", float(offset_x))
+        self._set_prop("shadowScaleX", float(scale_x) * k)
+        self._set_prop("shadowScaleY", float(scale_y))
+
+    def _motion_tick(self) -> None:
+        """33ms 逻辑拍：推进运动引擎并推帧到 QML（对齐旧 QML interval=33）。"""
+        if not self.rig_active or self._engine is None:
+            return
+        frame = self._engine.step(self._motion_inputs, 33.0)
+        self._push_frame(frame)
+
+    def _push_frame(self, frame) -> None:
+        """把 MotionFrame 一次性写到 QML（body 变换 + 眨眼 + 部件角度）。"""
+        r = self._root
+        r.setProperty("bodyAngle", float(frame.body_angle))
+        r.setProperty("bodyScaleX", float(frame.body_scale_x))
+        r.setProperty("bodyScaleY", float(frame.body_scale_y))
+        r.setProperty("bodyY", float(frame.body_y))
+        r.setProperty("blinkOn", bool(frame.blink_on))
+        r.setProperty("partAngles", dict(frame.part_angles))
+        # 镜像属性（测试/门禁观察 gaitK/gaitPhase 的收敛与相位连续性）
+        r.setProperty("gaitK", float(self._engine.gait_k))
+        r.setProperty("gaitPhase", float(self._engine.gait_phase))
 
     def set_walk_figure(self, sprite) -> None:
         """行走覆盖图（v0.14.4）：walking 期间改显该 figure。

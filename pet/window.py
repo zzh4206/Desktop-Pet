@@ -53,6 +53,52 @@ def _mtime_cached(path: str) -> float:
     return mt
 
 
+class _GroundShadow(QWidget):
+    """地面阴影（v0.15.1 接回：新引擎光影通道 → 原有引擎 frames 的加法层）。
+
+    画在宠物脚底的一层半透明椭圆；alpha=0 即隐藏 —— 缺省零侵入、零渲染成本。
+    位置/尺寸随 ``Enrichment.shadow_*``（alpha/offset_x/scale_x/scale_y）逐拍更新。
+    """
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self._alpha = 0.0
+        self._offset_x = 0.0
+        self._scale_x = 1.0
+        self._scale_y = 0.08
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.hide()
+
+    def apply(self, alpha: float, offset_x: float,
+              scale_x: float, scale_y: float) -> None:
+        self._alpha = max(0.0, min(1.0, float(alpha)))
+        self._offset_x = float(offset_x)
+        self._scale_x = max(0.0, float(scale_x))
+        self._scale_y = max(0.0, float(scale_y))
+        self._reflow()
+        self.setVisible(self._alpha > 0.001)
+        if self.isVisible():
+            self.update()
+
+    def _reflow(self) -> None:
+        pw = max(1, self.parent().width())
+        ph = max(1, self.parent().height())
+        w = max(1, int(pw * self._scale_x))
+        h = max(2, int(pw * self._scale_y))
+        x = int((pw - w) / 2 + self._offset_x * pw)
+        y = ph - h
+        self.setGeometry(x, y, w, h)
+
+    def paintEvent(self, _event) -> None:
+        from PySide6.QtGui import QColor, QPainter
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, int(255 * self._alpha)))
+        p.drawEllipse(self.rect())
+
+
 class WindowBase(QWidget):
     """透明置顶浮窗薄基类（纯 Qt，无平台库）。mac/win 继承后做平台 polish。"""
 
@@ -89,6 +135,7 @@ class WindowBase(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
 
         self.resize(sprite.width, sprite.height)
+        self._shadow = _GroundShadow(self)   # 加法层：标签之下，脚底阴影
         self._label = QLabel(self)
         self._label.resize(sprite.width, sprite.height)
         self._label.setAlignment(Qt.AlignCenter)
@@ -466,13 +513,47 @@ class WindowBase(QWidget):
         return bool(getattr(self, "_frames", None))
 
     def set_motion_params(self, tilt_deg: float = 0.0, walking: bool = False,
-                          airborne: bool = False, walk_hz: float = 0.0) -> None:
-        """FSM 实况参数钩子（速度倾斜/行走律动/空中标志/步频）。
+                          airborne: bool = False, walk_hz: float = 0.0,
+                          wind_gain: float = 1.0,
+                          wind_bias_deg: float = 0.0) -> None:
+        """FSM 实况参数钩子（速度倾斜/行走律动/空中标志/步频/风通道）。
 
         frames 后端无逐帧变换需求 —— 基类 no-op 缺省即可被 _tick 无条件
         调用而零成本旁路；RigWindow 重写以驱动场景。
         """
         return None
+
+    def set_shadow(self, alpha: float = 0.0, offset_x: float = 0.0,
+                   scale_x: float = 1.0, scale_y: float = 0.08,
+                   airborne: bool = False) -> None:
+        """实时地面阴影（v0.17 光影通道，P3 接触阴影）。frames 后端无 QML 场景
+        → no-op；RigWindow 重写以驱动场景阴影项。"""
+        return None
+
+    def apply_enrichment(self, enrichment=None) -> None:
+        """新引擎有效部分（中间层 EngineBridge）产出的整身增量 → 叠加到 frames。
+
+        v0.15.1 接回：加法层，缺省/None = 零侵入；任何失败静默旁路（不阻断
+        原有引擎）。当前 frames 只应用「呼吸纵向浮动 body_y」+「地面阴影
+        shadow_*」两项安全增量；旋转 body_angle / 缩放 scale_x·scale_y /
+        部件角 part_angles 留给 rig 后端（QML）消费，不在此强塞 QLabel 变换。
+        """
+        if enrichment is None or getattr(self, "rig_active", False):
+            return
+        try:
+            # 呼吸纵向浮动（±3px）：整体 y 平移，脚底原点贴窗口底边。
+            self._label.move(0, int(round(getattr(enrichment, "body_y", 0.0))))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            sh = getattr(self, "_shadow", None)
+            if sh is not None:
+                sh.apply(getattr(enrichment, "shadow_alpha", 0.0),
+                         getattr(enrichment, "shadow_offset_x", 0.0),
+                         getattr(enrichment, "shadow_scale_x", 1.0),
+                         getattr(enrichment, "shadow_scale_y", 0.08))
+        except Exception:  # noqa: BLE001
+            pass
 
     def part_walk_active(self) -> bool:
         """当前展示 figure 是否可部件驱动步态（v0.14 paperdoll 路由查询）。

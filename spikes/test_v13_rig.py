@@ -259,6 +259,25 @@ def main() -> int:
     check("T8b airborne 下降沿→squash 可调且不崩",
           float(win._root.property("squashAt")) >= 0)
 
+    # ---- T8c 光影通道（v0.17：太阳→阴影参数写入 QML）----
+    win.set_shadow(alpha=0.4, offset_x=-0.05, scale_x=0.6, scale_y=0.07)
+    check("T8c 阴影参数写入",
+          abs(float(win._root.property("shadowAlpha")) - 0.4) < 1e-6
+          and abs(float(win._root.property("shadowOffsetX")) + 0.05) < 1e-6
+          and abs(float(win._root.property("shadowScaleX")) - 0.6) < 1e-6)
+
+    # ---- T8d/T8e 接触阴影（P3：离地→影子收缩变淡，落地恢复）----
+    for _ in range(30):
+        win.set_shadow(alpha=0.4, offset_x=-0.05, scale_x=0.6,
+                       scale_y=0.07, airborne=True)
+    check("T8d 离地接触阴影收缩（shadowScaleX 逼近 0.6×）",
+          float(win._root.property("shadowScaleX")) < 0.45)
+    for _ in range(30):
+        win.set_shadow(alpha=0.4, offset_x=-0.05, scale_x=0.6,
+                       scale_y=0.07, airborne=False)
+    check("T8e 落地接触阴影恢复（shadowScaleX 回 0.6）",
+          abs(float(win._root.property("shadowScaleX")) - 0.6) < 0.02)
+
     # ---- T9 emoji 降级可见性切换 ----
     emo = SpriteRef(path="🐱", width=192, height=192)
     win.set_sprite(emo)

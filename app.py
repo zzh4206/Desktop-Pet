@@ -76,6 +76,11 @@ from pet.pet_state import Mood, PetStateStore, Stage
 from pet.platform import get_platform_adapter
 from pet.tools_schema import ToolContext, ToolRegistry
 from pet.tray import TrayManager
+# 新引擎有效部分经中间层 EngineBridge 接入（原有引擎 frames 恒为兜底）。
+# v0.15.1 接回：motion/wind/sun 以「可选叠加」注入，任一环失败即降级恒等。
+from pet.engine_bridge import (
+    ChannelEnricher, EngineBridge, MotionEnricher, NullEnricher,
+)
 
 # 版本单一源 = pet/__init__.__version__（L2 治理：旧版三处硬编码漂移到
 # v0.7.4+win / 0.9.3 / 幻影 v0.12.1 注释）。发版只改 pet/__init__.py。
@@ -120,6 +125,8 @@ class PetApp:
         paths = adapter.get_paths()
         self._paths = paths   # v0.9.2(H1 修)：_setup_chat 等方法可引用
         self.cfg = load_config(paths["config_path"])
+        # v0.15.1 接回：风/光影 + 运动引擎统一经中间层 EngineBridge 装配
+        # （见 _build_engine_bridge，在 store 就绪后调用；任一环失败恒等）。
         # config log_level 校准 logger 级别（main 里 setup_logging 用默认 INFO）
         if not verbose and self.cfg.get("log_level"):
             lvl_map = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
@@ -146,6 +153,9 @@ class PetApp:
         # 养成 store：启动 load（无存档→default）；重启数值一致靠此
         self.store = PetStateStore.load(self._state_path)
         self._gains = dict(self.cfg.get("interaction_gain", {}))
+        # v0.15.1 接回：新引擎有效部分（motion + wind/sun）经中间层 EngineBridge
+        # 叠加到原有引擎 frames；任一环失败 → 恒等（原有引擎兜底，不阻断启动）。
+        self._bridge = self._build_engine_bridge()
 
         self.sensors = adapter.get_sensors()  # 注入式，不直 import sensor_mac
         # v0.10 provider 挂 idle_fn：idle 超时 → SLEEPY 立绘（_mood_from_state）
@@ -154,24 +164,14 @@ class PetApp:
         self.fsm = BehaviorFSM(dict(wa), self.cfg.get("behavior", {}))
 
         # v0.13 展示后端选择：presentation=frames（默认，旧行为不变）| rig
-        # （分层绑骨：交叉淡化+常驻微动+部件弹簧；资产/环境不满足自动回退，
-        # 降级铁律收敛在 pet.rig.presenter.build_rig_window 一处）。
-        # v0.14 paperdoll：第三档——在 rig 之上把行走改为部件驱动优先
-        # （figure 挂 limb 部件时程序化正面步态，无 limb 自动回退帧路径）。
-        # v0.13.3：defer_quick=True —— rig 引擎延至事件循环首拍，保证
-        # _setup_chat 的 QML singleton 注册先于全进程首个 QML 引擎
-        # （app.py:349 同源约束，否则聊天面板载入失败）。
+        # （分层绑骨）| paperdoll（部件步态）。
+        # v0.15.1 接回：frames 仍为唯一呈现后端（原有引擎兜底）；新引擎有效
+        # 部分经中间层 EngineBridge 以「可选叠加」注入（见 _tick）。rig/
+        # paperdoll 展示后端暂不恢复（部件步态 / 2 帧走路仍未达标，§七·7.2）。
         sprite0 = self.provider.get_static(self.store.get())
-        presentation = self.cfg.get("presentation", "frames")
-        if presentation in ("rig", "paperdoll"):
-            from pet.rig.presenter import build_rig_window
-
-            self.window = build_rig_window(
-                adapter.create_pet_window, sprite0,
-                self.store.get().stage.value, defer_quick=True)
-        else:
-            self.window = adapter.create_pet_window(sprite0)
-        self._part_walk = presentation == "paperdoll"
+        presentation = "frames"   # 原：self.cfg.get("presentation", "frames")
+        self.window = adapter.create_pet_window(sprite0)
+        self._part_walk = False   # 原：presentation == "paperdoll"
         # 批次L/N3（实机审查 2026-08-31）：_anim_key 初始化——旧版首赋值在
         # _play_key，行走先于首个随机小动作时 _frame_tick 裸读
         # self._anim_key 每拍 AttributeError：FSM 照走、窗口位置同步被跳过
@@ -368,6 +368,30 @@ class PetApp:
         self._sig_timer.timeout.connect(lambda: None)
         self._sig_timer.start(200)
         signal.signal(signal.SIGINT, lambda *_: self.shutdown())
+
+    def _build_engine_bridge(self) -> EngineBridge:
+        """装配中间层（原有引擎 frames ← EngineBridge ← 新引擎有效部分）。
+
+        motion（呼吸/眨眼/squash/倾斜）+ wind/sun 两条通道各自独立兜底：
+        任一环抛错 → 该环降级为恒等/静态，返回的 EngineBridge 永不抛错。
+        spec 为 None（无 manifest）时 motion 仍可出整身增量（呼吸/眨眼/
+        squash），只是无部件角 —— 不因此回退。
+        """
+        enricher = NullEnricher()
+        try:
+            from pet.rig.spec import load_rig_spec
+            rig_root = os.path.join(os.path.dirname(__file__), "assets", "rig")
+            stage = self.store.get().stage.value
+            spec = load_rig_spec(os.path.join(rig_root, stage), stage)
+            enricher = MotionEnricher(spec)
+        except Exception:
+            self.logger.warning("新引擎运动增强装配失败，回退恒等", exc_info=True)
+        try:
+            channels = ChannelEnricher(self.cfg)
+        except Exception:
+            self.logger.warning("新引擎风/光影通道装配失败，回退静态", exc_info=True)
+            channels = None
+        return EngineBridge(enricher, channels)
 
     def _pet_anchor(self) -> tuple:
         """气泡锚点：宠物当前 bottom_center + 窗口高。"""
@@ -1297,21 +1321,22 @@ class PetApp:
         mode = self.fsm.mode
         if mode == "eat_mouse" and getattr(self, "_fsm_last_mode", "") != "eat_mouse":
             self._proactive.eat_mouse_arrived()
-        # v0.13 rig 呈现层运动参数：速度倾斜/行走律动/空中标志/步频（frames
-        # 后端的基类 no-op 缺省让该调用在旧模式下零成本旁路）。
-        # v0.14.4 刻意先于 _frame_tick：walking 上升沿在此改显 neutral 覆盖
-        # 图，_frame_tick 的 part_walk_active 查询才能当拍生效（否则首拍
-        # 误播 walk 帧、下一拍再停）。
-        if getattr(self.window, "rig_active", False):
-            vx, _vy = self.fsm.velocity
-            tilt = max(-9.0, min(9.0, vx / 140.0))
-            walking = (mode == "walk"
-                       or (mode == "idle" and self.fsm.motion_mode == "follow"))
-            # v0.14 步频随速度：walk_speed 120px/s≈1.2Hz、follow 600≈2Hz 上限
-            hz = max(0.9, min(2.0, 0.9 + abs(vx) / 400.0))
-            self.window.set_motion_params(
-                tilt_deg=tilt, walking=walking, walk_hz=hz,
-                airborne=mode in ("fall", "thrown", "drag"))
+        # v0.15.1 接回：新引擎有效部分（motion + wind/sun）经中间层 EngineBridge
+        # 逐帧叠加到原有引擎 frames。风/光影逐拍刷新（内部节流）；落地沿
+        # squash 由 MotionEnricher 在 set_motion 的下降沿自触发。整块永不抛错。
+        self._bridge.refresh_channels()
+        vx, _vy = self.fsm.velocity
+        tilt = max(-9.0, min(9.0, vx / 140.0))
+        walking = (mode == "walk"
+                   or (mode == "idle" and self.fsm.motion_mode == "follow"))
+        hz = max(0.9, min(2.0, 0.9 + abs(vx) / 400.0))
+        wg, wb = self._bridge.wind()
+        self._bridge.set_motion(
+            tilt_deg=tilt, walking=walking, walk_hz=hz,
+            airborne=mode in ("fall", "thrown", "drag"),
+            wind_gain=wg, wind_bias_deg=wb)
+        enrichment = self._bridge.tick(dt * 1000.0)
+        self.window.apply_enrichment(enrichment)
         # v0.10.15 状态驱动帧动画（行走交替/下落/落地瞬帧/咀嚼循环）
         self._frame_tick(action, mode, getattr(self, "_fsm_last_mode", ""))
         self._fsm_last_mode = mode

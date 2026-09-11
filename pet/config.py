@@ -77,6 +77,14 @@ _SAFE_DEFAULTS: dict = {
         "mood_delta": {"happy": 4, "neutral": 0, "sad": -3,
                         "sleepy": -1, "hungry": -2},
     },
+    # v0.16 风通道：实时风力 → 立绘静止摆幅（Open-Meteo 免 key + 兜底）
+    "wind": {
+        "enabled": False, "poll_minutes": 20, "fallback_gain": 1.0,
+    },
+    # v0.17 光影通道：实时太阳位置 → 地面阴影（纯本地计算，无网络）
+    "sun": {
+        "enabled": False, "shadow_alpha": 0.4,
+    },
 }
 
 # 需校验的数值子段 schema（其余键 v0.2 不强校验）
@@ -244,6 +252,30 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             }, "required": ["happy", "neutral", "sad", "sleepy", "hungry"],
             "additionalProperties": False},
         }, "additionalProperties": False,
+    },
+    "wind": {
+        "type": "object",
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "latitude": {"type": "number", "minimum": -90, "maximum": 90},
+            "longitude": {"type": "number", "minimum": -180, "maximum": 180},
+            "poll_minutes": {"type": "number", "minimum": 5, "maximum": 1440},
+            "fallback_gain": {"type": "number", "minimum": 0.0,
+                              "maximum": 4.0},
+        },
+        "additionalProperties": False,
+    },
+    "sun": {
+        "type": "object",
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "latitude": {"type": "number", "minimum": -90, "maximum": 90},
+            "longitude": {"type": "number", "minimum": -180, "maximum": 180},
+            "timezone_offset": {"type": ["number", "null"],
+                                "minimum": -14.0, "maximum": 14.0},
+            "shadow_alpha": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        },
+        "additionalProperties": False,
     },
 }
 

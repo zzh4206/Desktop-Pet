@@ -23,6 +23,23 @@ KEY = os.environ.get("QUANZIL_API_KEY", "").strip()
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FR = os.path.join(REPO, "assets", "frames")
 QA = os.path.join(REPO, "spikes", "_qa")
+
+
+def _stage_from_argv() -> str:
+    """--stage young|adult|final（默认 final，兼容旧命令行）。
+
+    v0.15.1：原脚本硬编码 final，导致 adult/young 只有 2 帧走路（踏步缺失）。
+    加 --stage 后可按阶段补中间帧。
+    """
+    if "--stage" in sys.argv:
+        i = sys.argv.index("--stage")
+        if i + 1 >= len(sys.argv):
+            raise SystemExit("--stage 需要值，如 --stage adult")
+        s = sys.argv[i + 1]
+        if s not in ("young", "adult", "final"):
+            raise SystemExit(f"未知 stage: {s}（可选 young|adult|final）")
+        return s
+    return "final"
 PROMPT = (
     "These are two frames of the SAME anime character walking in side view: "
     "IMAGE 1 is stride pose A, IMAGE 2 is the opposite stride pose B. "
@@ -147,6 +164,7 @@ SUBDIVIDE_PAIRS = [
 def subdivide() -> int:
     global PROMPT
     base_prompt = PROMPT
+    stage = _stage_from_argv()
     # 批次C/P3-20（REVIEW-2026-09-05）：--only 缺值 IndexError → 明确报错
     _ai = sys.argv.index("--only") if "--only" in sys.argv else -1
     if _ai >= 0:
@@ -158,13 +176,13 @@ def subdivide() -> int:
     for out_name, ra_name, rb_name in SUBDIVIDE_PAIRS:
         if only and out_name != only:
             continue
-        out_path = os.path.join(FR, f"final_{out_name}.png")
+        out_path = os.path.join(FR, f"{stage}_{out_name}.png")
         if os.path.isfile(out_path) and "--force" not in sys.argv \
                 and not only:
             print(f"{out_name} 已存在，跳过（--force 重生成）")
             continue
-        ra = os.path.join(FR, f"final_{ra_name}.png")
-        rb = os.path.join(FR, f"final_{rb_name}.png")
+        ra = os.path.join(FR, f"{stage}_{ra_name}.png")
+        rb = os.path.join(FR, f"{stage}_{rb_name}.png")
         PROMPT = base_prompt + PROMPT_MID_EXTRA
         for attempt in (1, 2, 3):
             print(f"细分生成 {out_name}（{ra_name} ↔ {rb_name}）第 {attempt} 次...")
@@ -177,7 +195,7 @@ def subdivide() -> int:
             print(f"  ⚠️ 透明占比仅 {transparent * 100:.1f}%（背景被画成实体），重试")
         else:
             raise SystemExit(f"{out_name} 连续 3 次背景不透明，请人工处理")
-        img.save(os.path.join(QA, f"_final_{out_name}_raw.png"))
+        img.save(os.path.join(QA, f"_{stage}_{out_name}_raw.png"))
         aligned = align_pair(Image.open(ra).convert("RGBA"),
                              Image.open(rb).convert("RGBA"), img)
         aligned.save(out_path)
@@ -187,7 +205,7 @@ def subdivide() -> int:
         t = im.copy(); t.thumbnail((10000, TH)); return t
     seq = ["walk_0", "walk_m1", "walk_0b", "walk_m2",
            "walk_1", "walk_m3", "walk_1b", "walk_m4", "walk_0"]
-    row = [th(Image.open(os.path.join(FR, f"final_{n}.png")).convert("RGBA"))
+    row = [th(Image.open(os.path.join(FR, f"{stage}_{n}.png")).convert("RGBA"))
            for n in seq]
     strip = Image.new("RGB", (sum(p.width for p in row) + 8 * len(row),
                               TH), (30, 30, 36, 255))
@@ -195,8 +213,8 @@ def subdivide() -> int:
     for p in row:
         strip.paste(p, (x, 0), p)
         x += p.width + 8
-    strip.save(os.path.join(QA, "walk_cycle_8f.png"))
-    print("QA 条带 walk_cycle_8f.png（八帧全环+w0 收口）")
+    strip.save(os.path.join(QA, f"walk_cycle_8f_{stage}.png"))
+    print(f"QA 条带 walk_cycle_8f_{stage}.png（八帧全环+w0 收口）")
     return 0
 
 
@@ -209,7 +227,7 @@ def main() -> int:
     # 批次G/rL3（REVIEW-2026-08-31）：帧文件按 stage 命名（无 branch
     # 维度）——旧版外层 for branch 循环两轮生成同一组文件（第二轮恒
     # "已存在跳过"），QA 条带同内容写两遍。去循环单次产出。
-    stage = "final"
+    stage = _stage_from_argv()
     p0 = os.path.join(FR, f"{stage}_walk_0.png")
     p1 = os.path.join(FR, f"{stage}_walk_1.png")
     ref0, ref1 = Image.open(p0).convert("RGBA"), Image.open(p1).convert("RGBA")
@@ -229,7 +247,7 @@ def main() -> int:
     def th(im):
         t = im.copy(); t.thumbnail((10000, TH)); return t
     seq = ["walk_0", "walk_0b", "walk_1", "walk_1b", "walk_0"]
-    row = [th(Image.open(os.path.join(FR, f"final_{n}.png")).convert("RGBA"))
+    row = [th(Image.open(os.path.join(FR, f"{stage}_{n}.png")).convert("RGBA"))
            for n in seq]
     strip = Image.new("RGB", (sum(p.width for p in row) + 8 * len(row),
                               TH), (30, 30, 36, 255))
@@ -237,8 +255,8 @@ def main() -> int:
     for p in row:
         strip.paste(p, (x, 0), p)
         x += p.width + 8
-    strip.save(os.path.join(QA, "walk_cycle_4f.png"))
-    print("QA 条带 walk_cycle_4f.png（顺序 w0,0b,w1,1b,w0）")
+    strip.save(os.path.join(QA, f"walk_cycle_4f_{stage}.png"))
+    print(f"QA 条带 walk_cycle_4f_{stage}.png（顺序 w0,0b,w1,1b,w0）")
     return 0
 
 

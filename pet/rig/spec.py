@@ -72,6 +72,20 @@ _MANIFEST_SCHEMA: dict = {
                     "kind": {"enum": ["sway", "limb", "blink"]},
                     "base_deg": {"type": "number", "minimum": -45,
                                  "maximum": 45},
+                    # v0.15（P2 弹簧+骨架）：parent=父子链挂点（缺省=根），
+                    # spring=弹簧-阻尼替代固定正弦（缺省=现状正弦）
+                    "parent": {"type": "string", "minLength": 1},
+                    "spring": {
+                        "type": "object",
+                        "properties": {
+                            "freq_hz": {"type": "number", "minimum": 0.1,
+                                        "maximum": 10},
+                            "damping_ratio": {"type": "number",
+                                              "minimum": 0.05, "maximum": 5},
+                        },
+                        "required": ["freq_hz", "damping_ratio"],
+                        "additionalProperties": False,
+                    },
                     # 批次G/rL5（REVIEW-2026-08-31）：拆件参数留痕段
                     # （seed/block/protect/claim/extended_up/trimmed）——
                     # 重切不再依赖逆向工程。运行期不消费，宽进
@@ -119,6 +133,9 @@ class RigPart:
     amp_deg: float = 0.0
     period_ms: float = 2600.0
     phase_ms: float = 0.0
+    parent: str = ""               # v0.15 父子链：另一部件 id（缺省=根/核心）
+    spring_freq_hz: float = 0.0    # >0 启用弹簧；0=现状固定正弦（等价）
+    spring_zeta: float = 0.7       # 阻尼比 ζ<1 欠阻尼=回弹
 
 
 @dataclass
@@ -182,6 +199,7 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
                         item["id"], item["px_rect"])
             continue
         sway = item.get("sway", {})
+        spring = item.get("spring", {})
         kind = item.get("kind", "sway")
         if kind == "limb":
             if not sway or float(sway.get("amp_deg", 0) or 0) <= 0 \
@@ -213,6 +231,9 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
             amp_deg=float(sway.get("amp_deg", 0.0)),
             period_ms=float(sway.get("period_ms", 2600.0)),
             phase_ms=float(sway.get("phase_ms", 0.0)),
+            parent=item.get("parent", ""),
+            spring_freq_hz=float(spring.get("freq_hz", 0.0) or 0.0),
+            spring_zeta=float(spring.get("damping_ratio", 0.7) or 0.7),
         ))
 
     return RigSpec(stage=stage, figures=figures, parts=parts)

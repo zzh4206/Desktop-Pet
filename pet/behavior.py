@@ -95,8 +95,8 @@ _log = logging.getLogger("pet")
 
 _CLIMB_MIN_DEPTH = 30.0    # 撞侧攀爬的深度阈值：脚下没入窗顶不足此值视为掠顶(落顶站定)
 _PET_HEIGHT = 96.0         # 宠物身位高（ADULT 显示尺寸）：窗底净空≥此值可钻过不爬
-_ANIM_MIN_S = 15.0         # 随机小动作间隔
-_ANIM_MAX_S = 35.0
+_ANIM_MIN_S = 20.0         # 随机小动作间隔（v0.15.1 15s→20s：节奏略放缓）
+_ANIM_MAX_S = 45.0
 _ANIM_NAMES = ("stretch", "roll", "blink")
 
 
