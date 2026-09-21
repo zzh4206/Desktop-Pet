@@ -1,0 +1,576 @@
+[
+  {
+    "id": "tail_seg1",
+    "z_order": 0,
+    "description": "藏于裙后、连接骨盆的尾根。",
+    "bbox_norm": [
+      0.55,
+      0.74,
+      0.75,
+      0.875
+    ],
+    "crop_rect_px": [
+      674,
+      930,
+      990,
+      1143
+    ],
+    "crop_file": "tail_seg1_crop.png",
+    "requires_inpaint": false,
+    "inpaint_targets": [],
+    "self_completion_guide": "向裙内补出连续尾根，保持深蓝紫主色、浅蓝腹侧和原图描边粗细。补全部分仅用于遮挡下的连接，不凭空增加分叉。",
+    "inpaint_guide": "",
+    "target_layer_png": "assets/rig_young/layers/tail_seg1.png"
+  },
+  {
+    "id": "tail_seg2",
+    "z_order": 10,
+    "description": "画面右下方弯曲的尾身。",
+    "bbox_norm": [
+      0.665,
+      0.72,
+      0.86,
+      0.875
+    ],
+    "crop_rect_px": [
+      822,
+      901,
+      1129,
+      1146
+    ],
+    "crop_file": "tail_seg2_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "tail_seg1"
+    ],
+    "self_completion_guide": "补出被裙摆和右侧长发遮住的尾身，沿现有弧线保持宽度与配色连续，两端预留蒙皮搭接。",
+    "inpaint_guide": "补全尾根在尾身接缝下的短段延伸，保持腹侧色带连续；内部切分边界不得生成黑色描边。",
+    "target_layer_png": "assets/rig_young/layers/tail_seg2.png"
+  },
+  {
+    "id": "tail_tip",
+    "z_order": 20,
+    "description": "右侧上翘的末端尾鳍。",
+    "bbox_norm": [
+      0.795,
+      0.597,
+      0.938,
+      0.782
+    ],
+    "crop_rect_px": [
+      996,
+      738,
+      1221,
+      1032
+    ],
+    "crop_file": "tail_tip_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "tail_seg2"
+    ],
+    "self_completion_guide": "保留原图可见的尖叶状尾鳍轮廓，补全被头发遮挡的鳍根。不可依据鲸尾名称擅自增加原图未显示的对称鳍叶。",
+    "inpaint_guide": "补全尾鳍根部下方的尾身连接，保持色带方向一致，不留下截断线或重复外轮廓。",
+    "target_layer_png": "assets/rig_young/layers/tail_tip.png"
+  },
+  {
+    "id": "hair_back_l",
+    "z_order": 30,
+    "description": "画面左侧长后发，含浅蓝渐变卷梢。",
+    "bbox_norm": [
+      0.109,
+      0.389,
+      0.357,
+      0.824
+    ],
+    "crop_rect_px": [
+      101,
+      432,
+      494,
+      1125
+    ],
+    "crop_file": "hair_back_l_crop.png",
+    "requires_inpaint": false,
+    "inpaint_targets": [],
+    "self_completion_guide": "补全被左耳鳍、脸、袖口和裙边遮住的长发；延续深蓝至浅蓝渐变和卷曲方向。卷发之间原有孔洞保持透明，不填成实心发块。",
+    "inpaint_guide": "",
+    "target_layer_png": "assets/rig_young/layers/hair_back_l.png"
+  },
+  {
+    "id": "hair_back_r",
+    "z_order": 40,
+    "description": "画面右侧长后发，覆盖部分尾身与鳍根。",
+    "bbox_norm": [
+      0.568,
+      0.305,
+      0.839,
+      0.828
+    ],
+    "crop_rect_px": [
+      686,
+      311,
+      1114,
+      1143
+    ],
+    "crop_file": "hair_back_r_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "tail_seg1",
+      "tail_seg2",
+      "tail_tip"
+    ],
+    "self_completion_guide": "补全被右耳鳍、脸、袖口和裙边遮住的长发，保留渐变卷梢和透明发间孔洞，不把尾巴颜色融合进发丝。",
+    "inpaint_guide": "只在右后发遮住尾巴的区域，补全尾根、尾身和鳍根的连续轮廓与浅蓝腹侧色带。其余露空区域保持透明。",
+    "target_layer_png": "assets/rig_young/layers/hair_back_r.png"
+  },
+  {
+    "id": "leg_l",
+    "z_order": 50,
+    "description": "画面左腿与左鞋组成的连续蒙皮层。",
+    "bbox_norm": [
+      0.357,
+      0.756,
+      0.451,
+      0.913
+    ],
+    "crop_rect_px": [
+      442,
+      946,
+      591,
+      1196
+    ],
+    "crop_file": "leg_l_crop.png",
+    "requires_inpaint": false,
+    "inpaint_targets": [],
+    "self_completion_guide": "依据可见鞋口，向裙内补出短小、被衣裙遮挡的腿部连接。保留原鞋形、浅色鞋口和装饰；隐藏连接采用与现有服装协调的简洁深色，不添加额外装饰。",
+    "inpaint_guide": "",
+    "target_layer_png": "assets/rig_young/layers/leg_l.png"
+  },
+  {
+    "id": "leg_r",
+    "z_order": 60,
+    "description": "画面右腿与右鞋组成的连续蒙皮层。",
+    "bbox_norm": [
+      0.493,
+      0.756,
+      0.592,
+      0.913
+    ],
+    "crop_rect_px": [
+      616,
+      946,
+      772,
+      1196
+    ],
+    "crop_file": "leg_r_crop.png",
+    "requires_inpaint": false,
+    "inpaint_targets": [],
+    "self_completion_guide": "依据可见鞋口，补出裙内隐藏的短腿连接，保持右鞋原有角度、描边及装饰，不把左右鞋复制成完全相同的贴图。",
+    "inpaint_guide": "",
+    "target_layer_png": "assets/rig_young/layers/leg_r.png"
+  },
+  {
+    "id": "ear_fin_l",
+    "z_order": 70,
+    "description": "画面左侧深蓝耳鳍与浅色下缘。",
+    "bbox_norm": [
+      0.128,
+      0.411,
+      0.273,
+      0.515
+    ],
+    "crop_rect_px": [
+      141,
+      511,
+      371,
+      677
+    ],
+    "crop_file": "ear_fin_l_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "hair_back_l"
+    ],
+    "self_completion_guide": "将耳鳍根部向侧发下方延伸，保留外尖轮廓与浅色波浪下缘。",
+    "inpaint_guide": "补全左耳鳍后方的蓝色后发，沿邻近发束方向延续渐变和线条，不生成皮肤或普通人耳。",
+    "target_layer_png": "assets/rig_young/layers/ear_fin_l.png"
+  },
+  {
+    "id": "ear_fin_r",
+    "z_order": 80,
+    "description": "画面右侧耳鳍；蓝色蝴蝶结保留为同层独立网格岛。",
+    "bbox_norm": [
+      0.67,
+      0.307,
+      0.854,
+      0.492
+    ],
+    "crop_rect_px": [
+      829,
+      366,
+      1121,
+      659
+    ],
+    "crop_file": "ear_fin_r_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "hair_back_r"
+    ],
+    "self_completion_guide": "补全侧发下隐藏的耳鳍根部。蝴蝶结与耳鳍分设网格岛，蝴蝶结主体保持形状，避免随鳍尖弯曲而拉长。",
+    "inpaint_guide": "补全右耳鳍和蝴蝶结后方的蓝色后发，保留原有头部外轮廓，不复制蝴蝶结残影。",
+    "target_layer_png": "assets/rig_young/layers/ear_fin_r.png"
+  },
+  {
+    "id": "torso",
+    "z_order": 90,
+    "description": "颈部、上身女仆装、领结、胸前褶边和腰封。",
+    "bbox_norm": [
+      0.337,
+      0.551,
+      0.607,
+      0.724
+    ],
+    "crop_rect_px": [
+      390,
+      681,
+      817,
+      955
+    ],
+    "crop_file": "torso_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "hair_back_l",
+      "hair_back_r"
+    ],
+    "self_completion_guide": "补全脸下的短颈，以及双臂和围裙下方的完整衣料。保留领结宝石、纽扣和白色褶边，去除原图手掌、袖口及围裙残影。",
+    "inpaint_guide": "仅补全上身遮挡处确实延伸经过的左右后发，保持发束走向；其他区域保持透明。",
+    "target_layer_png": "assets/rig_young/layers/torso.png"
+  },
+  {
+    "id": "skirt",
+    "z_order": 100,
+    "description": "深蓝主裙、裙边花纹、左右装饰结及白色下摆。",
+    "bbox_norm": [
+      0.251,
+      0.662,
+      0.706,
+      0.88
+    ],
+    "crop_rect_px": [
+      252,
+      817,
+      972,
+      1162
+    ],
+    "crop_file": "skirt_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "torso",
+      "leg_l",
+      "leg_r",
+      "tail_seg1",
+      "tail_seg2",
+      "hair_back_l",
+      "hair_back_r"
+    ],
+    "self_completion_guide": "补全围裙和袖口后方的深蓝裙面，合理延续布料褶皱；原有金色花纹只在有依据处延伸，内部接缝不加描边。",
+    "inpaint_guide": "按各目标层分别补全裙后被遮住的腰部衣料、短腿、尾巴和内侧发梢；只生成动作可能露出的遮挡储备区域，不把不同部件合成一张底图。",
+    "target_layer_png": "assets/rig_young/layers/skirt.png"
+  },
+  {
+    "id": "apron",
+    "z_order": 110,
+    "description": "白色围裙、花边和鲸鱼图案。",
+    "bbox_norm": [
+      0.35,
+      0.673,
+      0.591,
+      0.818
+    ],
+    "crop_rect_px": [
+      412,
+      842,
+      792,
+      1072
+    ],
+    "crop_file": "apron_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "torso",
+      "skirt"
+    ],
+    "self_completion_guide": "补全被袖口遮住的围裙上角，保留完整花边。鲸鱼图案与附近布料作为低形变区域。",
+    "inpaint_guide": "补全围裙后方的深蓝裙面及上缘腰封，布料颜色和褶皱连续；不得把鲸鱼图案、白色围裙或花边烘焙进底裙。",
+    "target_layer_png": "assets/rig_young/layers/apron.png"
+  },
+  {
+    "id": "arm_l",
+    "z_order": 120,
+    "description": "画面左侧屈肘手臂、袖口与手掌。",
+    "bbox_norm": [
+      0.302,
+      0.577,
+      0.418,
+      0.71
+    ],
+    "crop_rect_px": [
+      369,
+      720,
+      552,
+      931
+    ],
+    "crop_file": "arm_l_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "torso",
+      "skirt",
+      "apron",
+      "hair_back_l"
+    ],
+    "self_completion_guide": "在现有收手姿势基础上补出肩至袖口的隐藏连接，保持短圆手掌和袖口厚度，不额外生成原图没有展示的展开手指。",
+    "inpaint_guide": "分别补全左臂后方的上身衣料、裙面、围裙边缘和左后发，去除手掌肤色与袖口残影。",
+    "target_layer_png": "assets/rig_young/layers/arm_l.png"
+  },
+  {
+    "id": "arm_r",
+    "z_order": 130,
+    "description": "画面右侧屈肘手臂、袖口与手掌。",
+    "bbox_norm": [
+      0.521,
+      0.576,
+      0.623,
+      0.71
+    ],
+    "crop_rect_px": [
+      651,
+      719,
+      812,
+      931
+    ],
+    "crop_file": "arm_r_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "torso",
+      "skirt",
+      "apron",
+      "hair_back_r"
+    ],
+    "self_completion_guide": "补出右肩至袖口的隐藏连接，保留原手掌形状和袖口装饰，维持原图屈肘收手姿势。",
+    "inpaint_guide": "分别补全右臂后方的上身衣料、裙面、围裙边缘和右后发，保持领口及腰线连续。",
+    "target_layer_png": "assets/rig_young/layers/arm_r.png"
+  },
+  {
+    "id": "face_base",
+    "z_order": 140,
+    "description": "完整脸部皮肤、眉毛、鼻口、腮红与双眼眼白。",
+    "bbox_norm": [
+      0.289,
+      0.3,
+      0.626,
+      0.582
+    ],
+    "crop_rect_px": [
+      318,
+      342,
+      852,
+      790
+    ],
+    "crop_file": "face_base_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "torso",
+      "hair_back_l",
+      "hair_back_r",
+      "ear_fin_l",
+      "ear_fin_r"
+    ],
+    "self_completion_guide": "补全刘海下的额头及侧发下的脸颊。将虹膜、瞳孔、高光和睫毛从本层清除；在双眼原位置补出连续眼白，保留眉毛、鼻口和腮红。",
+    "inpaint_guide": "补全头部后方实际存在的短颈、领口、后发及耳鳍根部。保持头颈搭接，不把脸部肤色扩散到头发。",
+    "target_layer_png": "assets/rig_young/layers/face_base.png"
+  },
+  {
+    "id": "pupil_l",
+    "z_order": 150,
+    "description": "画面左眼的整块虹膜、瞳孔与高光。",
+    "bbox_norm": [
+      0.35,
+      0.432,
+      0.414,
+      0.507
+    ],
+    "crop_rect_px": [
+      439,
+      543,
+      538,
+      661
+    ],
+    "crop_file": "pupil_l_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "face_base"
+    ],
+    "self_completion_guide": "补出被上睑遮挡的虹膜上缘，保持蓝色渐变、瞳孔位置及原有高光关系。透明背景，不包含眼白和睫毛。",
+    "inpaint_guide": "在左眼虹膜移开处补全纯净眼白，延续眼白原有浅色调，不保留蓝色虹膜或高光残影。",
+    "target_layer_png": "assets/rig_young/layers/pupil_l.png"
+  },
+  {
+    "id": "pupil_r",
+    "z_order": 160,
+    "description": "画面右眼的整块虹膜、瞳孔与高光。",
+    "bbox_norm": [
+      0.512,
+      0.416,
+      0.58,
+      0.497
+    ],
+    "crop_rect_px": [
+      645,
+      522,
+      752,
+      650
+    ],
+    "crop_file": "pupil_r_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "face_base"
+    ],
+    "self_completion_guide": "补全上睑下隐藏的虹膜轮廓，保留右眼原有高光，不直接镜像复制左眼。",
+    "inpaint_guide": "在右眼虹膜移开处补全连续眼白，去除虹膜、高光残影，保持眼角和原有眼白色调。",
+    "target_layer_png": "assets/rig_young/layers/pupil_r.png"
+  },
+  {
+    "id": "eyelid_l",
+    "z_order": 170,
+    "description": "左眼上下睑皮肤遮盖网格及睫毛；同一语义层内分网格岛。",
+    "bbox_norm": [
+      0.311,
+      0.415,
+      0.431,
+      0.519
+    ],
+    "crop_rect_px": [
+      380,
+      516,
+      569,
+      682
+    ],
+    "crop_file": "eyelid_l_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "face_base",
+      "pupil_l"
+    ],
+    "self_completion_guide": "生成与左眼周肤色和腮红一致的上下睑遮盖面，以及睁眼、半闭、闭眼所需的睫毛曲线。闭眼曲线保持线宽，不把整只眼睛压扁。",
+    "inpaint_guide": "分别补全左眼睫毛后方的眼白、眼周肤色及虹膜上缘；肤色与眼白按眼眶边界分开，不涂成同一颜色。",
+    "target_layer_png": "assets/rig_young/layers/eyelid_l.png"
+  },
+  {
+    "id": "eyelid_r",
+    "z_order": 180,
+    "description": "右眼上下睑皮肤遮盖网格及睫毛。",
+    "bbox_norm": [
+      0.495,
+      0.399,
+      0.612,
+      0.505
+    ],
+    "crop_rect_px": [
+      615,
+      496,
+      801,
+      664
+    ],
+    "crop_file": "eyelid_r_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "face_base",
+      "pupil_r"
+    ],
+    "self_completion_guide": "生成右眼上下睑皮肤遮盖面和闭合睫毛曲线，匹配右眼倾斜角度；不要机械镜像左眼。",
+    "inpaint_guide": "分别补全右眼睫毛后方的眼白、眼周肤色及虹膜上缘，保持与左眼一致的补全规则和原图左右差异。",
+    "target_layer_png": "assets/rig_young/layers/eyelid_r.png"
+  },
+  {
+    "id": "bangs",
+    "z_order": 190,
+    "description": "头顶蓝发主体、中央刘海及左右贴脸短发。",
+    "bbox_norm": [
+      0.206,
+      0.163,
+      0.7,
+      0.544
+    ],
+    "crop_rect_px": [
+      188,
+      151,
+      971,
+      756
+    ],
+    "crop_file": "bangs_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "face_base",
+      "pupil_l",
+      "pupil_r",
+      "eyelid_l",
+      "eyelid_r",
+      "ear_fin_l",
+      "ear_fin_r",
+      "hair_back_l",
+      "hair_back_r"
+    ],
+    "self_completion_guide": "补全头饰下的蓝色头发；保留发束分界、额前尖梢和高光。中央刘海与左右贴脸发分别建立权重区，冠部保持稳定。",
+    "inpaint_guide": "补全刘海下的完整额头、眉毛被遮部分和侧发下脸颊；确有遮挡时分别补出眼睑与虹膜边缘。额头保持原有淡粉肤色，清除烘焙的刘海阴影、蓝色发丝及描边残影。",
+    "target_layer_png": "assets/rig_young/layers/bangs.png"
+  },
+  {
+    "id": "headpiece",
+    "z_order": 200,
+    "description": "白色女仆头箍及褶边。",
+    "bbox_norm": [
+      0.221,
+      0.098,
+      0.718,
+      0.338
+    ],
+    "crop_rect_px": [
+      206,
+      89,
+      995,
+      469
+    ],
+    "crop_file": "headpiece_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "bangs",
+      "hair_back_l",
+      "hair_back_r"
+    ],
+    "self_completion_guide": "补全两端藏于发侧的短连接，保持白色褶边起伏与深色轮廓；整体作为刚性头部附件。",
+    "inpaint_guide": "补全头箍和白色褶边后方的蓝色头发，延续头顶弧度，移除白边及头饰投影残留。",
+    "target_layer_png": "assets/rig_young/layers/headpiece.png"
+  },
+  {
+    "id": "ahoge",
+    "z_order": 210,
+    "description": "头顶向画面左侧弯曲的呆毛。",
+    "bbox_norm": [
+      0.278,
+      0.057,
+      0.446,
+      0.151
+    ],
+    "crop_rect_px": [
+      330,
+      59,
+      595,
+      207
+    ],
+    "crop_file": "ahoge_crop.png",
+    "requires_inpaint": true,
+    "inpaint_targets": [
+      "headpiece"
+    ],
+    "self_completion_guide": "保留现有弯钩轮廓，根部补出少量隐藏搭接，尖端保持锐利，不增加第二根呆毛。",
+    "inpaint_guide": "仅在呆毛根部与白色头饰重叠处补全头饰边缘和浅灰褶皱；其余区域保持透明。",
+    "target_layer_png": "assets/rig_young/layers/ahoge.png"
+  }
+]

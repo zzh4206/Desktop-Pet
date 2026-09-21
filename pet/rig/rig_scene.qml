@@ -12,9 +12,19 @@
 //   · 部件清单 partsModel 由 Python 注入（dict 附 _url 绝对 file:// 地址）；
 //     每部件角度由 partAngles 映射（part_id → 度）提供，Python 每帧推入。
 import QtQuick
+import PetRig 1.0
 
 Item {
     id: root
+
+    // ---- 2D 骨骼蒙皮（v0.18）----
+    property bool skinnedMeshEnabled: false
+    property string specFile: ""
+    property string meshDataFile: ""
+    property string layersDir: ""
+    property real lookAtX: 0.0
+    property real lookAtY: 0.0
+    property real blinkProgress: 0.0
 
     // ---- Presenter 写入的显示状态 ----
     property url figASrc: ""
@@ -101,9 +111,23 @@ Item {
             y: root.bodyY
             // bob 不加 Behavior：33ms 步进本身平滑，Behavior 反而滞后抖动
 
+            // 2D 骨骼蒙皮渲染节点（当 skinnedMeshEnabled 时接管渲染）
+            SkinnedMeshItem {
+                id: skinnedMesh
+                objectName: "skinnedMesh"
+                anchors.fill: parent
+                visible: root.skinnedMeshEnabled
+                specFile: root.specFile
+                meshDataFile: root.meshDataFile
+                layersDir: root.layersDir
+                lookAtX: root.lookAtX
+                lookAtY: root.lookAtY
+                blinkProgress: root.blinkProgress
+            }
+
             // ---- under_core 部件（压在主体下，接缝被核心图遮住）----
             Repeater {
-                model: root.partsModel.filter(function (p) { return p.z === "under_core" })
+                model: root.skinnedMeshEnabled ? [] : root.partsModel.filter(function (p) { return p.z === "under_core" })
                 delegate: RigPartDelegate {}
             }
 
@@ -113,6 +137,7 @@ Item {
                 source: root.figASrc
                 fillMode: Image.PreserveAspectFit
                 mipmap: true
+                visible: !root.skinnedMeshEnabled
             }
             Image {
                 id: figB
@@ -121,11 +146,12 @@ Item {
                 fillMode: Image.PreserveAspectFit
                 opacity: root.mix
                 mipmap: true
+                visible: !root.skinnedMeshEnabled
             }
 
             // ---- over_core 部件 ----
             Repeater {
-                model: root.partsModel.filter(function (p) { return p.z !== "under_core" })
+                model: root.skinnedMeshEnabled ? [] : root.partsModel.filter(function (p) { return p.z !== "under_core" })
                 delegate: RigPartDelegate {}
             }
         }

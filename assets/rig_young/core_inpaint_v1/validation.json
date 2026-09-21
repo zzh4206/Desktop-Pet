@@ -1,0 +1,41 @@
+[
+  {
+    "name": "face_base",
+    "width": 1280,
+    "height": 1284,
+    "pixel_format": "Format32bppArgb",
+    "corner_alpha": 0,
+    "source": "exec-ac83ba4b-82fd-4db9-8812-817a9ed59d57.png",
+    "scale_x": 0.69,
+    "scale_y": 0.69,
+    "offset_x": 200,
+    "offset_y": 37,
+    "registration": "Approximate visual landmark registration; not pixel-exact."
+  },
+  {
+    "name": "skirt",
+    "width": 1280,
+    "height": 1284,
+    "pixel_format": "Format32bppArgb",
+    "corner_alpha": 0,
+    "source": "exec-82d4dfcc-eee5-4e23-a8fb-a31042deca91.png",
+    "scale_x": 0.679,
+    "scale_y": 0.603,
+    "offset_x": 188,
+    "offset_y": 442,
+    "registration": "Approximate visual landmark registration; not pixel-exact."
+  },
+  {
+    "name": "torso",
+    "width": 1280,
+    "height": 1284,
+    "pixel_format": "Format32bppArgb",
+    "corner_alpha": 0,
+    "source": "exec-1d32b070-9525-4974-a60d-9d16ba80fc73.png",
+    "scale_x": 0.59,
+    "scale_y": 0.57,
+    "offset_x": 265,
+    "offset_y": 289,
+    "registration": "Approximate visual landmark registration; not pixel-exact."
+  }
+]

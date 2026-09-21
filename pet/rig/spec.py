@@ -46,6 +46,16 @@ _MANIFEST_SCHEMA: dict = {
         # 工艺残留区（如尾件保护带），qa_rig_composite 自动读取；
         # 运行期不消费
         "qa": {"type": "object"},
+        # 2D 骨骼蒙皮资产段（v0.18）：若存在则指向 spec/mesh/layers
+        "skinned": {
+            "type": "object",
+            "properties": {
+                "spec_file": {"type": "string", "minLength": 1},
+                "mesh_file": {"type": "string", "minLength": 1},
+                "layers_dir": {"type": "string", "minLength": 1},
+            },
+            "additionalProperties": False,
+        },
         "parts": {
             "type": "array",
             "items": {
@@ -145,6 +155,11 @@ class RigSpec:
     stage: str
     figures: dict[str, str] = field(default_factory=dict)
     parts: list[RigPart] = field(default_factory=list)
+    skinned_spec: str = ""
+    skinned_mesh: str = ""
+    skinned_layers: str = ""
+    physics_presets: dict = field(default_factory=dict)
+    face_mechanics: dict = field(default_factory=dict)
 
     def figure_for(self, key: str) -> str | None:
         """按 figure 名取路径；未登记返回 None（调用方走整帧/静帧路径）。"""
@@ -236,4 +251,46 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
             spring_zeta=float(spring.get("damping_ratio", 0.7) or 0.7),
         ))
 
-    return RigSpec(stage=stage, figures=figures, parts=parts)
+    skinned_cfg = raw.get("skinned")
+    skinned_spec = ""
+    skinned_mesh = ""
+    skinned_layers = ""
+    physics_presets = {}
+    face_mechanics = {}
+
+    if isinstance(skinned_cfg, dict):
+        sp = os.path.normpath(os.path.join(rig_dir, skinned_cfg.get("spec_file", "")))
+        mp = os.path.normpath(os.path.join(rig_dir, skinned_cfg.get("mesh_file", "")))
+        lp = os.path.normpath(os.path.join(rig_dir, skinned_cfg.get("layers_dir", "")))
+        if os.path.isfile(sp) and os.path.isfile(mp) and os.path.isdir(lp):
+            skinned_spec = sp
+            skinned_mesh = mp
+            skinned_layers = lp
+
+    if not skinned_spec:
+        # 探测同目录或 assets/rig_young 默认路径
+        candidates = [
+            (os.path.join(rig_dir, "spec.json"), os.path.join(rig_dir, "mesh", "mesh_data.json"), os.path.join(rig_dir, "layers")),
+            (os.path.join(rig_dir, "..", "..", "rig_young", "spec.json"), os.path.join(rig_dir, "..", "..", "rig_young", "mesh", "mesh_data.json"), os.path.join(rig_dir, "..", "..", "rig_young", "layers")),
+            (os.path.join(rig_dir, "..", "..", "reference", "young_rig_spec.json"), os.path.join(rig_dir, "..", "..", "rig_young", "mesh", "mesh_data.json"), os.path.join(rig_dir, "..", "..", "rig_young", "layers")),
+        ]
+        for sp, mp, lp in candidates:
+            sp, mp, lp = os.path.normpath(sp), os.path.normpath(mp), os.path.normpath(lp)
+            if os.path.isfile(sp) and os.path.isfile(mp) and os.path.isdir(lp):
+                skinned_spec, skinned_mesh, skinned_layers = sp, mp, lp
+                break
+
+    if skinned_spec:
+        try:
+            with open(skinned_spec, "r", encoding="utf-8") as f:
+                sdata = json.load(f)
+            physics_presets = sdata.get("physics_presets", {})
+            face_mechanics = sdata.get("face_mechanics", {})
+        except Exception as e:
+            log.warning("读取蒙皮物理预设失败（%s）：%s", skinned_spec, e)
+
+    return RigSpec(stage=stage, figures=figures, parts=parts,
+                   skinned_spec=skinned_spec, skinned_mesh=skinned_mesh,
+                   skinned_layers=skinned_layers,
+                   physics_presets=physics_presets,
+                   face_mechanics=face_mechanics)

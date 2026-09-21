@@ -34,6 +34,7 @@ from PySide6.QtGui import QFont, QImage
 
 from ..asset_provider import SpriteRef
 from ..window import WindowBase
+from . import skinned_mesh_item  # noqa: F401 —— 注册 PetRig 1.0 QML 模块
 from .motion import MotionEngine, MotionInputs
 from .spec import RigSpec, load_rig_spec
 
@@ -118,6 +119,7 @@ class RigWindow(WindowBase):
         self._quick_ok = False
         self._quick = None                # QQuickWidget（成功后非 None）
         self._root = None                 # QML 根 Item
+        self._skinned_item = None         # SkinnedMeshItem 节点（当蒙皮激活时）
         self._mix_anim: QPropertyAnimation | None = None
         self._fade_ms = 110
         self._src_size_cache: dict[str, tuple[int, int]] = {}
@@ -203,6 +205,7 @@ class RigWindow(WindowBase):
             self._mix_anim = QPropertyAnimation(self._root, b"mix", self)
             self._root.setProperty("partsModel", parts)
             self._set_prop("facing", int(getattr(self, "_facing", 1)))
+            self._setup_skinned_mesh()
             if os.path.isfile(self._sprite.path):
                 self._show_now(self._sprite.path)
             else:
@@ -217,6 +220,26 @@ class RigWindow(WindowBase):
                         e, exc_info=True)
             self._quick_ok = False
             self._rig_pending = False     # 已裁定（降级），不再是"待就绪"
+
+    def _setup_skinned_mesh(self) -> None:
+        """若 spec 配置了 2D 骨骼蒙皮，向 QML 注入资产路径并提取 SkinnedMeshItem 节点。"""
+        if not self._root or not self._spec:
+            self._skinned_item = None
+            return
+        sp = getattr(self._spec, "skinned_spec", "")
+        mp = getattr(self._spec, "skinned_mesh", "")
+        lp = getattr(self._spec, "skinned_layers", "")
+        if sp and mp and lp and os.path.isfile(sp) and os.path.isfile(mp) and os.path.isdir(lp):
+            self._root.setProperty("skinnedMeshEnabled", True)
+            self._root.setProperty("specFile", sp)
+            self._root.setProperty("meshDataFile", mp)
+            self._root.setProperty("layersDir", lp)
+            from PySide6.QtQuick import QQuickItem
+            self._skinned_item = self._root.findChild(QQuickItem, "skinnedMesh")
+            log.info("RigWindow 2D 骨骼蒙皮已激活（spec=%s）", sp)
+        else:
+            self._root.setProperty("skinnedMeshEnabled", False)
+            self._skinned_item = None
 
     @property
     def rig_active(self) -> bool:
@@ -248,6 +271,7 @@ class RigWindow(WindowBase):
         if not self.rig_active:
             return
         self._root.setProperty("partsModel", self._parts_model(spec))
+        self._setup_skinned_mesh()
         # 当前画面按新 spec 重解析（帧序列播放中不动——收尾路径自然重解）
         if self._walk_showing and self._walk_sprite is not None:
             self._show_now(self._walk_sprite.path)
@@ -441,10 +465,33 @@ class RigWindow(WindowBase):
         self._set_prop("shadowScaleX", float(scale_x) * k)
         self._set_prop("shadowScaleY", float(scale_y))
 
+    def apply_enrichment(self, enrichment=None) -> None:
+        """从 EngineBridge 接收光影参数（地面实时阴影）注入场景。"""
+        if enrichment is None or not self.rig_active:
+            return
+        try:
+            self.set_shadow(
+                alpha=float(getattr(enrichment, "shadow_alpha", 0.0) or 0.0),
+                offset_x=float(getattr(enrichment, "shadow_offset_x", 0.0) or 0.0),
+                scale_x=float(getattr(enrichment, "shadow_scale_x", 1.0) or 1.0),
+                scale_y=float(getattr(enrichment, "shadow_scale_y", 0.08) or 0.08),
+            )
+        except Exception:
+            pass
+
     def _motion_tick(self) -> None:
         """33ms 逻辑拍：推进运动引擎并推帧到 QML（对齐旧 QML interval=33）。"""
         if not self.rig_active or self._engine is None:
             return
+        if self._motion_inputs is not None:
+            try:
+                from PySide6.QtGui import QCursor
+                c_pos = QCursor.pos()
+                self._motion_inputs.cursor_pos = (float(c_pos.x()), float(c_pos.y()))
+                self._motion_inputs.pet_rect = (float(self.x()), float(self.y()),
+                                                float(self.width()), float(self.height()))
+            except Exception:
+                pass
         frame = self._engine.step(self._motion_inputs, 33.0)
         self._push_frame(frame)
 
@@ -460,6 +507,14 @@ class RigWindow(WindowBase):
         # 镜像属性（测试/门禁观察 gaitK/gaitPhase 的收敛与相位连续性）
         r.setProperty("gaitK", float(self._engine.gait_k))
         r.setProperty("gaitPhase", float(self._engine.gait_phase))
+
+        # 2D 骨骼蒙皮姿态推入（若蒙皮节点存活）
+        item = self._skinned_item
+        if item is not None:
+            for b, deg in frame.bone_angles.items():
+                item.setBonePose(b, deg, frame.bone_tx.get(b, 0.0), frame.bone_ty.get(b, 0.0))
+            item.setBlink(frame.blink_progress)
+            item.setLookAt(frame.look_at[0], frame.look_at[1])
 
     def set_walk_figure(self, sprite) -> None:
         """行走覆盖图（v0.14.4）：walking 期间改显该 figure。

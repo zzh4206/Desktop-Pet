@@ -41,6 +41,8 @@ class MotionInputs:
     facing: int = 1            # 1 右 / -1 左（镜像）
     wind_gain: float = 1.0     # v0.16 风通道：sway 幅度倍率（1.0=清单基准）
     wind_bias_deg: float = 0.0  # 顺风偏置（世界空间，度；引擎按 facing 翻局部）
+    cursor_pos: tuple[float, float] | None = None  # 桌面光标全局像素 (x, y)
+    pet_rect: tuple[float, float, float, float] | None = None  # 宠物窗口屏幕坐标 (x, y, w, h)
 
 
 @dataclass
@@ -53,6 +55,13 @@ class MotionFrame:
     body_y: float = 0.0        # 上下（walkBob + 呼吸浮动），显示像素
     blink_on: bool = False     # 眨眼脉冲（blink 覆盖件显隐）
     part_angles: dict = field(default_factory=dict)  # part_id -> 角度（度）
+    # 2D 骨骼蒙皮扩展（v0.18）：
+    bone_angles: dict = field(default_factory=dict)  # bone_name -> 局部旋转角度（度）
+    bone_tx: dict = field(default_factory=dict)      # bone_name -> 平移 x（源图像素）
+    bone_ty: dict = field(default_factory=dict)      # bone_name -> 平移 y（源图像素）
+    blink_progress: float = 0.0                      # 连续眼睑闭合行程 0.0..1.0
+    look_at: tuple[float, float] = (0.0, 0.0)        # 归一化注视向量 (nx, ny)
+
 
 
 # ---------- P2 弹簧积木（暂不接入缺省渲染路径，先独立可测） ----------
@@ -127,6 +136,24 @@ class MotionEngine:
         self._squash_v = 0.0
         self._reset_blink()                   # L0 眨眼调度器（确定性 PRNG）
 
+        # 2D 骨骼蒙皮物理动力学扩展
+        self._physics_presets = getattr(spec, "physics_presets", {}) or {}
+        self._face_mechanics = getattr(spec, "face_mechanics", {}) or {}
+        self._spring_groups = self._physics_presets.get("spring_groups", [])
+        self._bone_spring_cfg: dict[str, dict] = {}
+        for g in self._spring_groups:
+            f = float(g.get("natural_frequency_hz", 2.0))
+            z = float(g.get("damping_ratio", 0.7))
+            for b in g.get("bones", []):
+                self._bone_spring_cfg[b] = {"freq": f, "zeta": z}
+
+        self._bone_angles: dict[str, float] = {}
+        self._bone_vels: dict[str, float] = {}
+        self._look_x: float = 0.0
+        self._look_y: float = 0.0
+        self._look_smoothing_ms = float(
+            (self._face_mechanics.get("look_at") or {}).get("smoothing_time_ms", 75.0))
+
     @property
     def parts(self):
         return self._spec.parts if self._spec else []
@@ -146,6 +173,10 @@ class MotionEngine:
         self._squash_s = 0.0
         self._squash_v = 0.0
         self._reset_blink()
+        self._bone_angles.clear()
+        self._bone_vels.clear()
+        self._look_x = 0.0
+        self._look_y = 0.0
 
     def _reset_blink(self) -> None:
         """眨眼调度器复位：首拍即闭眼（对齐旧行为），随后随机间隔 3–6s。
@@ -198,6 +229,39 @@ class MotionEngine:
                 self._blink_rng.uniform(self._BLINK_MIN_MS, self._BLINK_MAX_MS)
         blink_on = t < self._blink_open_until
 
+        # 连续眼睑闭合行程 blink_progress (0.0..1.0)
+        blink_progress = 0.0
+        if blink_on:
+            rem = self._blink_open_until - t
+            elapsed = self._BLINK_CLOSE_MS - rem
+            if elapsed < 45.0:
+                blink_progress = 0.5 * (1.0 - math.cos(math.pi * elapsed / 45.0))
+            elif elapsed < 75.0:
+                blink_progress = 1.0
+            else:
+                blink_progress = 0.5 * (1.0 + math.cos(math.pi * (elapsed - 75.0) / 55.0))
+        blink_progress = max(0.0, min(1.0, blink_progress))
+
+        # 视线追踪 look_at (nx, ny)
+        target_lx = 0.0
+        target_ly = 0.0
+        if inputs.cursor_pos is not None and inputs.pet_rect is not None:
+            cx, cy = inputs.cursor_pos
+            px, py, pw, ph = inputs.pet_rect
+            if pw > 0 and ph > 0:
+                eye_sx = px + pw * 0.46
+                eye_sy = py + ph * 0.45
+                dx = (cx - eye_sx) / 300.0
+                dy = (cy - eye_sy) / 300.0
+                if inputs.facing < 0:
+                    dx = -dx
+                target_lx = max(-1.0, min(1.0, dx))
+                target_ly = max(-1.0, min(1.0, dy))
+
+        k_look = 1.0 - math.exp(-dt / max(1.0, self._look_smoothing_ms))
+        self._look_x += (target_lx - self._look_x) * k_look
+        self._look_y += (target_ly - self._look_y) * k_look
+
         # L2 步态：相位累加器（hz 变化只改斜率，不瞬移——v14 rM1 修）+ gaitK 包络
         gait_hz = inputs.walk_hz if inputs.walk_hz > 0 else self._GAIT_DEFAULT_HZ
         self._gait_phase = (self._gait_phase + gait_hz * dt / 1000.0) % 1.0
@@ -243,6 +307,7 @@ class MotionEngine:
         self._wind_bias = float(inputs.wind_bias_deg) * inputs.facing
 
         part_angles = self._compute_part_angles(t, gait_hz, inputs.walk_hz, dt)
+        bone_angles, bone_tx, bone_ty = self._compute_bone_poses(t, dt, inputs, gait_hz)
 
         return MotionFrame(
             body_angle=body_angle,
@@ -251,7 +316,115 @@ class MotionEngine:
             body_y=body_y,
             blink_on=blink_on,
             part_angles=part_angles,
+            bone_angles=bone_angles,
+            bone_tx=bone_tx,
+            bone_ty=bone_ty,
+            blink_progress=blink_progress,
+            look_at=(self._look_x, self._look_y),
         )
+
+    def _step_bone_spring(self, bone: str, target: float, dt: float) -> float:
+        """根据 Astra 物理预设参数推进单骨弹簧一步。"""
+        cfg = self._bone_spring_cfg.get(bone)
+        if not cfg:
+            return target
+        f = cfg["freq"]
+        zeta = cfg["zeta"]
+        stiffness = (2.0 * math.pi * f) ** 2
+        damping = 2.0 * zeta * (2.0 * math.pi * f)
+        ang, vel = spring_step(self._bone_angles.get(bone, target),
+                               self._bone_vels.get(bone, 0.0),
+                               target, stiffness, damping, dt)
+        self._bone_angles[bone] = ang
+        self._bone_vels[bone] = vel
+        return ang
+
+    def _compute_bone_poses(self, t: float, dt: float, inputs: MotionInputs,
+                            gait_hz: float) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        """计算 47 根骨骼的局部旋转与平移（度与源图像素）。"""
+        angles: dict[str, float] = {}
+        tx: dict[str, float] = {}
+        ty: dict[str, float] = {}
+
+        # 1. 躯干脊柱呼吸微动
+        ph_breath = 2.0 * math.pi * t / self._BREATH_FLOAT_PERIOD_MS
+        angles["root_hip"] = 0.2 * math.sin(ph_breath)
+        angles["spine"] = 0.4 * math.sin(ph_breath + 0.3)
+        angles["chest"] = 0.5 * math.sin(ph_breath + 0.6)
+        angles["neck"] = -0.3 * math.sin(ph_breath + 0.8)
+        angles["head"] = -0.3 * math.sin(ph_breath + 1.0)
+
+        # 2. 尾巴多节波浪弹簧链 (tail_01 -> tail_02 -> tail_03 -> tail_fluke)
+        tail_wave = math.sin(2.0 * math.pi * t / 2200.0)
+        t1_target = 3.5 * tail_wave + self._wind_bias * 0.3
+        angles["tail_01"] = self._step_bone_spring("tail_01", t1_target, dt)
+        t2_target = angles["tail_01"] * 1.35
+        angles["tail_02"] = self._step_bone_spring("tail_02", t2_target, dt)
+        t3_target = angles["tail_02"] * 1.45
+        angles["tail_03"] = self._step_bone_spring("tail_03", t3_target, dt)
+        t4_target = angles["tail_03"] * 1.55
+        angles["tail_fluke"] = self._step_bone_spring("tail_fluke", t4_target, dt)
+
+        # 3. 后发左右 3 级链
+        h_l1 = 2.0 * math.sin(2.0 * math.pi * (t + 100.0) / 2800.0) + self._wind_bias * 0.6 - self._tilt_angle * 0.15
+        angles["hair_back_l_01"] = self._step_bone_spring("hair_back_l_01", h_l1, dt)
+        angles["hair_back_l_02"] = self._step_bone_spring("hair_back_l_02", angles["hair_back_l_01"] * 1.3, dt)
+        angles["hair_back_l_03"] = self._step_bone_spring("hair_back_l_03", angles["hair_back_l_02"] * 1.4, dt)
+
+        h_r1 = 2.0 * math.sin(2.0 * math.pi * (t + 400.0) / 2900.0) + self._wind_bias * 0.6 - self._tilt_angle * 0.15
+        angles["hair_back_r_01"] = self._step_bone_spring("hair_back_r_01", h_r1, dt)
+        angles["hair_back_r_02"] = self._step_bone_spring("hair_back_r_02", angles["hair_back_r_01"] * 1.3, dt)
+        angles["hair_back_r_03"] = self._step_bone_spring("hair_back_r_03", angles["hair_back_r_02"] * 1.4, dt)
+
+        # 4. 侧发、刘海、呆毛、耳鳍
+        angles["hair_side_l_01"] = self._step_bone_spring("hair_side_l_01", 1.5 * math.sin(2.0 * math.pi * t / 2400.0) + self._wind_bias * 0.4, dt)
+        angles["hair_side_l_02"] = self._step_bone_spring("hair_side_l_02", angles["hair_side_l_01"] * 1.25, dt)
+        angles["hair_side_r_01"] = self._step_bone_spring("hair_side_r_01", 1.5 * math.sin(2.0 * math.pi * (t + 300.0) / 2500.0) + self._wind_bias * 0.4, dt)
+        angles["hair_side_r_02"] = self._step_bone_spring("hair_side_r_02", angles["hair_side_r_01"] * 1.25, dt)
+
+        angles["bangs_01"] = self._step_bone_spring("bangs_01", 1.0 * math.sin(2.0 * math.pi * t / 2000.0) + self._wind_bias * 0.2, dt)
+        angles["bangs_02"] = self._step_bone_spring("bangs_02", angles["bangs_01"] * 1.2, dt)
+        angles["bangs_03"] = self._step_bone_spring("bangs_03", angles["bangs_02"] * 1.3, dt)
+
+        angles["ahoge_01"] = self._step_bone_spring("ahoge_01", 2.5 * math.sin(2.0 * math.pi * t / 1800.0) + self._wind_bias * 0.5, dt)
+        angles["ahoge_02"] = self._step_bone_spring("ahoge_02", angles["ahoge_01"] * 1.5, dt)
+
+        angles["ear_fin_l"] = self._step_bone_spring("ear_fin_l", 1.2 * math.sin(2.0 * math.pi * (t + 200.0) / 2100.0), dt)
+        angles["ear_fin_r"] = self._step_bone_spring("ear_fin_r", 1.2 * math.sin(2.0 * math.pi * (t + 500.0) / 2200.0), dt)
+
+        # 5. 裙摆与围裙
+        skirt_target = 1.5 * math.sin(2.0 * math.pi * t / 2600.0) + self._wind_bias * 0.3
+        angles["skirt_root"] = 0.0
+        angles["skirt_hem_l"] = self._step_bone_spring("skirt_hem_l", skirt_target, dt)
+        angles["skirt_hem_r"] = self._step_bone_spring("skirt_hem_r", -skirt_target * 0.8, dt)
+        angles["apron_root"] = 0.0
+        angles["apron_tip"] = self._step_bone_spring("apron_tip", skirt_target * 0.7, dt)
+
+        # 6. 行走四肢步态
+        k_gait = self._gait_k
+        phi = 2.0 * math.pi * self._gait_phase
+
+        leg_amp = 14.0 * k_gait
+        calf_amp = 18.0 * k_gait
+        angles["upper_leg_l"] = leg_amp * math.sin(phi)
+        angles["lower_leg_l"] = -abs(calf_amp * max(0.0, -math.cos(phi)))
+        angles["foot_l"] = 0.0
+
+        angles["upper_leg_r"] = leg_amp * math.sin(phi + math.pi)
+        angles["lower_leg_r"] = -abs(calf_amp * max(0.0, -math.cos(phi + math.pi)))
+        angles["foot_r"] = 0.0
+
+        arm_amp = 10.0 * k_gait
+        fore_amp = 6.0 * k_gait
+        angles["upper_arm_l"] = -arm_amp * math.sin(phi)
+        angles["forearm_l"] = -fore_amp * max(0.0, math.cos(phi))
+        angles["hand_l"] = 0.0
+
+        angles["upper_arm_r"] = -arm_amp * math.sin(phi + math.pi)
+        angles["forearm_r"] = -fore_amp * max(0.0, math.cos(phi + math.pi))
+        angles["hand_r"] = 0.0
+
+        return angles, tx, ty
 
     def _compute_part_angles(self, t: float, gait_hz: float,
                              walk_hz: float, dt: float) -> dict:

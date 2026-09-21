@@ -163,15 +163,24 @@ class PetApp:
         wa = self.sensors.work_area
         self.fsm = BehaviorFSM(dict(wa), self.cfg.get("behavior", {}))
 
-        # v0.13 展示后端选择：presentation=frames（默认，旧行为不变）| rig
-        # （分层绑骨）| paperdoll（部件步态）。
-        # v0.15.1 接回：frames 仍为唯一呈现后端（原有引擎兜底）；新引擎有效
-        # 部分经中间层 EngineBridge 以「可选叠加」注入（见 _tick）。rig/
-        # paperdoll 展示后端暂不恢复（部件步态 / 2 帧走路仍未达标，§七·7.2）。
+        # v0.13/v0.18 展示后端选择：presentation=frames（默认，旧行为不变）| rig
+        # （2D 骨骼蒙皮/分层绑骨）| paperdoll（部件步态）。
         sprite0 = self.provider.get_static(self.store.get())
-        presentation = "frames"   # 原：self.cfg.get("presentation", "frames")
-        self.window = adapter.create_pet_window(sprite0)
-        self._part_walk = False   # 原：presentation == "paperdoll"
+        presentation = self.cfg.get("presentation", "frames")
+        if presentation in ("rig", "paperdoll"):
+            from pet.rig.presenter import build_rig_window
+            base_window = adapter.create_pet_window(sprite0)
+            base_cls = base_window.__class__
+            base_window.deleteLater()
+            self.window = build_rig_window(
+                base_cls,
+                sprite0,
+                self.store.get().stage.value,
+                defer_quick=True,
+            )
+        else:
+            self.window = adapter.create_pet_window(sprite0)
+        self._part_walk = (presentation == "paperdoll")
         # 批次L/N3（实机审查 2026-08-31）：_anim_key 初始化——旧版首赋值在
         # _play_key，行走先于首个随机小动作时 _frame_tick 裸读
         # self._anim_key 每拍 AttributeError：FSM 照走、窗口位置同步被跳过
@@ -1337,6 +1346,12 @@ class PetApp:
             wind_gain=wg, wind_bias_deg=wb)
         enrichment = self._bridge.tick(dt * 1000.0)
         self.window.apply_enrichment(enrichment)
+        set_motion_params = getattr(self.window, "set_motion_params", None)
+        if callable(set_motion_params):
+            set_motion_params(
+                tilt_deg=tilt, walking=walking, walk_hz=hz,
+                airborne=mode in ("fall", "thrown", "drag"),
+                wind_gain=wg, wind_bias_deg=wb)
         # v0.10.15 状态驱动帧动画（行走交替/下落/落地瞬帧/咀嚼循环）
         self._frame_tick(action, mode, getattr(self, "_fsm_last_mode", ""))
         self._fsm_last_mode = mode
