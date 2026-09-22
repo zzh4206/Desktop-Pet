@@ -205,6 +205,9 @@ class PetApp:
         # 每次启动都以中性聊天表情开始，不恢复上次退出前的短时状态。
         if self._chat_emotion_store is not None:
             self._reset_chat_emotion_to_neutral()
+        # Apply the startup expression immediately; an unchanged decay tick
+        # need not emit a state update, and set_conversation_mood has no state yet.
+        self.window.on_state_change(self.store.get())
         # v0.14.4 行走覆盖：行走期间改显部件步态载体 figure，停步还原
         # mood 立绘——否则行走静默回退 GPT 帧环，帧间烤死的手臂摆动/
         # 尾巴位移/色调差即实机报告的观感问题。
@@ -1388,8 +1391,10 @@ class PetApp:
             # L21（REVIEW-2026-09-04）：paperdoll 档已有引擎级 blinkOn 贴片
             # （场景每 4.7s 自脉冲），帧版 blink 会切到烤死全帧渲染，6 sway
             # 件+腿件微动骤停 ~1.3s——重复且劣化，跳过（stretch/roll 保留）
-            if name == "blink" and getattr(self, "_part_walk", False) \
-                    and self.window.part_walk_active():
+            if name == "blink" and (
+                    getattr(self.window, "skinned_motion_active", lambda: False)()
+                    or (getattr(self, "_part_walk", False)
+                        and self.window.part_walk_active())):
                 return
             frames = self.provider.frames_for(self.store.get().stage.value, key)
             if frames:
@@ -1483,8 +1488,9 @@ class PetApp:
             # v0.14 部件驱动步态优先（paperdoll）：当前 figure 挂 limb 部件
             # → 不播 walk 帧，正面原地步态由场景 limb 驱动器程序化合成；
             # 无 limb figure（mood 姿态/未铺量阶段）走下方帧路径自动回退。
-            if getattr(self, "_part_walk", False) \
-                    and self.window.part_walk_active():
+            if (getattr(self.window, "skinned_motion_active", lambda: False)()
+                    or (getattr(self, "_part_walk", False)
+                        and self.window.part_walk_active())):
                 # 批次L/N3：裸读改 getattr——与本函数其他 _anim_key 读取一致
                 if getattr(self, "_anim_key", None) == "walk":
                     self._stop_anim()

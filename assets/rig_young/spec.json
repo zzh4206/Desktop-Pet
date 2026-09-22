@@ -6,7 +6,9 @@
       "bind_bone": "tail_01",
       "influence_bones": [
         "tail_01",
-        "tail_02"
+        "tail_02",
+        "tail_03",
+        "tail_fluke"
       ],
       "z_order": 0,
       "requires_inpaint": false,
@@ -18,51 +20,14 @@
         0.74,
         0.75,
         0.875
-      ]
-    },
-    {
-      "id": "tail_seg2",
-      "description": "画面右下方弯曲的尾身。",
-      "bind_bone": "tail_02",
-      "influence_bones": [
-        "tail_02",
-        "tail_03",
-        "tail_fluke"
       ],
-      "z_order": 10,
-      "requires_inpaint": true,
-      "inpaint_guide": "补全尾根在尾身接缝下的短段延伸，保持腹侧色带连续；内部切分边界不得生成黑色描边。",
-      "inpaint_targets": [
-        "tail_seg1"
-      ],
-      "self_completion_guide": "补出被裙摆和右侧长发遮住的尾身，沿现有弧线保持宽度与配色连续，两端预留蒙皮搭接。",
-      "bbox_hint": [
-        0.665,
-        0.72,
-        0.86,
-        0.875
-      ]
-    },
-    {
-      "id": "tail_tip",
-      "description": "右侧上翘的末端尾鳍。",
-      "bind_bone": "tail_fluke",
-      "influence_bones": [
-        "tail_03",
-        "tail_fluke"
-      ],
-      "z_order": 20,
-      "requires_inpaint": true,
-      "inpaint_guide": "补全尾鳍根部下方的尾身连接，保持色带方向一致，不留下截断线或重复外轮廓。",
-      "inpaint_targets": [
-        "tail_seg2"
-      ],
-      "self_completion_guide": "保留原图可见的尖叶状尾鳍轮廓，补全被头发遮挡的鳍根。不可依据鲸尾名称擅自增加原图未显示的对称鳍叶。",
-      "bbox_hint": [
-        0.812,
-        0.601,
-        0.934,
-        0.701
+      "texture": "tail_continuous.png",
+      "largest_component": true,
+      "target_bbox_px": [
+        750,
+        778,
+        1195,
+        1118
       ]
     },
     {
@@ -153,7 +118,16 @@
         0.724,
         0.604,
         0.883
-      ]
+      ],
+      "texture": "leg_r_ref_v2.png",
+      "largest_component": true,
+      "target_bbox_px": [
+        644,
+        1080,
+        754,
+        1166
+      ],
+      "grid_step": 10
     },
     {
       "id": "ear_fin_l",
@@ -209,7 +183,7 @@
         "chest",
         "neck"
       ],
-      "z_order": 90,
+      "z_order": 115,
       "requires_inpaint": true,
       "inpaint_guide": "仅补全上身遮挡处确实延伸经过的左右后发，保持发束走向；其他区域保持透明。",
       "inpaint_targets": [
@@ -334,10 +308,9 @@
       "description": "完整脸部皮肤、眉毛、鼻口、腮红与双眼眼白。",
       "bind_bone": "head",
       "influence_bones": [
-        "head",
-        "neck"
+        "head"
       ],
-      "z_order": 140,
+      "z_order": 85,
       "requires_inpaint": true,
       "inpaint_guide": "补全头部后方实际存在的短颈、领口、后发及耳鳍根部。保持头颈搭接，不把脸部肤色扩散到头发。",
       "inpaint_targets": [
@@ -353,7 +326,23 @@
         0.3,
         0.626,
         0.582
-      ]
+      ],
+      "grid_step": 12,
+      "blink_zones": [
+        [
+          476,
+          552,
+          654,
+          72
+        ],
+        [
+          704,
+          538,
+          640,
+          72
+        ]
+      ],
+      "texture": "face_base_clean.png"
     },
     {
       "id": "pupil_l",
@@ -374,6 +363,21 @@
         0.432,
         0.414,
         0.507
+      ],
+      "grid_step": 10,
+      "blink_zones": [
+        [
+          476,
+          552,
+          654,
+          72
+        ]
+      ],
+      "gaze_ellipse": [
+        475,
+        604,
+        51,
+        47
       ]
     },
     {
@@ -395,6 +399,21 @@
         0.416,
         0.58,
         0.497
+      ],
+      "grid_step": 10,
+      "blink_zones": [
+        [
+          704,
+          538,
+          640,
+          72
+        ]
+      ],
+      "gaze_ellipse": [
+        703,
+        590,
+        51,
+        46
       ]
     },
     {
@@ -402,8 +421,7 @@
       "description": "左眼上下睑皮肤遮盖网格及睫毛；同一语义层内分网格岛。",
       "bind_bone": "eyelid_l",
       "influence_bones": [
-        "head",
-        "eyelid_l"
+        "head"
       ],
       "z_order": 170,
       "requires_inpaint": true,
@@ -418,6 +436,23 @@
         0.415,
         0.431,
         0.519
+      ],
+      "texture": "eyelid_l_ref_v2.png",
+      "largest_component": true,
+      "target_bbox_px": [
+        402,
+        533,
+        553,
+        590
+      ],
+      "grid_step": 10,
+      "blink_zones": [
+        [
+          476,
+          552,
+          654,
+          72
+        ]
       ]
     },
     {
@@ -425,8 +460,7 @@
       "description": "右眼上下睑皮肤遮盖网格及睫毛。",
       "bind_bone": "eyelid_r",
       "influence_bones": [
-        "head",
-        "eyelid_r"
+        "head"
       ],
       "z_order": 180,
       "requires_inpaint": true,
@@ -441,6 +475,23 @@
         0.399,
         0.612,
         0.505
+      ],
+      "texture": "eyelid_r_clean.png",
+      "largest_component": true,
+      "target_bbox_px": [
+        640,
+        520,
+        778,
+        568
+      ],
+      "grid_step": 10,
+      "blink_zones": [
+        [
+          704,
+          538,
+          640,
+          72
+        ]
       ]
     },
     {
@@ -477,7 +528,13 @@
         0.163,
         0.7,
         0.544
-      ]
+      ],
+      "largest_component": true,
+      "root_lock": {
+        "bone": "head",
+        "full_before_y": 340,
+        "free_after_y": 565
+      }
     },
     {
       "id": "headpiece",
@@ -774,8 +831,8 @@
         "bone_name": "upper_leg_r",
         "parent": "root_hip",
         "joint_pos": [
-          0.535,
-          0.73
+          0.5271875,
+          0.7549221183800623
         ],
         "angle_clamp": [
           -20,
@@ -787,8 +844,8 @@
         "bone_name": "lower_leg_r",
         "parent": "upper_leg_r",
         "joint_pos": [
-          0.54,
-          0.78
+          0.5321875,
+          0.8049221183800623
         ],
         "angle_clamp": [
           -5,
@@ -800,8 +857,8 @@
         "bone_name": "foot_r",
         "parent": "lower_leg_r",
         "joint_pos": [
-          0.546,
-          0.827
+          0.5381875,
+          0.8519221183800623
         ],
         "angle_clamp": [
           -12,
@@ -1385,5 +1442,6 @@
         "inertia_delay_ms": 18
       }
     ]
-  }
+  },
+  "revision": "v0.16 visual repair: continuous tail, registered lashes, shared eye closure"
 }

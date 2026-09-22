@@ -1,0 +1,12 @@
+{
+  "prompt_id": "00000d70-1c08-4ef8-8c9d-5eecd4d7b9db",
+  "prompt": "Edit <image1> with extremely high fidelity. Remove only the reddish thin eyebrow lines and wrinkle/crease lines immediately above both white oval eyes. Replace these few strokes with smooth peach skin matching their surroundings. Keep the white oval eyes, mouth, nose, cheeks and blush hatching absolutely unchanged. Keep exact original face shape, composition and pixel positions. No eyebrows, no brow crease strokes, no eyelashes, no pupils, no iris. Output transparent RGBA PNG with exact same size and framing.",
+  "negative": "eyebrows, brow lines, eye crease, eyelashes, pupils, iris, changed mouth, changed face shape, hair, clothes, background",
+  "seed": 20260922,
+  "crop": [
+    384,
+    304,
+    800,
+    752
+  ]
+}

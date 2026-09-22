@@ -19,6 +19,8 @@ Item {
 
     // ---- 2D 骨骼蒙皮（v0.18）----
     property bool skinnedMeshEnabled: false
+    readonly property bool skinnedMeshVisible: skinnedMeshEnabled
+        && skinnedMesh.ready && activeFigure === "healthy_neutral"
     property string specFile: ""
     property string meshDataFile: ""
     property string layersDir: ""
@@ -67,6 +69,11 @@ Item {
 
     function setSourceSize(w, h) { srcW = w; srcH = h }
 
+    // The young airborne sprite has more transparent padding than its idle rig.
+    function frameDisplayScale(url) {
+        return url.toString().endsWith("/young_fall_air.png") ? 1.15 : 1.0
+    }
+
     // 地面阴影（水平面 = 屏幕平面）：贴窗口底部、渲染在 mirrorNode 之前（被
     // 宠物压住）。不在 mirrorNode/bobNode 内 → 不受 bodyAngle/bodyScale/bodyY
     // 影响：影子跟着太阳走、跟着时长伸缩，不随身体摇晃/颠簸。
@@ -107,7 +114,8 @@ Item {
 
         Item {
             id: bobNode
-            anchors.fill: parent
+            width: parent.width
+            height: parent.height
             y: root.bodyY
             // bob 不加 Behavior：33ms 步进本身平滑，Behavior 反而滞后抖动
 
@@ -116,7 +124,7 @@ Item {
                 id: skinnedMesh
                 objectName: "skinnedMesh"
                 anchors.fill: parent
-                visible: root.skinnedMeshEnabled
+                visible: root.skinnedMeshVisible
                 specFile: root.specFile
                 meshDataFile: root.meshDataFile
                 layersDir: root.layersDir
@@ -127,7 +135,7 @@ Item {
 
             // ---- under_core 部件（压在主体下，接缝被核心图遮住）----
             Repeater {
-                model: root.skinnedMeshEnabled ? [] : root.partsModel.filter(function (p) { return p.z === "under_core" })
+                model: root.skinnedMeshVisible ? [] : root.partsModel.filter(function (p) { return p.z === "under_core" })
                 delegate: RigPartDelegate {}
             }
 
@@ -135,23 +143,25 @@ Item {
                 id: figA
                 anchors.fill: parent
                 source: root.figASrc
+                scale: root.frameDisplayScale(source)
                 fillMode: Image.PreserveAspectFit
                 mipmap: true
-                visible: !root.skinnedMeshEnabled
+                visible: !root.skinnedMeshVisible
             }
             Image {
                 id: figB
                 anchors.fill: parent
                 source: root.figBSrc
+                scale: root.frameDisplayScale(source)
                 fillMode: Image.PreserveAspectFit
                 opacity: root.mix
                 mipmap: true
-                visible: !root.skinnedMeshEnabled
+                visible: !root.skinnedMeshVisible
             }
 
             // ---- over_core 部件 ----
             Repeater {
-                model: root.skinnedMeshEnabled ? [] : root.partsModel.filter(function (p) { return p.z !== "under_core" })
+                model: root.skinnedMeshVisible ? [] : root.partsModel.filter(function (p) { return p.z !== "under_core" })
                 delegate: RigPartDelegate {}
             }
         }

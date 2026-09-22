@@ -1,0 +1,23 @@
+{
+  "generator": "built-in image_gen",
+  "assets": [
+    {
+      "file": "layers/tail_continuous.png",
+      "prompt": "Use case: background-extraction / precise-object-edit. Image 1 is the character reference. Create ONE transparent RGBA sprite layer of ONLY the entire whale tail, completed behind the character. Keep the original 1280x1284 canvas composition: tail is entirely in lower-right region, root near (780,1030), curved body curls downward via (890,1070), (1030,1030), then narrow neck (1070,940), one upturned leaf-shaped tip ending at (1183,785). Preserve the original reference dark muted indigo #414267 back, muted periwinkle #8185aa ventral band, thin dark near-black lineart. Complete a smooth continuous broad root under the skirt/hair, from (750,990) to (820,1110), hidden region may be simple continuation. Tail is one seamless piece, not multiple sections. Remove ALL hair, character, skirt, feet, skin, bows, background. No cyan bright belly, no additional fluke, no fish scales. Do not enlarge, recenter, or fill canvas with tail: preserve its reference lower-right canvas coordinates and small occupancy. Genuine transparent background everywhere outside tail, no shadow, no text, no checkerboard."
+    },
+    {
+      "file": "layers/eyelid_l_clean.png",
+      "prompt": "Use case precise-object-edit/background-extraction. Image 1 is edit target, a transparent rig layer from a chibi character's viewer-left eye. Retain ONLY the dark curved upper eyelash stroke and its pointed lash tips, in the same shape, scale and placement. Remove ALL peach skin, pink cheek/blush, mouth fragment, eyebrow, hair/background. Do not redraw the shape of the black upper eyelash curve: it arches upward over the eye and descends to outer corners. Output one tiny eyelash stroke in a full transparent 1280x1284 canvas, same coordinates as original (approximately x400..545, y536..620). The transparent eye opening remains completely empty. No white/sclera, iris, pupil, skin, no extra closed eye line. Genuine transparent alpha background, no black background or checkerboard."
+    },
+    {
+      "file": "layers/eyelid_r_clean.png",
+      "prompt": "Use case precise-object-edit/background-extraction. Image 1 is edit target, a transparent rig layer from a chibi character's viewer-right eye. Retain ONLY the dark curved upper eyelash stroke and its pointed lash tips, same shape and orientation. Remove ALL peach skin, pink cheek/blush patches, mouth fragment, eyebrow, hair/background. Preserve shape of dark upper eyelash arc arching over eye with pointed corner. One tiny dark eyelash arc on genuine transparent RGBA background. Approx original x638..778, y521..567 in 1280x1284 canvas, preserve position. Transparent eye opening remains completely empty. No white/sclera, iris, pupil or skin. No additional eye stroke, no black background or checkerboard."
+    }
+  ],
+  "face": {
+    "generator": "Local ComfyUI Qwen Image 2.1",
+    "request": "qwen_request.json",
+    "accepted_crop": "face_qwen_crop.png",
+    "patch_tool": "../../../tools/patch_young_face.py"
+  }
+}

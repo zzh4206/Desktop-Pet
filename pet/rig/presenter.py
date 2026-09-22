@@ -230,13 +230,18 @@ class RigWindow(WindowBase):
         mp = getattr(self._spec, "skinned_mesh", "")
         lp = getattr(self._spec, "skinned_layers", "")
         if sp and mp and lp and os.path.isfile(sp) and os.path.isfile(mp) and os.path.isdir(lp):
-            self._root.setProperty("skinnedMeshEnabled", True)
+            self._root.setProperty("skinnedMeshEnabled", False)
             self._root.setProperty("specFile", sp)
             self._root.setProperty("meshDataFile", mp)
             self._root.setProperty("layersDir", lp)
             from PySide6.QtQuick import QQuickItem
             self._skinned_item = self._root.findChild(QQuickItem, "skinnedMesh")
-            log.info("RigWindow 2D 骨骼蒙皮已激活（spec=%s）", sp)
+            from PySide6.QtQuick import QQuickWindow
+            enabled = (QQuickWindow.sceneGraphBackend() != "software"
+                       and self._skinned_item is not None
+                       and self._skinned_item.prepare())
+            self._root.setProperty("skinnedMeshEnabled", enabled)
+            log.info("RigWindow 蒙皮可用=%s（spec=%s）", enabled, sp)
         else:
             self._root.setProperty("skinnedMeshEnabled", False)
             self._skinned_item = None
@@ -510,7 +515,7 @@ class RigWindow(WindowBase):
 
         # 2D 骨骼蒙皮姿态推入（若蒙皮节点存活）
         item = self._skinned_item
-        if item is not None:
+        if item is not None and r.property("skinnedMeshVisible"):
             for b, deg in frame.bone_angles.items():
                 item.setBonePose(b, deg, frame.bone_tx.get(b, 0.0), frame.bone_ty.get(b, 0.0))
             item.setBlink(frame.blink_progress)
@@ -565,6 +570,10 @@ class RigWindow(WindowBase):
             return
         self.set_sprite(sprite)
 
+    def skinned_motion_active(self) -> bool:
+        """Whether the visible mesh already provides walking and blinking."""
+        return bool(self.rig_active and self._root.property("skinnedMeshVisible"))
+
     def part_walk_active(self) -> bool:
         """当前展示 figure 是否挂有 limb 部件（部件驱动步态可用，v0.14）。
 
@@ -573,6 +582,8 @@ class RigWindow(WindowBase):
         """
         if not (self.rig_active and self._spec is not None):
             return False
+        if self._root.property("skinnedMeshVisible"):
+            return True
         key = self._root.property("activeFigure") or ""
         return any(p.kind == "limb" and p.source_figure == key
                    for p in self._spec.parts)
@@ -616,6 +627,18 @@ class RigWindow(WindowBase):
                 return mapped
         return path
 
+    def _display_figure_key(self, path: str, display: str = "") -> str:
+        if self._frames:
+            return ""  # actions must always display their own frame
+        key = figure_key_from_path(path) or figure_key_from_path(display)
+        if key:
+            return key
+        if self._spec:
+            for name, figure in self._spec.figures.items():
+                if os.path.abspath(path) == os.path.abspath(figure):
+                    return name
+        return ""
+
     def _show_now(self, path: str) -> None:
         """同步直显（无过渡）：A 槽显源、刷新源图尺寸与部件绑定名。"""
         if not self.rig_active:
@@ -627,8 +650,8 @@ class RigWindow(WindowBase):
         self._root.setProperty("figASrc", _file_url(disp))
         self._root.setProperty("figBSrc", "")
         self._root.setProperty("mix", 0.0)
-        key = figure_key_from_path(path) or figure_key_from_path(disp)
-        self._set_prop("activeFigure", key or "")
+        key = self._display_figure_key(path, disp)
+        self._set_prop("activeFigure", key)
 
     def _transition_to(self, path: str, fade_ms: int) -> None:
         """切到下一图源。
@@ -647,18 +670,14 @@ class RigWindow(WindowBase):
             self._root.setProperty("figASrc", _file_url(path))
             self._root.setProperty("figBSrc", "")
             self._root.setProperty("mix", 0.0)
-            key = figure_key_from_path(path)
-            if key:
-                self._set_prop("activeFigure", key)
+            self._set_prop("activeFigure", self._display_figure_key(path))
             return
         self._canonicalize()
         disp = self._resolve_display(path)
         w, h = self._src_size(disp)
         self._root.setSourceSize(w, h)
         self._root.setProperty("figBSrc", _file_url(disp))
-        key = figure_key_from_path(path)
-        if key:
-            self._set_prop("activeFigure", key)
+        self._set_prop("activeFigure", self._display_figure_key(path, disp))
         anim = self._mix_anim
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)

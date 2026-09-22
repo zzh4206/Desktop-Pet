@@ -3,8 +3,8 @@
 两个互不依赖的通过门：
   A. RigRuntime 纯数学核（无窗口）：FK 恒等性、层级旋转传播、look-at 椭圆
      限幅、blink 比例挤压、坏件降级（坏 json / 未知骨权重）。
-  B. QQuickWidget 真渲染：22 层 quad 网格 + 真实层图 PNG，offscreen 出图，
-     非背景像素数与姿态驱动的像素差双断言；顶点缓冲视图跨帧稳定性。
+  B. Software 后端真实截图：必须回退分层位图，不能伪装为支持任意几何。
+     硬件姿态/拖影验收另运行 qa_skinned_visual.py --backend d3d11。
 
 用法：
   python spikes/spike_skin_mesh_smoke.py
@@ -198,151 +198,12 @@ def part_a_math() -> None:
 
 
 def part_b_render() -> None:
-    print("== B. QQuickWidget 真渲染 ==")
-    from PySide6.QtCore import QTimer
-    from PySide6.QtQuickWidgets import QQuickWidget
-    from pet.rig.skinned_mesh_item import SkinnedMeshItem, _DIRTY_SUPPORTED
-    print(f"  [diag] 脏标记通道: {'主路径(就地刷新)' if _DIRTY_SUPPORTED else '回退路径(整树重建)'}")
-
-    tmp = tempfile.mkdtemp(prefix="skin_mesh_qml_")
-    mesh_path = os.path.join(tmp, "mesh.json")
-    build_quad_mesh(mesh_path)
-    qml_path = os.path.join(tmp, "scene.qml")
-    with open(qml_path, "w", encoding="utf-8") as f:
-        f.write(f"""
-import QtQuick
-import PetRig 1.0
-Item {{
-    SkinnedMeshItem {{
-        objectName: "skin"
-        anchors.fill: parent
-        specFile: "{SPEC_FILE.replace(os.sep, '/')}"
-        meshDataFile: "{mesh_path.replace(os.sep, '/')}"
-        layersDir: "{LAYERS_DIR.replace(os.sep, '/')}"
-    }}
-}}
-""")
-
-    app = QApplication.instance() or QApplication(sys.argv)
-    widget = QQuickWidget()
-    widget.resize(360, 480)
-    widget.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-    widget.setSource(QUrl.fromLocalFile(qml_path))
-    check("QML 加载无错误", widget.status() == QQuickWidget.Status.Ready
-          or not widget.errors())
-    widget.show()     # offscreen 平台"显示"到内存表面；不 show 场景图不渲染
-
-    def pixels(img):
-        img = img.convertToFormat(QImage.Format.Format_ARGB32)
-        return np.frombuffer(img.constBits(), np.uint8,
-                             count=img.sizeInBytes()).copy()
-
-    def count_fg(img) -> int:
-        raw = pixels(img).reshape(img.height(), img.bytesPerLine())
-        arr = raw[:, :img.width() * 4].reshape(img.height(), img.width(), 4)
-        bg = arr[2, 0].astype(np.int16)          # 左上角像素当背景参照
-        diff = np.abs(arr.astype(np.int16) - bg)
-        return int((diff.max(axis=2) > 16).sum())
-
-    def run_checks() -> None:
-        try:
-            root_obj = widget.rootObject()
-            item = (root_obj.findChild(SkinnedMeshItem) if root_obj else None) \
-                or widget.findChild(SkinnedMeshItem)
-            if item is None:
-                print("  [diag] findChild 为 None；errors:",
-                      [e.toString() for e in widget.errors()])
-            else:
-                print(f"  [diag] item._rt={item._rt is not None} "
-                      f"failed={item._load_failed} "
-                      f"spec='{item._spec_file}' mesh='{item._mesh_file}' "
-                      f"layers='{item._layers_dir}'")
-            check("QML 实例化并完成加载", item is not None
-                  and item._rt is not None and not item._load_failed)
-            img0 = widget.grab().toImage()
-            check("grab 出图非空", not img0.isNull())
-            if img0.isNull() or item is None:
-                app.quit()
-                return
-            fg0 = count_fg(img0)
-            check("出图前景像素充足", fg0 > 2000, f"{fg0}px")
-            img_store.append((img0, item))
-
-            def force_grab(retries: int = 3):
-                """强制渲染后抓图：update→processEvents→repaint 循环，吸收
-                缺陷构建（回退路径）下 grab 与帧调度的竞态。"""
-                for _ in range(retries):
-                    app.processEvents()
-                    widget.repaint()
-                    img = widget.grab().toImage()
-                    if not img.isNull():
-                        return img
-                return img
-
-            def check_round2() -> None:
-                img0b, item2 = img_store[0]
-                item2.setBonePose("hair_back_l_02", -12.0, 0.0, 4.0)
-                item2.setLookAt(1.0, 1.0)      # 定格一个稳定非零姿态
-                img1 = force_grab()
-                verts_after = {k: id(v.verts)
-                               for k, v in item2._layer_sgs.items()}
-                if _DIRTY_SUPPORTED:
-                    check("顶点视图零重建", verts_before == verts_after
-                          and len(verts_after) == 22, f"{len(verts_after)} 层")
-                else:
-                    # 绑定缺陷回退路径按设计整树重建：验证层树完整 + 顶点仍直写
-                    check("回退路径层树完整（整树重建设计）",
-                          len(verts_after) == 22)
-                check("姿态驱动画面变化", count_fg(img1) > 2000
-                      and not np.array_equal(pixels(img0b), pixels(img1)))
-                # 全部姿态归零后应精确回到初始帧（同输入 → 同栅格化输出）
-                item2.setBonePose("tail_02", 0.0)
-                item2.setBonePose("hair_back_l_02", 0.0, 0.0, 0.0)
-                item2.setBlink(0.0)
-                item2.setLookAt(0.0, 0.0)
-                app.processEvents()
-                QTimer.singleShot(400, check_round3)
-
-            def check_round3() -> None:
-                img0c, _ = img_store[0]
-                img2 = force_grab()
-                check("姿态归零画面回归",
-                      np.array_equal(pixels(img0c), pixels(img2)))
-                widget.setSource(QUrl())
-                widget.close()
-                app.processEvents()
-                app.quit()
-
-            # 顶点缓冲视图跨帧稳定（无重建/无重分配）
-            verts_before = {k: id(v.verts) for k, v in item._layer_sgs.items()}
-            # 生产式驱动：33ms 定时推姿态 ~0.4s（对齐 motion/presenter 的
-            # 驱动节奏；单发 setPose 在缺陷构建上会撞上帧调度竞态）
-            drive_state = {"t": 0.0}
-            drive_timer = QTimer()
-            drive_timer.setInterval(33)
-
-            def drive_step() -> None:
-                drive_state["t"] += 0.033
-                item.setBonePose("tail_02", 18.0 * math.sin(drive_state["t"] * 3.0))
-                item.setBlink(0.5 + 0.5 * math.sin(drive_state["t"]))
-
-            drive_timer.timeout.connect(drive_step)
-            drive_timer.start()
-            QTimer.singleShot(420, check_round2)
-
-            def stop_drive() -> None:
-                drive_timer.stop()
-
-            QTimer.singleShot(410, stop_drive)
-        except Exception:                      # noqa: BLE001 —— 冒烟要打全迹
-            import traceback
-            traceback.print_exc()
-            FAIL.append("B 部分异常")
-            app.quit()
-
-    img_store: list = []
-    QTimer.singleShot(900, run_checks)
-    app.exec()
+    """Software rendering must use the known-good figure/parts fallback."""
+    import subprocess
+    with tempfile.TemporaryDirectory(prefix="skin_software_") as tmp:
+        result = subprocess.run([sys.executable, os.path.join(ROOT, "spikes", "qa_skinned_visual.py"),
+                                 "--backend", "software", "--output", tmp], check=False)
+        check("software backend renders fallback pixels", result.returncode == 0)
 
 
 def main() -> int:

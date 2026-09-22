@@ -183,8 +183,13 @@ class MotionEngine:
 
         固定 seed → 同输入序列产生同输出序列（四铁则之「确定性」）。
         """
+        timing = ((getattr(self._spec, "face_mechanics", {}) or {}).get("blink", {})
+                  .get("timing_ms", {}))
+        self._blink_timing = tuple(max(1.0, float(timing.get(key, default)))
+                                   for key, default in (("closing", 45), ("closed_hold", 30), ("opening", 55)))
+        self._blink_duration = sum(self._blink_timing)
         self._blink_rng = random.Random(self._BLINK_SEED)
-        self._blink_open_until = self._BLINK_CLOSE_MS
+        self._blink_open_until = self._blink_duration
         self._blink_next_ms = self._blink_open_until + self._blink_rng.uniform(
             self._BLINK_MIN_MS, self._BLINK_MAX_MS)
 
@@ -224,7 +229,7 @@ class MotionEngine:
 
         # L0 眨眼：随机间隔 3–6s（确定性 PRNG），闭眼 130ms 脉冲
         if t >= self._blink_next_ms:
-            self._blink_open_until = t + self._BLINK_CLOSE_MS
+            self._blink_open_until = t + self._blink_duration
             self._blink_next_ms = self._blink_open_until + \
                 self._blink_rng.uniform(self._BLINK_MIN_MS, self._BLINK_MAX_MS)
         blink_on = t < self._blink_open_until
@@ -233,13 +238,14 @@ class MotionEngine:
         blink_progress = 0.0
         if blink_on:
             rem = self._blink_open_until - t
-            elapsed = self._BLINK_CLOSE_MS - rem
-            if elapsed < 45.0:
-                blink_progress = 0.5 * (1.0 - math.cos(math.pi * elapsed / 45.0))
-            elif elapsed < 75.0:
+            closing, hold, opening = self._blink_timing
+            elapsed = self._blink_duration - rem
+            if elapsed < closing:
+                blink_progress = 0.5 * (1.0 - math.cos(math.pi * elapsed / closing))
+            elif elapsed < closing + hold:
                 blink_progress = 1.0
             else:
-                blink_progress = 0.5 * (1.0 + math.cos(math.pi * (elapsed - 75.0) / 55.0))
+                blink_progress = 0.5 * (1.0 + math.cos(math.pi * (elapsed - closing - hold) / opening))
         blink_progress = max(0.0, min(1.0, blink_progress))
 
         # 视线追踪 look_at (nx, ny)

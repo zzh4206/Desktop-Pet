@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -83,15 +85,15 @@ def main():
 
     check("SkinnedMeshItem 蒙皮核 _rt 成功运行", win._skinned_item._rt is not None)
     if win._skinned_item._rt is not None:
-        check("蒙皮层数等于 22", len(win._skinned_item._rt.layers) == 22)
+        check("蒙皮层数等于 20（整尾合层）", len(win._skinned_item._rt.layers) == 20)
         check("蒙皮骨骼数等于 47", len(win._skinned_item._rt.bones) == 47)
 
     # 验证真实透明离屏渲染抓图
-    img = QImage(500, 500, QImage.Format.Format_ARGB32_Premultiplied)
-    img.fill(Qt.transparent)
-    win._quick.render(img)
+    img = win._quick.grabFramebuffer().convertToFormat(QImage.Format_RGBA8888)
     check("离屏抓图非空", not img.isNull())
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "rig_young")
+    pixels = np.frombuffer(img.constBits(), np.uint8).reshape(img.height(), img.width(), 4)
+    check("截图实际包含宠物像素", int((pixels[:, :, 3] > 20).sum()) > 10000)
+    out_dir = tempfile.mkdtemp(prefix="pet_skin_test_")
     preview_path = os.path.join(out_dir, "preview_skinned_window.png")
     img.save(preview_path)
     check("预览截图保存成功", os.path.isfile(preview_path), preview_path)

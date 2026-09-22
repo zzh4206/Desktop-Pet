@@ -271,9 +271,15 @@ def load_rig_spec(rig_dir: str, stage: str) -> RigSpec | None:
         # 探测同目录或 assets/rig_young 默认路径
         candidates = [
             (os.path.join(rig_dir, "spec.json"), os.path.join(rig_dir, "mesh", "mesh_data.json"), os.path.join(rig_dir, "layers")),
-            (os.path.join(rig_dir, "..", "..", "rig_young", "spec.json"), os.path.join(rig_dir, "..", "..", "rig_young", "mesh", "mesh_data.json"), os.path.join(rig_dir, "..", "..", "rig_young", "layers")),
-            (os.path.join(rig_dir, "..", "..", "reference", "young_rig_spec.json"), os.path.join(rig_dir, "..", "..", "rig_young", "mesh", "mesh_data.json"), os.path.join(rig_dir, "..", "..", "rig_young", "layers")),
         ]
+        if stage == "young":
+            assets_dir = os.path.normpath(os.path.join(rig_dir, "..", ".."))
+            young_dir = os.path.join(assets_dir, "rig_young")
+            candidates += [
+                (os.path.join(young_dir, "spec.json"),
+                 os.path.join(young_dir, "mesh", "mesh_data.json"),
+                 os.path.join(young_dir, "layers")),
+            ]
         for sp, mp, lp in candidates:
             sp, mp, lp = os.path.normpath(sp), os.path.normpath(mp), os.path.normpath(lp)
             if os.path.isfile(sp) and os.path.isfile(mp) and os.path.isdir(lp):

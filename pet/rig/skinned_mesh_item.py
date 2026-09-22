@@ -1,6 +1,6 @@
 """骨架蒙皮网格渲染件（Linear Blend Skinning on Qt Quick Scene Graph）。
 
-把 22 图层 × 47 骨（``assets/reference/young_rig_spec.json``）的蒙皮规范落到
+把图层与骨架（``assets/rig_young/spec.json``）的蒙皮规范落到
 ``QQuickItem`` 自定义场景图节点上，替代刚体旋转切片（paper-doll）的僵硬观感：
 驱动方每帧推 ``setBonePose`` / ``setBlink`` / ``setLookAt``，本件做 FK + LBS
 后把变形顶点直写场景图顶点缓冲。与 motion.py 分工同构：本件是**哑渲染器**
@@ -17,20 +17,14 @@
   ``(ctypes.c_float * (4·V)).from_address`` + ``np.ctypeslib.as_array`` 建
   NumPy 视图直读直写；``arr[:, 0:2] = deformed_xy`` 后
   ``geom.markVertexDataDirty()``。
-* **无每帧堆分配**：FK 矩阵栈、LBS 输出、眼睑挤压、视图变换中间量全部走
-  预分配缓冲 + ``out=`` 就地写；热路径不产生待 GC 的顶点级临时数组
-  （骨级 47 元素标量临时量不计——见 ``skinning_matrices``）。
+* **复用帧缓冲**：FK 矩阵栈、LBS 输出、眨眼形变与视图变换复用 NumPy
+  缓冲；骨矩阵的高级索引仍产生小型临时数组。
 * **纹理持久缓存**：``window().createTextureFromImage(QImage)`` 一次创建
   存入纹理表，跨重建复用，仅场景图失效/换窗时重建。
 
-**双路径渲染**（``_DIRTY_SUPPORTED`` 探测，见模块尾注释）：健康 PySide6
-构建（requirements 钉 6.5–6.7）走**主路径**——持久节点树 + 上述零拷贝就地
-刷新（Qt 自绘项标准架构）；缺陷构建（实测 6.11.1 的 ``DirtyStateBit`` 枚举
-无法转 int、``markDirty`` 静默失效）自动落入**回退路径**——姿态帧整树重建
-（纹理复用、旧树异步释放），数学与数据面（RigRuntime/LBS/零拷贝视图）两条
-路径完全共享。缺陷构建下的层节点工程约束（可渲染根、内建几何原地重分配、
-剔除矩形余量、sync 期禁删禁摘）在 ``_build_scene_graph`` /
-``_build_layer_node`` / ``_render_rebuild`` 注释中逐条留档，spikes 冒烟可复现。
+硬件后端使用持久 QSGGeometryNode + QSGTextureMaterial，逐帧更新顶点。
+软件后端不支持此自定义材质，由 ready=False 通知呈现器回退分层位图。
+Python Flag 不支持 int() 并不表示 Qt markDirty 失效；不可据此叠挂旧树。
 
 坐标空间（单一真相源）：
 
@@ -68,11 +62,8 @@ meshDataFile 格式（json，UTF-8；资产工具产出的中间格式）::
   ``(dx/10)² + (dy/7)² ≤ 1``（10/7 = spec ``look_at.axis_limits_px``，源图
   像素）。专用通道**覆盖**对瞳骨的 ``setBonePose`` 平移（瞳骨 clamp=[0,0]
   本就只走平移）。
-* blink：``blinkProgress`` 0=睁开 1=闭合；eyelid 网格按
-  ``closure_curve_center`` 上下分区，上睑朝 ``upper_scale_pivot``、下睑朝
-  ``lower_scale_pivot`` 分别做 78%/22% 垂直比例挤压。挤压在**静止空间先于
-  蒙皮**施加（眼睑骨 clamp=[0,0] 不旋转，与蒙皮后施加等价，且避免把挤压
-  混进骨矩阵）。
+* blink：``blink_delta`` 是每顶点闭眼位移，眼白、瞳孔、睫毛共用闭合曲线；
+  先在静止空间变形，再做 LBS。旧网格无此字段时保留旧版眼睑挤压。
 
 降级铁律（宽进严出）：spec/mesh 任一整体损坏 → 空渲染 + 一次性告警；单层
 损坏（顶点/UV/索引/权重/纹理任一不合格）→ 弃层不弃场；权重引用未知骨 →
@@ -102,7 +93,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from PySide6.QtCore import Property, QObject, QRectF, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import (
     QQuickItem,
@@ -115,21 +106,8 @@ from PySide6.QtQuick import (
     QSGTextureMaterial,
 )
 
-try:                                        # 层节点载体（见 _build_layer_node 注）
-    from PySide6.QtQuick import QSGSimpleTextureNode
-except ImportError:                         # pragma: no cover —— 理论缺件回退
-    QSGSimpleTextureNode = None             # type: ignore[assignment]
-
-# ---- 脏标记健康探测：PySide6 6.11.1 实测 DirtyStateBit 枚举无法转 int
-# （int(flag) 抛 TypeError），markDirty/setRect/子树扰动/子节点重建全部
-# 无法刷新已栅格化节点；唯一被渲染器尊重的刷新通道是 updatePaintNode
-# 返回**新根**（换根即整树重挂）。健康构建走零拷贝就地刷新；缺陷构建
-# （_DIRTY_SUPPORTED=False）按姿态帧整树重建（纹理复用，见 _render_rebuild）。
-try:
-    int(QSGNode.DirtyState.DirtyGeometry)
-    _DIRTY_SUPPORTED = True
-except TypeError:                           # pragma: no cover —— 依赖构建
-    _DIRTY_SUPPORTED = False
+# QSGGeometry stores a reference: keep the Python AttributeSet alive.
+_TEXTURED_ATTRIBUTES = QSGGeometry.defaultAttributes_TexturedPoint2D()
 
 log = logging.getLogger("pet")
 
@@ -215,6 +193,9 @@ class _LayerSkin:
     bone_idx: np.ndarray             # (K,) i32 → 全骨数组下标
     weights: np.ndarray              # (V,K) f32（行和=1）
     blink: _EyeBlinkCfg | None = None
+    blink_delta: np.ndarray | None = None
+    gaze_uv: bool = False
+    texture_size: tuple[float, float] = (1.0, 1.0)
     # ---- 以下均为帧复用缓冲，加载期一次分配 ----
     scratch: np.ndarray | None = None     # (V,3) LBS 输出
     eff_rest: np.ndarray | None = None    # (V,3) 眼睑挤压后的有效静止坐标
@@ -239,12 +220,15 @@ class RigRuntime:
         self.bones = bones                      # 拓扑序（父先于子）
         self.bone_index: dict[str, int] = {b.name: i for i, b in enumerate(bones)}
         self.parent_idx = parent_idx            # (B,) i32；根 = -1
+        self._bone_order = _topo_order(bones)[0]
         self.layers = layers                    # z_order 升序
         self.look = look
         self.img_w = img_w
         self.img_h = img_h
+        uv_bones = {layer.bind_bone for layer in layers if layer.gaze_uv}
         self.pupil_idx = np.array(
-            [self.bone_index[n] for n in look.pupil_bones if n in self.bone_index],
+            [self.bone_index[n] for n in look.pupil_bones
+             if n in self.bone_index and n not in uv_bones],
             dtype=np.int32)
 
         # ---- 静止矩阵（加载期一次算清）----
@@ -297,7 +281,7 @@ class RigRuntime:
         L[:, :, 2] = a0 * self._tx[:, None] + a1 * self._ty[:, None] + a2
 
         W = self._W
-        for i in range(len(self.bones)):
+        for i in self._bone_order:
             p = int(self.parent_idx[i])
             if p < 0:
                 W[i] = L[i]
@@ -322,6 +306,12 @@ class RigRuntime:
 
     def effective_rest(self, layer: _LayerSkin, blink: float) -> np.ndarray:
         """层的有效静止坐标：眼睑层施加眨眼挤压（带缓存），普通层直返 rest。"""
+        if layer.blink_delta is not None:
+            if layer._blink_applied != blink:
+                np.multiply(layer.blink_delta, blink, out=layer.eff_rest)
+                np.add(layer.rest, layer.eff_rest, out=layer.eff_rest)
+                layer._blink_applied = blink
+            return layer.eff_rest
         cfg = layer.blink
         if cfg is None:
             return layer.rest
@@ -571,7 +561,6 @@ class RigRuntime:
         if not isinstance(wb_raw, list) or not isinstance(wv_raw, list) \
                 or len(wb_raw) != vcount or len(wv_raw) != vcount:
             raise ValueError("weight_bones/weight_values 须为每顶点平行数组")
-        max_k = 1
         rows: list[tuple[list[int], list[float]]] = []
         dropped_unknown: set[str] = set()
         for names, vals in zip(wb_raw, wv_raw):
@@ -599,21 +588,25 @@ class RigRuntime:
             else:
                 wsel = [w / total for w in wsel]
             rows.append((sel, wsel))
-            max_k = max(max_k, len(sel))
         if dropped_unknown:
             log.warning("层 %s 权重引用未知骨 %s，已剔除并归一化",
                         layer_id, sorted(dropped_unknown))
         if not bind_name or bind_name not in bone_idx:
             bind_name = next(iter(bone_idx))     # 首骨兜底（根骨）
             log.warning("层 %s 绑定骨缺失/未知，回退 %s", layer_id, bind_name)
-        if max_k == 0:
-            rows = [([bone_idx[bind_name]], [1.0])] * vcount
-            max_k = 1
-        weights = np.zeros((vcount, max_k), np.float32)
-        bone_sel = np.full(max_k, bone_idx[bind_name], np.int32)
+        # Columns identify bones, not per-vertex influence ranks. Different
+        # vertices may list the same bones in a different order.
+        selected = sorted({b for sel, _ in rows for b in sel}
+                          | {bone_idx[bind_name]})
+        bone_sel = np.asarray(selected, np.int32)
+        columns = {b: i for i, b in enumerate(selected)}
+        weights = np.zeros((vcount, len(selected)), np.float32)
         for r, (sel, wsel) in enumerate(rows):
             if sel:
-                weights[r, :len(sel)] = wsel     # 剩余槽位：权重 0 + 绑定骨占位
+                for b, weight in zip(sel, wsel):
+                    weights[r, columns[b]] += weight
+            else:
+                weights[r, columns[bone_idx[bind_name]]] = 1.0
 
         texture = str(ml.get("texture") or f"{layer_id}.png")
         texture_path = os.path.normpath(os.path.join(layers_dir, texture))
@@ -624,6 +617,15 @@ class RigRuntime:
             z_order = mesh_index
 
         blink = blink_cfgs.get(layer_id)
+        texture_size = tuple(float(v) for v in ml.get("texture_size_px", [1, 1]))
+        if len(texture_size) != 2 or not all(math.isfinite(v) and v > 0 for v in texture_size):
+            raise ValueError("invalid texture_size_px")
+        delta = ml.get("blink_delta")
+        if delta is not None:
+            delta = np.asarray(delta, np.float32)
+            if delta.shape != (vcount, 2) or not np.isfinite(delta).all():
+                raise ValueError("blink_delta must match vertices")
+            delta = np.column_stack((delta, np.zeros(vcount, np.float32)))
         layer = _LayerSkin(
             layer_id=layer_id,
             z_order=z_order,
@@ -636,8 +638,11 @@ class RigRuntime:
             bone_idx=bone_sel,
             weights=weights,
             blink=blink,
+            blink_delta=delta,
+            gaze_uv=bool(ml.get("gaze_uv", False)),
+            texture_size=texture_size,
             scratch=np.zeros((vcount, 3), np.float32),
-            eff_rest=np.zeros((vcount, 3), np.float32) if blink else None,
+            eff_rest=np.zeros((vcount, 3), np.float32) if blink or delta is not None else None,
             upper_mask=(None if blink is None else
                         verts[:, 1] < blink.center_y),
             lower_mask=(None if blink is None else
@@ -693,8 +698,7 @@ def _topo_order(bones: list[_BoneDef]) -> tuple[list[int], np.ndarray, int]:
 class _LayerSG:
     """一层的场景图簿记：节点/几何/纹理 + 零拷贝顶点视图。
 
-    material 仅回退路径（裸 QSGGeometryNode）持有；SimpleTextureNode 载体的
-    材质在节点内部，无需单独保引用。
+    保持 Python 包装器存活；节点拥有几何和材质，纹理由 item 的缓存持有。
     """
 
     node: QSGGeometryNode
@@ -726,6 +730,7 @@ class SkinnedMeshItem(QQuickItem):
     lookAtXChanged = Signal(float)
     lookAtYChanged = Signal(float)
     blinkProgressChanged = Signal(float)
+    readyChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -748,10 +753,11 @@ class SkinnedMeshItem(QQuickItem):
         # ---- 加载态 ----
         self._rt: RigRuntime | None = None
         self._load_failed: bool = False
+        self._ready = False
+        self._assets_dirty = True
         # ---- 场景图态（仅渲染同步阶段触碰）----
         self._root: QSGNode | None = None
         self._layer_sgs: dict[str, _LayerSG] = {}
-        self._sg_size_key: tuple[float, float] = (0.0, 0.0)   # 剔除矩形基准
         self._tex_cache: dict[str, QSGTexture] = {}           # 层纹理跨重建复用
         # ---- 帧簿记 ----
         self._pose_dirty: bool = True
@@ -761,6 +767,43 @@ class SkinnedMeshItem(QQuickItem):
             self.windowChanged.connect(self._on_window_changed)
         except Exception:                            # pragma: no cover
             log.warning("SkinnedMeshItem 无法监听 windowChanged")
+
+    ready = Property(bool, lambda self: self._ready, notify=readyChanged)
+
+    def _set_ready(self, value: bool) -> None:
+        if self._ready != value:
+            self._ready = value
+            self.readyChanged.emit()
+
+    def prepare(self) -> bool:
+        """Validate before hiding the fallback image; no scene graph work here."""
+        try:
+            return self._prepare()
+        except Exception:
+            log.warning("Invalid skinned asset bundle; using figure fallback", exc_info=True)
+            self._rt = None
+            self._load_failed = True
+            self._set_ready(False)
+            self._invalidate_pose()
+            return False
+
+    def _prepare(self) -> bool:
+        self._rt = RigRuntime.load(self._spec_file, self._mesh_file, self._layers_dir)
+        complete = self._rt is not None and all(
+            not QImage(layer.texture_path).isNull() for layer in self._rt.layers)
+        if complete:
+            with open(self._spec_file, encoding="utf-8") as f:
+                complete = len(self._rt.layers) == len(json.load(f)["layers"])
+        self._load_failed = not complete
+        self._assets_dirty = True
+        if complete:
+            n = len(self._rt.bones)
+            self._pose_ang_buf = np.zeros(n, np.float32)
+            self._pose_tx_buf = np.zeros(n, np.float32)
+            self._pose_ty_buf = np.zeros(n, np.float32)
+        self._set_ready(complete)
+        self._invalidate_pose()
+        return complete
 
     # ---------------- QML 属性 ----------------
 
@@ -803,7 +846,8 @@ class SkinnedMeshItem(QQuickItem):
         self._pose_ang_buf = None
         self._pose_tx_buf = None
         self._pose_ty_buf = None
-        self._teardown_sg()
+        self._assets_dirty = True
+        self._set_ready(False)
         self._invalidate_pose()
 
     def _get_look_x(self) -> float:
@@ -912,80 +956,39 @@ class SkinnedMeshItem(QQuickItem):
             if not self._render_error_logged:
                 self._render_error_logged = True
                 log.exception("SkinnedMeshItem 渲染异常，本帧起静默跳帧")
-            return self._root if self._root is not None else oldNode
+            self._set_ready(False)
+            return oldNode
 
     def _update_paint_node(self, oldNode: QSGNode | None) -> QSGNode | None:
-        if self._rt is None:
-            if not (self._spec_file and self._mesh_file and self._layers_dir):
-                return oldNode          # QML 属性未配齐：静默空渲染
-            self._rt = RigRuntime.load(self._spec_file, self._mesh_file,
-                                       self._layers_dir)
-            if self._rt is None:
-                self._load_failed = True
-                return oldNode
-            B = len(self._rt.bones)
-            self._pose_ang_buf = np.zeros(B, np.float32)
-            self._pose_tx_buf = np.zeros(B, np.float32)
-            self._pose_ty_buf = np.zeros(B, np.float32)
-            # 加载前积压的 setBonePose 补验：未知骨此时才能判定
-            for name in list(self._pose_angle):
-                if name not in self._rt.bone_index:
-                    if name not in self._warned_bones:
-                        self._warned_bones.add(name)
-                        log.warning("积压 setBonePose 未知骨骼 %s，忽略", name)
-                    for d in (self._pose_angle, self._pose_tx, self._pose_ty):
-                        d.pop(name, None)
-            self._pose_dirty = True
-
         win = self.window()
         if win is None:
             return oldNode
+        from PySide6.QtQuick import QSGRendererInterface
+        if win.rendererInterface().graphicsApi() == QSGRendererInterface.GraphicsApi.Software:
+            self._set_ready(False)
+            return oldNode
+        if self._rt is None and not self.prepare():
+            return oldNode
         w, h = float(self.width()), float(self.height())
-        if _DIRTY_SUPPORTED:
-            # ---- 主路径（健康构建）：持久节点 + 顶点就地刷新 ----
-            # 尺寸变化 → 整树重建：层节点的剔除矩形（setRect）必须跟随 item
-            # 尺寸（build 后不可再调 setRect，见 _build_layer_node 注）
-            if w > 0.0 and h > 0.0 and self._sg_size_key != (w, h):
-                self._teardown_sg()
-                self._sg_size_key = (w, h)
-            if oldNode is None or oldNode is not self._root:
-                self._build_scene_graph(oldNode, win)
-            if self._pose_dirty or (w, h) != self._view_key:
-                self._render_frame(w, h)
-            return self._root
-
-        # ---- 绑定缺陷回退路径：DirtyStateBit 无法转 int 的构建上，同根
-        # 的任何脏标记/setRect/子树扰动都不触发复栅格化；唯一能出新画的
-        # 通道是 updatePaintNode 返回**新根**且旧根当帧存活挂链（新根以
-        # 兄弟叠加渲染，旧姿态残留一帧）。旧树延后到 sync 外异步释放
-        # （见 _render_rebuild）——sync 内删除/摘链令渲染全断（spikes 留档）。
-        if self._root is None or self._pose_dirty or (w, h) != self._view_key:
-            if w > 0.0 and h > 0.0:
-                self._render_rebuild(w, h, win)
-            else:
-                self._view_key = (w, h)
-                self._pose_dirty = False
-        return self._root if self._root is not None else oldNode
+        if self._assets_dirty or oldNode is None:
+            self._build_scene_graph(oldNode, win)
+            self._assets_dirty = False
+        if self._pose_dirty or (w, h) != self._view_key:
+            self._render_frame(w, h)
+        return self._root
 
     # ---- 场景图构建（oldNode None/失效时）----
 
     def _build_scene_graph(self, oldNode: QSGNode | None,
                            win: QQuickWindow) -> None:
-        """建 22 层节点树。**根 = 首个可渲染层节点**而非普通 QSGNode 分组：
-        实测（PySide6 6.11 + QQuickWidget + software 后端 offscreen）普通
-        QSGNode 根的整棵子树不进渲染列表——连已知可渲染的子节点也隐形，
-        而"几何节点根 + 兄弟层挂其下"根与子层都正常出图（spikes 冒烟留档）。
-        分组语义不受影响：层级顺序即兄弟顺序，根层照常参与 LBS 直写。"""
+        """Build on the render thread, retaining one ordinary grouping root."""
         rt = self._rt
         assert rt is not None
-        # 旧树整体退役：摘链弃引用（换窗/失效/重载重建路径），不再复用 oldNode
         if oldNode is not None:
-            try:
-                self._detach_children(oldNode)
-            except RuntimeError:
-                pass                       # C++ 侧已随场景图析构
+            self._detach_children(oldNode)
         self._layer_sgs.clear()
-        self._root = None
+        self._tex_cache.clear()
+        self._root = oldNode if oldNode is not None else QSGNode()
         for layer in rt.layers:
             try:
                 sg = self._build_layer_node(layer, win)
@@ -994,10 +997,8 @@ class SkinnedMeshItem(QQuickItem):
                             layer.layer_id, e)
                 continue
             self._layer_sgs[layer.layer_id] = sg
-            if self._root is None:
-                self._root = sg.node       # 首个成功层 = 根
-            else:
-                self._root.appendChildNode(sg.node)
+            self._root.appendChildNode(sg.node)
+        self._set_ready(len(self._layer_sgs) == len(rt.layers))
         self._pose_dirty = True            # 重建后首帧必须全量写顶点
 
     def _build_layer_node(self, layer: _LayerSkin,
@@ -1013,41 +1014,18 @@ class SkinnedMeshItem(QQuickItem):
         vcount = layer.rest.shape[0]
         icount = int(layer.triangles.size)
 
-        # ---- 层节点载体与几何（关键工程约束，spikes 冒烟实测留档）：
-        # 本栈（PySide6 6.11 + QQuickWidget + software 后端）下，凡
-        # setGeometry(自建 QSGGeometry) 的节点一律不进渲染列表——无论裸
-        # QSGGeometryNode 还是 QSGSimpleTextureNode 载体；且
-        # QSGSimpleTextureNode 的 rect() 参与渲染剔除（setRect(0,0,1,1)
-        # 后整层只剩 1 像素）。可行路径：**改造节点的内建几何**——
-        # setRect(宽裕矩形) 常规初始化 → geometry().allocate(V, I) 原地
-        # 重分配 → vertexData() 指针直写 → markDirty(DirtyGeometry)。
-        # setRect 只在 build 期调一次：它会覆写内建几何缓冲，自定义顶点
-        # 落盘后再调 = 摧毁蒙皮数据。
-        if QSGSimpleTextureNode is not None:
-            node = QSGSimpleTextureNode()
-            node.setTexture(texture)
-            try:
-                node.setFiltering(QSGTexture.Filtering.Linear)
-            except Exception:              # pragma: no cover
-                texture.setFiltering(QSGTexture.Filtering.Linear)
-            # 三倍余量矩形：内容恒在 fit 变换内，余量兜变形外溢不被剔除
-            rw = max(float(self.width()), 1.0)
-            rh = max(float(self.height()), 1.0)
-            node.setRect(QRectF(-rw, -rh, 3.0 * rw, 3.0 * rh))
-            geometry = node.geometry()     # 内建几何（C++ 成员，改造而非替换）
-            geometry.allocate(vcount, icount)
-        else:                               # pragma: no cover —— 缺件回退
-            material = QSGTextureMaterial()
-            material.setTexture(texture)
-            try:
-                material.setFlag(QSGMaterial.Flag.Blending, True)
-            except Exception:
-                log.debug("材质 Blending 标志不可用（%s）", layer.layer_id)
-            node = QSGGeometryNode()
-            node.setMaterial(material)
-            geometry = QSGGeometry(
-                QSGGeometry.defaultAttributes_TexturedPoint2D(), vcount, icount)
-            node.setGeometry(geometry)
+        material = QSGTextureMaterial()
+        material.setTexture(texture)
+        material.setFiltering(QSGTexture.Filtering.Linear)
+        material.setFlag(QSGMaterial.Flag.Blending, True)
+        node = QSGGeometryNode()
+        node.setMaterial(material)
+        node.setFlag(QSGNode.Flag.OwnsMaterial, True)
+        geometry = QSGGeometry(
+            _TEXTURED_ATTRIBUTES, vcount, icount)
+        geometry.setVertexDataPattern(QSGGeometry.DataPattern.DynamicPattern)
+        node.setGeometry(geometry)
+        node.setFlag(QSGNode.Flag.OwnsGeometry, True)
         try:
             geometry.setDrawingMode(QSGGeometry.DrawTriangles)
         except AttributeError:              # pragma: no cover —— Qt < 6.6
@@ -1096,6 +1074,8 @@ class SkinnedMeshItem(QQuickItem):
 
         # 2) look-at 专用通道：椭圆限幅后经 FK 覆盖瞳骨平移
         look_dx, look_dy = rt.look_offset(self._look_x, self._look_y)
+        look_dx *= 1.0 - self._blink
+        look_dy *= 1.0 - self._blink
 
         # 3) FK → M_b = T_b·T_rest⁻¹
         rt.skinning_matrices(ang, tx, ty, look_dx, look_dy)
@@ -1122,10 +1102,14 @@ class SkinnedMeshItem(QQuickItem):
         np.add(by, off_y, out=by)
         sg.verts[:, 0] = bx                # arr[:, 0:2] = deformed_xy 的就地写法
         sg.verts[:, 1] = by
+        if layer.gaze_uv:
+            dx, dy = rt.look_offset(self._look_x, self._look_y)
+            sg.verts[:, 2] = layer.uv[:, 0] - dx * (1 - self._blink) / layer.texture_size[0]
+            sg.verts[:, 3] = layer.uv[:, 1] - dy * (1 - self._blink) / layer.texture_size[1]
+            if self._blink >= 0.999:
+                sg.verts[:, :2] = sg.verts[0, :2]  # no iris sliver on a closed eye
         sg.geometry.markVertexDataDirty()
-        if _DIRTY_SUPPORTED:
-            # 几何脏同时标记到节点，渲染器才会重读顶点（构建期同理）
-            sg.node.markDirty(QSGNode.DirtyState.DirtyGeometry)
+        sg.node.markDirty(QSGNode.DirtyState.DirtyGeometry)
 
     def _render_frame(self, w: float, h: float) -> None:
         """主路径：持久节点树上的顶点就地刷新。"""
@@ -1140,50 +1124,6 @@ class SkinnedMeshItem(QQuickItem):
             if sg is not None:
                 self._deform_into(layer, sg, fit, off_x, off_y)
 
-    def _render_rebuild(self, w: float, h: float, win: QQuickWindow) -> None:
-        """绑定缺陷回退路径：姿态帧整树重建（换根是本环境唯一被渲染器
-        尊重的刷新通道——普通 QSGNode 分组根子树不渲染、同根换子不重
-        栅格化，见 _build_scene_graph/_build_layer_node 注）。
-
-        旧根显式摘链 + 立即弃引用（析构自动脱离，无重影——存活一代即
-        与新树叠加渲染出半透明重影，spikes 留档）；纹理走 _tex_cache
-        跨重建复用；重建后补一帧 update() 兜 grab 同步期的渲染滞后。"""
-        rt = self._rt
-        assert rt is not None
-        view = self._pose_geometry(w, h)
-        if view is None:
-            return                          # 无有效视图：等待尺寸
-        fit, off_x, off_y = view
-        new_root: QSGNode | None = None
-        new_sgs: dict[str, _LayerSG] = {}
-        for layer in rt.layers:
-            try:
-                sg = self._build_layer_node(layer, win)
-                self._deform_into(layer, sg, fit, off_x, off_y)
-            except Exception as e:         # noqa: BLE001 —— 单层坏弃层不弃场
-                log.warning("层 %s 场景图节点构建失败，弃层：%s",
-                            layer.layer_id, e)
-                continue
-            new_sgs[layer.layer_id] = sg
-            if new_root is None:
-                new_root = sg.node          # 首个成功层 = 根（可渲染根约束）
-            else:
-                new_root.appendChildNode(sg.node)
-        if new_root is None:
-            return
-        # 旧树延后到 sync 之外释放（QTimer 落到 GUI 线程事件循环）——
-        # sync 期内删除/摘链实测令渲染全断；帧后异步删除则渲染簿记
-        # 在下一帧正常重建（spikes 留档）。闭包持引用到触发时止。
-        retired = [self._root, list(self._layer_sgs.values())]
-
-        def _drop() -> None:
-            del retired[:]             # 释放 → C++ 析构脱离节点链
-            self.update()              # 补一帧重合成，去掉旧树残影
-
-        QTimer.singleShot(80, _drop)
-        self._layer_sgs = new_sgs
-        self._root = new_root
-
     # ---- 生命周期 / 失效 ----
 
     def _invalidate_pose(self) -> None:
@@ -1192,36 +1132,28 @@ class SkinnedMeshItem(QQuickItem):
         self.update()
 
     def _on_window_changed(self, win: QQuickWindow | None) -> None:
-        # 换窗 = 纹理/节点归属旧窗场景图，全部作废重建
-        self._teardown_sg()
+        self._assets_dirty = True
         if win is not None:
-            try:
-                win.sceneGraphInvalidated.connect(self._on_sg_invalidated)
-            except Exception:            # pragma: no cover
-                log.warning("无法监听 sceneGraphInvalidated，换窗可能残留旧纹理")
+            from PySide6.QtCore import Qt
+            win.sceneGraphInvalidated.connect(
+                self._on_sg_invalidated, Qt.ConnectionType.DirectConnection)
             self.update()
 
     def _on_sg_invalidated(self) -> None:
-        self._teardown_sg()
-
-    def _teardown_sg(self) -> None:
-        """摘链 + 弃引用。几何/材质/纹理由 Python 侧析构（QSGNode 析构自动
-        脱离父链）；窗持纹理随场景图失效一并消亡，不手动 dispose 防双重释放。"""
-        root = self._root
-        if root is not None:
-            try:
-                self._detach_children(root)
-            except RuntimeError:         # C++ 侧已随场景图析构
-                pass
+        # Qt owns the old node tree. Never mutate it from a GUI timer.
         self._layer_sgs.clear()
-        self._tex_cache.clear()          # 纹理随窗/场景图作废
+        self._tex_cache.clear()
         self._root = None
+        self._assets_dirty = True
         self._pose_dirty = True
 
     @staticmethod
     def _detach_children(root: QSGNode) -> None:
+        import shiboken6
         while root.childCount() > 0:
-            root.removeChildNode(root.firstChild())
+            child = root.firstChild()
+            root.removeChildNode(child)
+            shiboken6.delete(child)  # reload runs only in updatePaintNode
 
 
 def _normalize_path(v: object) -> str:
