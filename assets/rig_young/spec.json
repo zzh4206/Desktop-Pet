@@ -14,19 +14,19 @@
       "requires_inpaint": false,
       "inpaint_guide": "",
       "inpaint_targets": [],
-      "self_completion_guide": "向裙内补出连续尾根，保持深蓝紫主色、浅蓝腹侧和原图描边粗细。补全部分仅用于遮挡下的连接，不凭空增加分叉。",
+      "self_completion_guide": "保留连续尾根、深蓝紫主色、浅蓝腹侧和描边。尾鳍末端为大小及展开角度基本对称的两叶，中间有清晰凹口，允许后发自然遮挡。",
       "bbox_hint": [
         0.55,
         0.74,
         0.75,
         0.875
       ],
-      "texture": "tail_continuous.png",
+      "texture": "tail_fork_symmetric_v3.png",
       "largest_component": true,
       "target_bbox_px": [
         750,
-        778,
-        1195,
+        768.7531380753138,
+        1214.0714285714284,
         1118
       ]
     },

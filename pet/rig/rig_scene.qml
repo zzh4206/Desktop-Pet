@@ -33,6 +33,9 @@ Item {
     property url figBSrc: ""
     property real mix: 0.0        // 0=A … 1=B 完全可见
     property int facing: 1        // 1 右 / -1 左（即时镜像，语义同旧 set_facing）
+    // The young mesh has its tail on the right: its source art faces left.
+    readonly property int sourceFacing: skinnedMeshVisible ? -1 : 1
+    readonly property int visualFacing: facing * sourceFacing
     property string activeFigure: ""   // 当前展示的 figure 名（绑定件可见性）
     property var partsModel: []   // [{id,file,_url,source_figure,px_rect,pivot,z,kind,sway{...}}]
 
@@ -107,7 +110,7 @@ Item {
             Scale {      // 朝向镜像 + 落地压扁 + 呼吸（脚底原点）
                 id: mirrorScale
                 origin.x: root.width / 2; origin.y: root.height
-                xScale: root.bodyScaleX
+                xScale: Math.abs(root.bodyScaleX) * root.visualFacing
                 yScale: root.bodyScaleY
             }
         ]

@@ -43,6 +43,7 @@ class MotionInputs:
     wind_bias_deg: float = 0.0  # 顺风偏置（世界空间，度；引擎按 facing 翻局部）
     cursor_pos: tuple[float, float] | None = None  # 桌面光标全局像素 (x, y)
     pet_rect: tuple[float, float, float, float] | None = None  # 宠物窗口屏幕坐标 (x, y, w, h)
+    source_facing: int = 1     # Source art orientation; young mesh faces left.
 
 
 @dataclass
@@ -259,7 +260,7 @@ class MotionEngine:
                 eye_sy = py + ph * 0.45
                 dx = (cx - eye_sx) / 300.0
                 dy = (cy - eye_sy) / 300.0
-                if inputs.facing < 0:
+                if inputs.facing * inputs.source_facing < 0:
                     dx = -dx
                 target_lx = max(-1.0, min(1.0, dx))
                 target_ly = max(-1.0, min(1.0, dy))
@@ -308,9 +309,9 @@ class MotionEngine:
         body_y = walk_bob + breath_float
 
         # v0.16 风通道：存 sway 幅度倍率 + 顺风偏置（世界→局部按 facing 翻，
-        # 因为 bodyScaleX=facing 已把整棵树镜像）
+        # 场景的最终镜像包含行走方向与原图朝向，世界偏置须转换到素材局部。
         self._wind_gain = float(inputs.wind_gain)
-        self._wind_bias = float(inputs.wind_bias_deg) * inputs.facing
+        self._wind_bias = float(inputs.wind_bias_deg) * inputs.facing * inputs.source_facing
 
         part_angles = self._compute_part_angles(t, gait_hz, inputs.walk_hz, dt)
         bone_angles, bone_tx, bone_ty = self._compute_bone_poses(t, dt, inputs, gait_hz)

@@ -489,6 +489,7 @@ class RigWindow(WindowBase):
         if not self.rig_active or self._engine is None:
             return
         if self._motion_inputs is not None:
+            self._motion_inputs.source_facing = int(self._root.property("sourceFacing"))
             try:
                 from PySide6.QtGui import QCursor
                 c_pos = QCursor.pos()

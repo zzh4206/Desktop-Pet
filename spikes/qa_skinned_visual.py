@@ -87,7 +87,11 @@ def main():
         scale = images['rest'].shape[1] / 1280
         for x0, y0, x1, y1 in [(461, 589, 511, 638), (676, 571, 730, 625)]:
             a, b, c, d = [int(v * scale) for v in (x0, y0, x1, y1)]
-            opened, closed = images['rest'][b:d, a:c], images['blink'][b:d, a:c]
+            # Eye ROIs are recorded in source-art coordinates, before facing.
+            opened_image, closed_image = images['rest'], images['blink']
+            if win._root.property('visualFacing') < 0:
+                opened_image, closed_image = opened_image[:, ::-1], closed_image[:, ::-1]
+            opened, closed = opened_image[b:d, a:c], closed_image[b:d, a:c]
             assert ((opened[:, :, 3] > 240) & (closed[:, :, 3] < 220)).sum() < 4, 'blink tears the face'
             assert (closed[:, :, 2].astype(int) > closed[:, :, 0].astype(int) + 25).sum() < 4, 'closed iris remains visible'
         win._skinned_item.setBlink(0.0)
