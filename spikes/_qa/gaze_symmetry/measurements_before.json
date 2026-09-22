@@ -1,0 +1,112 @@
+{
+  "pupil_l": {
+    "source_bbox": [
+      453,
+      556,
+      528,
+      649
+    ],
+    "source_centroid": [
+      490.12888565715326,
+      602.7011452463189
+    ],
+    "clip_ellipse": [
+      475,
+      604,
+      51,
+      47
+    ],
+    "gaze": {
+      "neutral": {
+        "clipped_percent": 7.47,
+        "visible_centroid": [
+          488.461,
+          603.367
+        ]
+      },
+      "left": {
+        "clipped_percent": 0.82,
+        "visible_centroid": [
+          480.101,
+          603.076
+        ]
+      },
+      "right": {
+        "clipped_percent": 23.96,
+        "visible_centroid": [
+          493.543,
+          603.435
+        ]
+      },
+      "up": {
+        "clipped_percent": 11.6,
+        "visible_centroid": [
+          488.363,
+          599.822
+        ]
+      },
+      "down": {
+        "clipped_percent": 9.0,
+        "visible_centroid": [
+          488.386,
+          606.673
+        ]
+      }
+    }
+  },
+  "pupil_r": {
+    "source_bbox": [
+      656,
+      541,
+      744,
+      636
+    ],
+    "source_centroid": [
+      699.3645530939649,
+      587.855614973262
+    ],
+    "clip_ellipse": [
+      703,
+      590,
+      51,
+      46
+    ],
+    "gaze": {
+      "neutral": {
+        "clipped_percent": 2.38,
+        "visible_centroid": [
+          699.545,
+          588.897
+        ]
+      },
+      "left": {
+        "clipped_percent": 13.51,
+        "visible_centroid": [
+          693.438,
+          588.967
+        ]
+      },
+      "right": {
+        "clipped_percent": 3.71,
+        "visible_centroid": [
+          708.737,
+          589.279
+        ]
+      },
+      "up": {
+        "clipped_percent": 10.15,
+        "visible_centroid": [
+          699.937,
+          585.008
+        ]
+      },
+      "down": {
+        "clipped_percent": 5.36,
+        "visible_centroid": [
+          699.849,
+          592.599
+        ]
+      }
+    }
+  }
+}

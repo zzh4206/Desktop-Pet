@@ -87,6 +87,7 @@
         "lower_leg_l",
         "foot_l"
       ],
+      "texture": "leg_l_balanced_v2.png",
       "z_order": 50,
       "requires_inpaint": false,
       "inpaint_guide": "",
@@ -122,9 +123,9 @@
       "texture": "leg_r_ref_v2.png",
       "largest_component": true,
       "target_bbox_px": [
-        644,
-        1080,
-        754,
+        646,
+        1082,
+        752,
         1166
       ],
       "grid_step": 10
@@ -260,6 +261,7 @@
         "forearm_l",
         "hand_l"
       ],
+      "texture": "arm_l_balanced_v3.png",
       "z_order": 120,
       "requires_inpaint": true,
       "inpaint_guide": "分别补全左臂后方的上身衣料、裙面、围裙边缘和左后发，去除手掌肤色与袖口残影。",
@@ -330,19 +332,19 @@
       "grid_step": 12,
       "blink_zones": [
         [
-          476,
+          479,
           552,
           654,
-          72
+          75
         ],
         [
-          704,
+          701,
           538,
           640,
-          72
+          75
         ]
       ],
-      "texture": "face_base_clean.png"
+      "texture": "face_base_eye_spacing_v2.png"
     },
     {
       "id": "pupil_l",
@@ -367,18 +369,19 @@
       "grid_step": 10,
       "blink_zones": [
         [
-          476,
+          479,
           552,
           654,
-          72
+          75
         ]
       ],
       "gaze_ellipse": [
-        475,
+        478,
         604,
-        51,
+        53,
         47
-      ]
+      ],
+      "texture": "pupil_l_inset_v3.png"
     },
     {
       "id": "pupil_r",
@@ -403,18 +406,19 @@
       "grid_step": 10,
       "blink_zones": [
         [
-          704,
+          701,
           538,
           640,
-          72
+          75
         ]
       ],
       "gaze_ellipse": [
-        703,
+        700,
         590,
-        51,
+        53,
         46
-      ]
+      ],
+      "texture": "pupil_r_inset_v3.png"
     },
     {
       "id": "eyelid_l",
@@ -442,16 +446,16 @@
       "target_bbox_px": [
         402,
         533,
-        553,
+        559,
         590
       ],
       "grid_step": 10,
       "blink_zones": [
         [
-          476,
+          479,
           552,
           654,
-          72
+          75
         ]
       ]
     },
@@ -479,7 +483,7 @@
       "texture": "eyelid_r_clean.png",
       "largest_component": true,
       "target_bbox_px": [
-        640,
+        634,
         520,
         778,
         568
@@ -487,10 +491,10 @@
       "grid_step": 10,
       "blink_zones": [
         [
-          704,
+          701,
           538,
           640,
-          72
+          75
         ]
       ]
     },

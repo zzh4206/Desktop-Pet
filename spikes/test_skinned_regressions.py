@@ -102,11 +102,13 @@ class SkinningRegression(unittest.TestCase):
                 self.assertLessEqual(int(missed.sum()), 2)
 
     def test_gaze_is_clipped_to_sclera(self):
+        raw = json.loads(Path(self.spec.skinned_spec).read_text(encoding='utf-8'))
+        ellipses = {layer['id']: layer['gaze_ellipse']
+                    for layer in raw['layers'] if layer.get('gaze_ellipse')}
         for layer in self.rt.layers:
             if layer.gaze_uv:
                 x, y = layer.rest[:, 0], layer.rest[:, 1]
-                cx, cy, rx, ry = ((475, 604, 51, 47) if layer.layer_id == 'pupil_l'
-                                  else (703, 590, 51, 46))
+                cx, cy, rx, ry = ellipses[layer.layer_id]
                 self.assertLessEqual(float(np.max(((x-cx)/rx)**2 + ((y-cy)/ry)**2)), 1.00001)
         self.assertEqual(len(self.rt.pupil_idx), 0)
 

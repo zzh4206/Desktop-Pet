@@ -71,7 +71,7 @@ Item {
 
     // The young airborne sprite has more transparent padding than its idle rig.
     function frameDisplayScale(url) {
-        return url.toString().endsWith("/young_fall_air.png") ? 1.15 : 1.0
+        return url.toString().endsWith("/young_fall_air.png") ? 1.20 : 1.0
     }
 
     // 地面阴影（水平面 = 屏幕平面）：贴窗口底部、渲染在 mirrorNode 之前（被
