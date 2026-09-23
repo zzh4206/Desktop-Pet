@@ -92,7 +92,14 @@ def build_rig_window(base_cls, sprite: SpriteRef, stage: str,
         log.info("无 %s 阶段 rig 清单，回退帧动画", stage)
         return base_cls(sprite)
 
-    win = RigWindow(sprite, spec, defer_quick=defer_quick)
+    # 平台基类混入：RigWindow 直继承 WindowBase（纯 Qt）会丢 mac 侧
+    # PetWindow 的 NSWindow polish（floating level / CanJoinAllSpaces /
+    # Stationary）→ 切屏/切 Space 时不再置顶、不跟随全空间。v0.16 起
+    # presentation=rig 才真正启用（此前强制 frames 走 PetWindow），此
+    # 回归只在 rig 呈现路径暴露。动态子类让 rig 继承平台 PetWindow
+    # （win 侧 PetWindow 为平凡子类，无额外 polish），fallback 语义不变。
+    win_cls = type("_RigPlatformWindow", (RigWindow, base_cls), {})
+    win = win_cls(sprite, spec, defer_quick=defer_quick)
     win._rig_root = rig_root   # 进化换档重载用（set_stage）
     if not (win.rig_active or getattr(win, "_rig_pending", False)):
         win.deleteLater()                 # 场景加载失败 → 换干净基类实例
@@ -215,6 +222,10 @@ class RigWindow(WindowBase):
                 self._quick.setVisible(False)
                 self._label.show()
                 super().set_sprite(self._sprite)
+            # QQuickWidget 上屏会重置顶层 NSWindow 的 level/collectionBehavior
+            # （defer_quick=True 时 _init_quick 在 showEvent polish 之后跑，
+            # 覆盖掉 mac 的 floating/全 Space 设置）→ 场景初始化末尾重施加。
+            self._reapply_platform_polish()
         except Exception as e:            # pragma: no cover - 环境缺件
             log.warning("Qt Quick 初始化失败，rig 回退 QLabel 路径：%s",
                         e, exc_info=True)
@@ -245,6 +256,22 @@ class RigWindow(WindowBase):
         else:
             self._root.setProperty("skinnedMeshEnabled", False)
             self._skinned_item = None
+
+    def _reapply_platform_polish(self) -> None:
+        """场景初始化后重施加平台窗口 polish。
+
+        RigWindow 经 build_rig_window 动态继承平台 PetWindow：mac 侧
+        ``_polish_mac_window`` 施加 floating level / CanJoinAllSpaces /
+        Stationary；win 侧 PetWindow 无此方法 → no-op。QQuickWidget 上屏
+        会把顶层 NSWindow 的 level/collectionBehavior 重置，故须在
+        ``_init_quick`` 末尾补一次（幂等，showEvent 首次 polish 不受影响）。
+        """
+        polish = getattr(self, "_polish_mac_window", None)
+        if callable(polish):
+            try:
+                polish()
+            except Exception:                # pragma: no cover - 环境缺件
+                log.warning("rig 平台 polish 重施加失败", exc_info=True)
 
     @property
     def rig_active(self) -> bool:
