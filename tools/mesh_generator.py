@@ -43,6 +43,11 @@ def generate_layer_mesh(
     im = Image.open(png_path).convert("RGBA")
     tw, th = im.size
     w_img, h_img = img_size
+    # P1（纹理 trim）：裁透明边后 (tw,th) 是裁后尺寸，trim_offset_px 是裁剪区
+    # 在源图坐标的左上角。顶点/骨骼活在源图像素空间（scale=1.0 + 平移），
+    # uv 用纹理自身归一化；瞳层 uv 需减去 trim_offset 再除以裁后尺寸。
+    trim_off = layer_spec.get("trim_offset_px", [0, 0])
+    trim_off_x, trim_off_y = float(trim_off[0]), float(trim_off[1])
     alpha = np.asarray(im)[:, :, 3]
     mask = alpha > 0
     if layer_spec.get("largest_component"):
@@ -63,8 +68,9 @@ def generate_layer_mesh(
         scale_y = (target[3] - target[1]) / (by1 - by0)
         off_x, off_y = target[0] - bx0 * scale_x, target[1] - by0 * scale_y
     else:
-        scale_x, scale_y = w_img / tw, h_img / th
-        off_x, off_y = 0.0, 0.0
+        # 裁后纹理像素 → 源图像素 = +trim_offset；scale 恒 1.0。
+        scale_x, scale_y = 1.0, 1.0
+        off_x, off_y = trim_off_x, trim_off_y
     off_x += layer_spec.get("offset_px", [0, 0])[0]
     off_y += layer_spec.get("offset_px", [0, 0])[1]
     step = layer_spec.get("grid_step", grid_step)
@@ -104,7 +110,7 @@ def generate_layer_mesh(
         points = [[cx, cy]] + [[cx + rx * np.cos(t), cy + ry * np.sin(t)]
                               for t in np.linspace(0, 2 * np.pi, count, endpoint=False)]
         vertices = [[round(x, 4), round(y, 4)] for x, y in points]
-        uvs = [[x / w_img, y / h_img] for x, y in points]
+        uvs = [[(x - trim_off_x) / tw, (y - trim_off_y) / th] for x, y in points]
         triangles = [idx for j in range(count) for idx in (0, 1 + j, 1 + (j + 1) % count)]
         pts_arr = np.asarray(vertices)
 
@@ -201,6 +207,7 @@ def generate_layer_mesh(
     return {
         "id": layer_id,
         "texture": layer_spec.get("texture", f"{layer_id}.png"),
+        "trim_offset_px": [trim_off_x, trim_off_y],   # 便于回算；运行时不消费
         "blink_delta": blink_delta if layer_spec.get("blink_zones") else None,
         "gaze_uv": bool(layer_spec.get("gaze_ellipse")),
         "texture_size_px": [tw, th],

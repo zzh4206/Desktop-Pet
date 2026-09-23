@@ -317,3 +317,8 @@ v0.11.0测试样例.md
 
 .commandcode
 config.json
+
+# LLM Wiki（本地个人知识库，不推送云端 git）
+llm-wiki.md
+CLAUDE.md
+wiki/

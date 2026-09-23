@@ -789,8 +789,14 @@ class SkinnedMeshItem(QQuickItem):
 
     def _prepare(self) -> bool:
         self._rt = RigRuntime.load(self._spec_file, self._mesh_file, self._layers_dir)
+        # 完整性预检只做 stat（零解码）：旧版 all(QImage(...).isNull()) 对 20 层
+        # 各做一次完整 PNG 解码后丢弃，启动白白 churn ~124MB（真正建纹理的是
+        # _build_layer_node）。坏图/非空坏文件在 _build_layer_node 的 img.isNull()
+        # 处弃层不弃场；「全有或全无」由下方 spec layers 数量门兜底。
         complete = self._rt is not None and all(
-            not QImage(layer.texture_path).isNull() for layer in self._rt.layers)
+            os.path.exists(layer.texture_path)
+            and os.path.getsize(layer.texture_path) > 0
+            for layer in self._rt.layers)
         if complete:
             with open(self._spec_file, encoding="utf-8") as f:
                 complete = len(self._rt.layers) == len(json.load(f)["layers"])

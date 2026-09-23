@@ -19,11 +19,9 @@ try:
 except ImportError:  # 让主程序在可选依赖未安装时安全降级
     np = None
 
-try:
-    import onnxruntime as ort
-    from tokenizers import Tokenizer
-except ImportError:  # v1 仍可在未安装 v2 运行时依赖的环境中安全降级
-    ort = None; Tokenizer = None
+# onnxruntime / tokenizers 只在 v2 引擎真正加载时才 import（_load_v2 内懒
+# import）——顶层 import 会让「仅建 store、不建 engine」的冷启动也拉进 ort
+# 常驻 ~70MB（见 wiki/设计-情绪模型按对话热度加载.md）。
 
 log = logging.getLogger("pet")
 
@@ -235,8 +233,13 @@ class ChatEmotionEngine:
 
     def _load_v2(self, model_dir: str) -> None:
         """加载量化 ONNX 编码器和线性分类头；不触碰任何平台 API。"""
-        if ort is None or Tokenizer is None:
-            raise RuntimeError("v2 需要 onnxruntime 和 tokenizers")
+        # 懒 import：onnxruntime/tokenizers 常驻映射一旦建立无法进程内卸载，
+        # 只在 v2 真正需要时拉入，冷启动（无对话）不付出 ~70MB 代价。
+        try:
+            import onnxruntime as ort
+            from tokenizers import Tokenizer
+        except ImportError as exc:
+            raise RuntimeError("v2 需要 onnxruntime 和 tokenizers") from exc
         raw = np.load(os.path.join(model_dir, "classifier.npz"), allow_pickle=False)
         if tuple(raw["labels"].tolist()) != LABELS or int(raw["version"]) != 2:
             raise ValueError("v2 模型元数据不兼容")
@@ -244,7 +247,17 @@ class ChatEmotionEngine:
         self.tokenizer = Tokenizer.from_file(os.path.join(model_dir, "tokenizer", "tokenizer.json"))
         self.tokenizer.enable_truncation(max_length=self.classifier[2])
         self.tokenizer.enable_padding()
-        self.session = ort.InferenceSession(os.path.join(model_dir, "encoder.int8.onnx"), providers=["CPUExecutionProvider"])
+        # SessionOptions：关 CPU BFC arena 降峰值 ~10MB（延迟几乎无影响）；
+        # intra_op 线程限 2 消除「加载后线程 10→19」的多线程堆栈（延迟≈默认）。
+        # 见 wiki/资料-ORT内存优化实测.md。
+        so = ort.SessionOptions()
+        so.enable_cpu_mem_arena = False
+        so.intra_op_num_threads = 2
+        self.session = ort.InferenceSession(
+            os.path.join(model_dir, "encoder.int8.onnx"),
+            sess_options=so,
+            providers=["CPUExecutionProvider"],
+        )
         self.version = 2
 
     def _features(self, messages: Iterable[dict], now: float | None = None) -> "np.ndarray":

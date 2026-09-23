@@ -61,7 +61,7 @@ import json
 import logging
 import signal
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
@@ -113,6 +113,27 @@ _CHAT_EMOTION_BUBBLES = {
 }
 
 
+class _ChatEmotionWarmWorker(QThread):
+    """后台预热聊天情绪引擎（onnxruntime session 加载 ~1s，不阻塞主线程）。
+
+    只在 GUI 线程把建好的 engine 经 ``ready`` 信号投递回去；worker 自身只
+    产对象，不触碰任何 Qt GUI。生命周期铁律：finished→deleteLater 单通道，
+    避免「销毁运行中 QThread」的原生崩溃（全仓既有 pattern）。
+    """
+
+    ready = Signal(object)
+
+    def __init__(self, model_path: str, threshold: float, parent=None) -> None:
+        super().__init__(parent)
+        self._model_path = model_path
+        self._threshold = threshold
+
+    def run(self) -> None:
+        from pet.chat_emotion import ChatEmotionEngine
+        engine = ChatEmotionEngine(self._model_path, self._threshold)
+        self.ready.emit(engine)
+
+
 class PetApp:
     def __init__(self, argv, adapter, verbose: bool):
         self.adapter = adapter
@@ -137,18 +158,22 @@ class PetApp:
         self._chat_emotion_cfg = dict(self.cfg.get("chat_emotion", {}))
         self._chat_emotion_store = None
         self._chat_emotion_engine = None
+        self._chat_emotion_model_path = None
+        self._chat_emotion_worker = None
         self._chat_emotion_active = None
         if self._chat_emotion_cfg.get("enabled", True):
-            from pet.chat_emotion import ChatEmotionEngine, ConversationEmotionStore
+            # 冷启动只建 store，不建 engine、不 import onnxruntime——无对话
+            # 时省 ~70MB 常驻（见 wiki/设计-情绪模型按对话热度加载.md）。
+            from pet.chat_emotion import ConversationEmotionStore
             self._chat_emotion_store = ConversationEmotionStore(
                 os.path.join(paths["data_dir"], "chat_emotion.json"),
                 self._chat_emotion_cfg.get("retention_hours", 48),
             )
             model_root = os.path.join(os.path.dirname(__file__), "pet", "models")
             v2_path = os.path.join(model_root, "chat_emotion_v2")
-            model_path = v2_path if os.path.isdir(v2_path) else os.path.join(model_root, "chat_emotion_v1.npz")
-            self._chat_emotion_engine = ChatEmotionEngine(
-                model_path, self._chat_emotion_cfg.get("confidence_threshold", .55))
+            self._chat_emotion_model_path = (
+                v2_path if os.path.isdir(v2_path)
+                else os.path.join(model_root, "chat_emotion_v1.npz"))
 
         # 养成 store：启动 load（无存档→default）；重启数值一致靠此
         self.store = PetStateStore.load(self._state_path)
@@ -667,33 +692,73 @@ class PetApp:
                 and self._chat_emotion_cfg.get("enabled", True)):
             try:
                 self._chat_emotion_store.add_user_message(text)
+                self._ensure_chat_emotion_warm()   # 冷态首条消息触发预热（安全网）
                 self._evaluate_message_emotion()
             except Exception:
                 self.logger.warning("聊天情绪上下文写入失败", exc_info=True)
+
+    def _ensure_chat_emotion_warm(self) -> None:
+        """冷态 → 后台 QThread 预热情绪引擎（幂等；主线程不阻塞）。
+
+        onnxruntime session 加载 ~1s，放后台线程避免卡 GUI。engine 建好后经
+        ``ready`` 信号回主线程赋值；加载失败也返回一个内部已降级的 engine
+        （session/weights 全 None），调用方据此走规则兜底。
+        """
+        if (not self._chat_emotion_cfg.get("enabled", True)
+                or self._chat_emotion_engine is not None
+                or self._chat_emotion_model_path is None):
+            return
+        worker = self._chat_emotion_worker
+        if worker is not None and worker.isRunning():
+            return
+        worker = _ChatEmotionWarmWorker(
+            self._chat_emotion_model_path,
+            self._chat_emotion_cfg.get("confidence_threshold", .55),
+            parent=self.app,
+        )
+        worker.ready.connect(self._on_chat_emotion_warmed)
+        # finished→deleteLater 唯一删除通道（销毁运行中 QThread = 原生崩溃）
+        worker.finished.connect(worker.deleteLater)
+        self._chat_emotion_worker = worker
+        worker.start()
+
+    def _on_chat_emotion_warmed(self, engine) -> None:
+        """预热完成，engine 投递回主线程（陈旧 worker 的迟到 ready 不覆盖）。"""
+        if self.sender() is not self._chat_emotion_worker:
+            return
+        self._chat_emotion_engine = engine
+        self._chat_emotion_worker = None
 
     def _evaluate_message_emotion(self) -> None:
         """每条新用户消息只在检测到明显情绪波动时立即换表情。"""
         from pet.chat_emotion import is_significant, obvious_emotion
         store, engine = self._chat_emotion_store, self._chat_emotion_engine
-        if store is None or engine is None:
+        if store is None:
             return
         messages = store.recent_messages()
-        # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
-        # v2 句向量模型必须先判断，不能被关键词规则短路；显式词仅保留给旧 v1 的安全回退。
-        # v1 即时路径刻意只喂 messages[-1:]（新情绪不被历史旧句稀释），
-        # 与 v1 训练的 2-5 句窗口有分布差异——取舍留档（批次C/P3-17 注）。
-        # M3（REVIEW-2026-09-04）：evaluate 传 event 阈值——引擎内层默认
-        # 0.55 截断先于 app 层判定生效，event_confidence_threshold<0.55 时是死旋钮
-        result = engine.evaluate(
-            messages[-1:],
-            threshold=self._chat_emotion_cfg.get("event_confidence_threshold", .5))
-        if result.used_fallback and engine.version != 2 and messages:
-            # P3-17：该分支只在 v1 引擎（version==1 或 None）走——元数据带
-            # 真实版本，v2 短路守卫（M10c）据此成立
-            result = obvious_emotion(messages[-1]["text"],
-                                     model_version=engine.version) or result
-        if not is_significant(result, self._chat_emotion_cfg.get(
-                "event_confidence_threshold", .5)):
+        if not messages:
+            return
+        event_threshold = self._chat_emotion_cfg.get("event_confidence_threshold", .5)
+        if engine is None:
+            # 冷态（模型未预热/加载失败）：关键词规则兜底最直白情绪，
+            # 不阻塞等待 ~1s 的模型加载；模型 ready 后下一句接管。
+            result = obvious_emotion(messages[-1]["text"])
+            if result is None:
+                return
+        else:
+            # 即时状态以最新一句为主：旧的开心/难过不能把新表达反向覆盖。
+            # v2 句向量模型必须先判断，不能被关键词规则短路；显式词仅保留给旧 v1 的安全回退。
+            # v1 即时路径刻意只喂 messages[-1:]（新情绪不被历史旧句稀释），
+            # 与 v1 训练的 2-5 句窗口有分布差异——取舍留档（批次C/P3-17 注）。
+            # M3（REVIEW-2026-09-04）：evaluate 传 event 阈值——引擎内层默认
+            # 0.55 截断先于 app 层判定生效，event_confidence_threshold<0.55 时是死旋钮
+            result = engine.evaluate(messages[-1:], threshold=event_threshold)
+            if result.used_fallback and engine.version != 2:
+                # P3-17：该分支只在 v1 引擎（version==1 或 None）走——元数据带
+                # 真实版本，v2 短路守卫（M10c）据此成立
+                result = obvious_emotion(messages[-1]["text"],
+                                         model_version=engine.version) or result
+        if not is_significant(result, event_threshold):
             return
         # 每个短时状态最多五分钟；新消息只会在明确的新情绪时覆盖。
         duration_s = self._chat_emotion_duration_seconds()
@@ -1104,6 +1169,7 @@ class PetApp:
                 "还没设置 API key，聊天暂不可用～", anchor=self._pet_anchor()
             )
             return
+        self._ensure_chat_emotion_warm()   # 打开面板即预热情绪引擎（~1s 被打字掩盖）
         self._chat_bridge.reset_offline()
         # 全屏时聊天面板移到桌面 Space（mac 专属；win 无 Space 概念直接 raise）
         if getattr(self, "_fullscreen", False) and sys.platform == "darwin":
@@ -1526,6 +1592,14 @@ class PetApp:
                     t.stop()
                 except Exception:
                     pass
+        # ①′ 收口情绪预热 worker（防「销毁运行中 QThread」原生崩溃）
+        _ew = getattr(self, "_chat_emotion_worker", None)
+        if _ew is not None and _ew.isRunning():
+            try:
+                _ew.quit()
+                _ew.wait(2000)
+            except Exception:
+                pass
         # ② v0.7 释放 EatMouseSession（停 CGEventTap + 回 idle）——v0.2.5 起占位
         # pass，v0.7 实体化。force_spit 幂等，未在吃也安全。
         if getattr(self, "_proactive", None) is not None:

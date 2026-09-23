@@ -2,6 +2,7 @@
   "layers": [
     {
       "id": "tail_seg1",
+      "trim_offset_px": [47, 454],
       "description": "藏于裙后、连接骨盆的尾根。",
       "bind_bone": "tail_01",
       "influence_bones": [
@@ -32,6 +33,7 @@
     },
     {
       "id": "hair_back_l",
+      "trim_offset_px": [144, 572],
       "description": "画面左侧长后发，含浅蓝渐变卷梢。",
       "bind_bone": "hair_back_l_01",
       "influence_bones": [
@@ -54,6 +56,7 @@
     },
     {
       "id": "hair_back_r",
+      "trim_offset_px": [743, 572],
       "description": "画面右侧长后发，覆盖部分尾身与鳍根。",
       "bind_bone": "hair_back_r_01",
       "influence_bones": [
@@ -80,6 +83,7 @@
     },
     {
       "id": "leg_l",
+      "trim_offset_px": [458, 944],
       "description": "画面左腿与左鞋组成的连续蒙皮层。",
       "bind_bone": "upper_leg_l",
       "influence_bones": [
@@ -102,6 +106,7 @@
     },
     {
       "id": "leg_r",
+      "trim_offset_px": [301, 136],
       "description": "画面右腿与右鞋组成的连续蒙皮层。",
       "bind_bone": "upper_leg_r",
       "influence_bones": [
@@ -132,6 +137,7 @@
     },
     {
       "id": "ear_fin_l",
+      "trim_offset_px": [164, 509],
       "description": "画面左侧深蓝耳鳍与浅色下缘。",
       "bind_bone": "ear_fin_l",
       "influence_bones": [
@@ -154,6 +160,7 @@
     },
     {
       "id": "ear_fin_r",
+      "trim_offset_px": [862, 396],
       "description": "画面右侧耳鳍；蓝色蝴蝶结保留为同层独立网格岛。",
       "bind_bone": "ear_fin_r",
       "influence_bones": [
@@ -176,6 +183,7 @@
     },
     {
       "id": "torso",
+      "trim_offset_px": [464, 708],
       "description": "颈部、上身女仆装、领结、胸前褶边和腰封。",
       "bind_bone": "chest",
       "influence_bones": [
@@ -201,6 +209,7 @@
     },
     {
       "id": "skirt",
+      "trim_offset_px": [322, 815],
       "description": "深蓝主裙、裙边花纹、左右装饰结及白色下摆。",
       "bind_bone": "skirt_root",
       "influence_bones": [
@@ -231,6 +240,7 @@
     },
     {
       "id": "apron",
+      "trim_offset_px": [448, 854],
       "description": "白色围裙、花边和鲸鱼图案。",
       "bind_bone": "apron_root",
       "influence_bones": [
@@ -254,6 +264,7 @@
     },
     {
       "id": "arm_l",
+      "trim_offset_px": [400, 718],
       "description": "画面左侧屈肘手臂、袖口与手掌。",
       "bind_bone": "upper_arm_l",
       "influence_bones": [
@@ -281,6 +292,7 @@
     },
     {
       "id": "arm_r",
+      "trim_offset_px": [685, 717],
       "description": "画面右侧屈肘手臂、袖口与手掌。",
       "bind_bone": "upper_arm_r",
       "influence_bones": [
@@ -307,6 +319,7 @@
     },
     {
       "id": "face_base",
+      "trim_offset_px": [232, 205],
       "description": "完整脸部皮肤、眉毛、鼻口、腮红与双眼眼白。",
       "bind_bone": "head",
       "influence_bones": [
@@ -348,6 +361,7 @@
     },
     {
       "id": "pupil_l",
+      "trim_offset_px": [413, 548],
       "description": "画面左眼的整块虹膜、瞳孔与高光。",
       "bind_bone": "pupil_l",
       "influence_bones": [
@@ -385,6 +399,7 @@
     },
     {
       "id": "pupil_r",
+      "trim_offset_px": [635, 535],
       "description": "画面右眼的整块虹膜、瞳孔与高光。",
       "bind_bone": "pupil_r",
       "influence_bones": [
@@ -422,6 +437,7 @@
     },
     {
       "id": "eyelid_l",
+      "trim_offset_px": [329, 21],
       "description": "左眼上下睑皮肤遮盖网格及睫毛；同一语义层内分网格岛。",
       "bind_bone": "eyelid_l",
       "influence_bones": [
@@ -461,6 +477,7 @@
     },
     {
       "id": "eyelid_r",
+      "trim_offset_px": [619, 133],
       "description": "右眼上下睑皮肤遮盖网格及睫毛。",
       "bind_bone": "eyelid_r",
       "influence_bones": [
@@ -500,6 +517,7 @@
     },
     {
       "id": "bangs",
+      "trim_offset_px": [263, 149],
       "description": "头顶蓝发主体、中央刘海及左右贴脸短发。",
       "bind_bone": "head",
       "influence_bones": [
@@ -542,6 +560,7 @@
     },
     {
       "id": "headpiece",
+      "trim_offset_px": [284, 125],
       "description": "白色女仆头箍及褶边。",
       "bind_bone": "head",
       "influence_bones": [
@@ -565,6 +584,7 @@
     },
     {
       "id": "ahoge",
+      "trim_offset_px": [357, 75],
       "description": "头顶向画面左侧弯曲的呆毛。",
       "bind_bone": "ahoge_01",
       "influence_bones": [
