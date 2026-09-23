@@ -184,6 +184,18 @@ class RealtimeSunSource(SunSource):
         self._cache = self._compute()
 
 
+def _cfg_shadow_alpha(cfg: dict, default: float) -> float:
+    """取 config 的 ``shadow_alpha``：缺位/空串 → default；否则按原值，
+    负值钳 0。0 是合法值（=永久无阴影），不能用 ``or default`` 吞掉。"""
+    v = (cfg or {}).get("shadow_alpha")
+    if v is None or v == "":
+        return float(default)
+    try:
+        return max(0.0, float(v))
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def build_sun_source(cfg: dict) -> SunSource:
     """按 config 装配太阳源；任何缺位都退 StaticSunSource（永不阻断启动）。
 
@@ -192,7 +204,7 @@ def build_sun_source(cfg: dict) -> SunSource:
     """
     s = (cfg or {}).get("sun") or {}
     if not s.get("enabled"):
-        return StaticSunSource(float(s.get("shadow_alpha", 0.35) or 0.35))
+        return StaticSunSource(_cfg_shadow_alpha(s, 0.35))
 
     lat = s.get("latitude")
     lon = s.get("longitude")
@@ -200,13 +212,13 @@ def build_sun_source(cfg: dict) -> SunSource:
         w = (cfg or {}).get("wind") or {}
         lat, lon = w.get("latitude"), w.get("longitude")
     if not lat or not lon:                        # 0.0 / None 视为未配
-        return StaticSunSource(float(s.get("shadow_alpha", 0.35) or 0.35))
+        return StaticSunSource(_cfg_shadow_alpha(s, 0.35))
 
     tz = s.get("timezone_offset")
     src = RealtimeSunSource(
         float(lat), float(lon),
         tz_offset_hours=None if tz in (None, "") else float(tz),
-        max_alpha=float(s.get("shadow_alpha", 0.4) or 0.4))
+        max_alpha=_cfg_shadow_alpha(s, 0.4))
     log.info("光影源就绪：lat %.2f / lon %.2f / tz %s",
              float(lat), float(lon),
              "系统" if tz in (None, "") else tz)
