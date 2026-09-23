@@ -1,7 +1,10 @@
 """Capture the production Qt Quick mesh on the requested rendering backend.
 
 python -X utf8 spikes/qa_skinned_visual.py --backend d3d11
+python -X utf8 spikes/qa_skinned_visual.py --backend metal
 python -X utf8 spikes/qa_skinned_visual.py --backend software
+
+缺省按平台自动选：Windows=d3d11、macOS=metal、其余=gl。
 """
 from __future__ import annotations
 
@@ -14,15 +17,29 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+def _default_backend() -> str:
+    if sys.platform == "win32":
+        return "d3d11"
+    if sys.platform == "darwin":
+        return "metal"
+    return "gl"
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--backend', default='d3d11')
+    parser.add_argument('--backend', default='')
     parser.add_argument('--output', default=str(ROOT / 'spikes/_qa/v016_review'))
     args = parser.parse_args()
-    software = args.backend == 'software'
-    os.environ['QT_QPA_PLATFORM'] = 'offscreen' if software else 'windows'
-    os.environ['QT_QUICK_BACKEND'] = 'software' if software else ''
-    os.environ['QSG_RHI_BACKEND'] = args.backend
+    backend = args.backend or _default_backend()
+    software = backend == 'software'
+    if software:
+        os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+        os.environ['QT_QUICK_BACKEND'] = 'software'
+    else:
+        # 硬件后端：走平台原生 QPA（cocoa/windows/xcb），不硬编码 windows
+        os.environ.pop('QT_QPA_PLATFORM', None)
+        os.environ['QT_QUICK_BACKEND'] = ''
+    os.environ['QSG_RHI_BACKEND'] = backend
     from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QImage
