@@ -32,28 +32,43 @@ set -o pipefail
 echo "=== TRELLIS.2 GPU GEN v3 selfclone seed=__SEED__ ==="
 export HF_HOME=/tmp/hf HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1
 export ATTN_BACKEND=xformers PATH=/usr/local/cuda/bin:$PATH
-nvidia-smi | head -6
-echo "--- clones (internal mirror) ---"
-git clone -q https://github.mgslabs.uk/microsoft/TRELLIS.2.git /opt/t2 || exit 1
-git clone -q https://github.mgslabs.uk/EasternJournalist/utils3d.git /opt/utils3d
-git -C /opt/utils3d checkout -q 9a4eb15e4021b67b12c460c7057d642626897ec8
-git clone -q -b v0.4.0 https://github.mgslabs.uk/NVlabs/nvdiffrast.git /opt/nvdiffrast || true
+nvidia-smi 2>&1 | head -6 || true
+echo "--- clones (internal mirror, 429 退避重试) ---"
+mclone() { local url=$1 dest=$2 br=${3:-}; for i in 1 2 3 4 5 6 7 8; do git clone -q ${br:+--branch $br} "$url" "$dest" 2>/dev/null && return 0; echo "mclone retry $i: $url"; sleep 30; done; return 1; }
+mclone https://github.mgslabs.uk/microsoft/TRELLIS.2.git /opt/t2 || { echo CLONE_T2_FAIL; exit 1; }
+mclone https://github.mgslabs.uk/EasternJournalist/utils3d.git /opt/utils3d || echo CLONE_U3D_FAIL
+git -C /opt/utils3d checkout -q 9a4eb15e4021b67b12c460c7057d642626897ec8 || true
+mclone https://github.mgslabs.uk/NVlabs/nvdiffrast.git /opt/nvdiffrast v0.4.0 || true
 cd /opt/t2
-echo "--- apt eigen ---"
+echo "--- eigen (apt / mirror-git / pip 三级回退) ---"
+rm -f /tmp/eigen_inc
 (apt-get update -qq && apt-get install -y -qq libeigen3-dev zlib1g-dev libjpeg-dev) >/tmp/apt.log 2>&1 || echo APT_FAIL
-[ -e /usr/include/eigen3/Eigen/Core ] && echo EIGEN_OK || pip3 install -q eigen
+[ -e /usr/include/eigen3/Eigen/Core ] && ln -sfn /usr/include/eigen3 /tmp/eigen_inc
+[ -e /tmp/eigen_inc ] || { ( for i in 1 2 3 4 5; do git clone -q --depth 1 https://github.mgslabs.uk/libeigen/eigen.git /opt/eigen 2>/dev/null && break; sleep 30; done ) && ln -sfn /opt/eigen /tmp/eigen_inc; }
+[ -e /tmp/eigen_inc ] || { pip3 install -q eigen 2>/dev/null; P=$(python3 -c "import eigen,os;print(os.path.dirname(eigen.__file__))" 2>/dev/null) && [ -n "$P" ] && ln -sfn "$P" /tmp/eigen_inc; }
 mkdir -p o-voxel/third_party
-[ -e o-voxel/third_party/eigen ] || ln -s /usr/include/eigen3 o-voxel/third_party/eigen
+[ -e o-voxel/third_party/eigen ] || ln -sfn /tmp/eigen_inc o-voxel/third_party/eigen
+ls o-voxel/third_party/eigen/ 2>/dev/null | head -3 || true
+echo EIGEN_RESOLVED
 echo "--- pip deps (tuna) ---"
-pip3 install -q -i https://pypi.tuna.tsinghua.edu.cn/simple imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh pandas kornia timm xformers "transformers>=4.55" pillow accelerate 2>&1 | tail -2
-pip3 install -q -i https://pypi.tuna.tsinghua.edu.cn/simple cumesh 2>&1 | tail -1 || echo PIP_CUMESH_FAIL
-python3 -c "import cumesh; print('cumesh OK')"
+pip3 install -q -i https://pypi.tuna.tsinghua.edu.cn/simple imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh pandas kornia timm xformers "transformers>=4.55" pillow accelerate 2>&1 | tail -2 || true
+pip3 install -q -i https://pypi.tuna.tsinghua.edu.cn/simple cumesh >/dev/null 2>&1 || true
+python3 -c "import cumesh" 2>/dev/null || {
+  ( for i in 1 2 3 4 5; do git clone -q --recursive https://github.mgslabs.uk/JeffreyXiang/CuMesh.git /opt/CuMesh 2>/dev/null && break; sleep 30; done ) || echo CUMESH_CLONE_FAIL
+  pip3 install --no-build-isolation /opt/CuMesh >/tmp/cumesh.log 2>&1 || { echo CUMESH_BUILD_FAIL; tail -20 /tmp/cumesh.log; }
+}
+python3 -c "import cumesh; print('cumesh OK')" || echo CUMESH_STILL_FAIL
+echo "--- flex_gemm (hard dep, v5 实测) ---"
+mclone https://github.mgslabs.uk/JeffreyXiang/FlexGEMM.git /opt/FlexGEMM || echo FLEXGEMM_CLONE_FAIL
+[ -d /opt/FlexGEMM ] && pip3 install --no-build-isolation /opt/FlexGEMM >/tmp/bfg.log 2>&1 || { echo FLEXGEMM_BUILD_FAIL; tail -20 /tmp/bfg.log; } || true
+python3 -c "import flex_gemm; print('flex_gemm OK')" || echo FLEXGEMM_STILL_FAIL
 echo "--- build from source ---"
-pip3 install --no-build-isolation -q /opt/utils3d 2>&1 | tail -2 || echo U3D_FAIL
-pip3 install --no-build-isolation -q -e /opt/t2/o-voxel 2>&1 | tail -3 || echo OVOXEL_FAIL
-pip3 install --no-build-isolation -q -e /opt/t2 2>&1 | tail -3 || echo T2_FAIL
+pip3 install --no-build-isolation -q /opt/utils3d >/tmp/b1.log 2>&1 || { echo U3D_FAIL; tail -15 /tmp/b1.log; } || true
+pip3 install --no-build-isolation -e /opt/t2/o-voxel >/tmp/b2.log 2>&1 || { echo OVOXEL_FAIL; tail -25 /tmp/b2.log; } || true
+pip3 install --no-build-isolation -e /opt/t2 >/tmp/b3.log 2>&1 || { echo T2_FAIL; tail -25 /tmp/b3.log; } || true
+echo BUILDS_ATTEMPTED
 [ -d /opt/nvdiffrast ] && pip3 install --no-build-isolation -q /opt/nvdiffrast 2>&1 | tail -2 || true
-python3 -c "import o_voxel, trellis2; print('imports OK')"
+python3 -c "import o_voxel, trellis2; print('imports OK')" || echo IMPORTS_FAIL
 echo "--- dinov3 -> camenduru ---"
 grep -rl "facebook/dinov3-vitl16-pretrain-lvd1689m" configs/ | xargs -r sed -i "s|facebook/dinov3-vitl16-pretrain-lvd1689m|camenduru/dinov3-vitl16-pretrain-lvd1689m|g"
 grep -l camenduru configs/gen/*.json | wc -l
