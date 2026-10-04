@@ -41,6 +41,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--tex", type=int, default=2048)
     ap.add_argument("--side-from", default="+x", choices=["+x", "-x"])
+    ap.add_argument("--single-front", action="store_true", help="纯正面单视图（零接缝实验）")
     ap.add_argument("--power", type=float, default=0.7, help="法线权重幂（越大越锐利分带）")
     args = ap.parse_args()
 
@@ -56,6 +57,20 @@ def main() -> None:
     sx0, sy0, sx1, sy1 = char_bbox(side_u8)
     front = front_u8.astype(np.float32) / 255.0
     side = side_u8.astype(np.float32) / 255.0
+
+    # ---- v4：描边抑制（原画暗线像素置透明，采样源剔除）----
+    def suppress_lines(img_u8):
+        f = img_u8.astype(np.float32)
+        lum = 0.299*f[:,:,0] + 0.587*f[:,:,1] + 0.114*f[:,:,2]
+        a = f[:,:,3] > 0
+        line = a & (lum < 110)
+        for _ in range(3):
+            line = line | np.roll(line,1,0) | np.roll(line,-1,0) | np.roll(line,1,1) | np.roll(line,-1,1)
+        out = img_u8.copy()
+        out[line, 3] = 0
+        return out
+    front_u8s = suppress_lines(front_u8)
+    side_u8s = suppress_lines(side_u8)
     print(f"front char bbox: x {fx0}-{fx1}, y {fy0}-{fy1} / {front.shape[1]}x{front.shape[0]}")
     print(f"side  char bbox: x {sx0}-{sx1}, y {sy0}-{sy1}")
 
@@ -87,6 +102,7 @@ def main() -> None:
             uniform vec4 uFBox;   // fx0, fy0(inv), fx1, fy1(inv)  图像归一化坐标
             uniform vec4 uSBox;
             uniform vec3 uMin; uniform vec3 uMax;   // 网格 bbox
+            uniform float uUseSide;
             uniform float uSideSign; uniform float uPow;
             out vec4 o_col;
             vec2 fUV(vec3 p) {   // 正视：u<-x, v<-y（图像 v 向下）
@@ -102,15 +118,20 @@ def main() -> None:
             }
             void main() {
                 vec3 n = normalize(v_nrm);
-                float wf = pow(max(dot(n, vec3(0., 0., 1.)), 0.0), uPow);
-                float ws = pow(max(dot(n, vec3(uSideSign, 0., 0.)), 0.0), uPow);
+                // v7b 三向软覆盖：正面图(+z)、侧图(+x 右)、侧图镜像(-x 左，
+                // 角色对称)；背面留死角→扩散→LoRA。软混合必须跑在焊接+平滑
+                // 网格上（v1 迷彩真因是碎片噪声网格，非软混合本身）。
+                float wf = smoothstep(0.0, 0.5, n.z);
+                float wr = smoothstep(0.0, 0.5,  n.x) * (1.0 - wf);
+                float wl = smoothstep(0.0, 0.5, -n.x) * (1.0 - wf);
+                vec2 su = sUV(v_pos);
                 vec4 cf = texture(uFront, fUV(v_pos));
-                vec4 cs = texture(uSide,  sUV(v_pos));
-                wf *= step(0.35, cf.a);   // 源 alpha 门控（原画透明区不投色）
-                ws *= step(0.35, cs.a);
-                float w = wf + ws;
-                if (w < 0.02) { o_col = vec4(0.5, 0.5, 0.55, 0.0); return; }  // 死角：低 alpha 标记
-                vec3 c = (cf.rgb * wf + cs.rgb * ws) / w;
+                vec4 cr = texture(uSide,  su);
+                vec4 cl = texture(uSide,  vec2(1.0 - su.x, su.y));
+                cf.a *= step(0.35, cf.a); cr.a *= step(0.35, cr.a); cl.a *= step(0.35, cl.a);
+                float w = cf.a*wf + cr.a*wr + cl.a*wl;
+                if (w < 0.02) { o_col = vec4(0.5, 0.5, 0.55, 0.0); return; }
+                vec3 c = (cf.rgb*cf.a*wf + cr.rgb*cr.a*wr + cl.rgb*cl.a*wl) / max(w, 1e-4);
                 o_col = vec4(c, min(w, 1.0));
             }
         """,
@@ -122,8 +143,8 @@ def main() -> None:
         t.use_location = 0
         return t
 
-    tf = tex2d(front_u8)
-    ts = tex2d(side_u8)
+    tf = tex2d(front_u8s)
+    ts = tex2d(side_u8s)
     tf.use(0); ts.use(1)
     prog["uFront"].value = 0; prog["uSide"].value = 1
     fw, fh = front.shape[1], front.shape[0]
@@ -132,7 +153,6 @@ def main() -> None:
     prog["uSBox"].value = (sx0 / sw, sy0 / sh, sx1 / sw, sy1 / sh)
     prog["uMin"].value = tuple(vmin); prog["uMax"].value = tuple(vmax)
     prog["uSideSign"].value = 1.0 if args.side_from == "+x" else -1.0
-    prog["uPow"].value = args.power
 
     vbo = ctx.buffer(np.hstack([
         np.asarray(uvs, dtype=np.float32),
@@ -142,11 +162,14 @@ def main() -> None:
     vao = ctx.vertex_array(prog, vbo,
                            "in_uv", "in_pos", "in_nrm", index_buffer=ibo,
                            index_element_size=4)
-    fbo = ctx.simple_framebuffer((args.tex, args.tex))
+    SS = 2
+    fbo = ctx.simple_framebuffer((args.tex * SS, args.tex * SS))
     fbo.use()
     fbo.clear(0.5, 0.5, 0.55, 0.0)
     vao.render(moderngl.TRIANGLES)
-    px = np.frombuffer(fbo.read(components=4), dtype=np.uint8).reshape(args.tex, args.tex, 4)
+    raw = np.frombuffer(fbo.read(components=4), dtype=np.uint8).reshape(args.tex * SS, args.tex * SS, 4)
+    from PIL import Image as _Image
+    px = np.asarray(_Image.fromarray(raw, "RGBA").resize((args.tex, args.tex), _Image.BOX))
 
     # ---- CPU 填补死角：低 alpha 区域从邻域扩散 ----
     rgb = px[:, :, :3].astype(np.float32)
@@ -167,14 +190,18 @@ def main() -> None:
             rgb[:, :, ch][upd] = acc[:, :, ch][upd] / cnt[upd]
         known |= upd
     out_img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB")
-    out_img.save(args.out.replace(".glb", "_atlas.png"))
+    base = args.out[:-4] if args.out.endswith(".glb") else args.out
+    out_img.save(base + "_atlas.png")
 
     textured = trimesh.Trimesh(
         vertices=verts_r, faces=faces_u,
         visual=trimesh.visual.TextureVisuals(uv=np.asarray(uvs, dtype=np.float32),
                                              image=out_img))
-    textured.export(args.out)
-    print("BAKED ->", args.out)
+    # ⚠️ 不用 trimesh 导 GLB：其导出器拆顶点时 UV-顶点对应会错位（实测对应度
+    # 24.9→92.7，产生面片级马赛克）。导 OBJ+MTL+PNG（per-corner UV 可靠），
+    # Blender 再转 GLB 交给运行时。
+    textured.export(base + ".obj")
+    print("BAKED ->", base + ".obj (+mtl+png)")
 
 
 if __name__ == "__main__":
