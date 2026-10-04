@@ -189,6 +189,10 @@ def main() -> None:
         for ch in range(3):
             rgb[:, :, ch][upd] = acc[:, :, ch][upd] / cnt[upd]
         known |= upd
+    # ⚠️ 行序约定：fbo.read() 返回 GL 行序（行0=uv.y=0），PIL 存图把行0 当图顶
+    # ——而 OBJ vt / Blender / glTF 采样 uv.y=0=图底。不翻转=整图 V 颠倒=迷彩
+    # （九轮排查真因；校验工具 diag_corner_pairing.py）。
+    rgb = rgb[::-1]
     out_img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB")
     base = args.out[:-4] if args.out.endswith(".glb") else args.out
     out_img.save(base + "_atlas.png")

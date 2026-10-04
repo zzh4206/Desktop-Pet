@@ -6,7 +6,7 @@ import sys
 import numpy as np, trimesh, xatlas, moderngl
 from PIL import Image
 
-MESH = sys.argv[1] if len(sys.argv) > 1 else "/Users/zzh4206/Desktop_Pet/three_d/assets_src/blender_kit/hunyuan_retopo.glb"
+MESH = sys.argv[1] if len(sys.argv) > 1 else "/Users/zzh4206/Desktop_Pet/three_d/assets_src/blender_kit/hunyuan_final.glb"  # 原默认 hunyuan_retopo.glb 已剪枝；final 同几何（330,308 面），xatlas 会重新展开
 FRONT = "/Users/zzh4206/Desktop_Pet/assets/rig_adult_walk_v1/references/front_rest.png"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "/Users/zzh4206/Desktop_Pet/three_d/assets_src/blender_kit/hunyuan_final.obj"
 
@@ -61,6 +61,10 @@ for _ in range(40):
     for c in range(3):
         rgb[:,:,c][upd] = acc[:,:,c][upd] / cnt[upd]
     known |= upd
+# ⚠️ 行序约定：fbo.read() 返回 GL 行序（行0=GL y0=uv.y=0），PIL 存图把行0
+# 当图顶——而 OBJ vt / Blender / glTF 采样时 uv.y=0=图底。不翻转=整图 V 颠倒
+# =迷彩（九轮排查真因，diag_corner_pairing.py 一枪定位）。
+rgb = rgb[::-1]
 out_img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
 
 tm = trimesh.Trimesh(vertices=vr, faces=idx.astype(np.uint32),
