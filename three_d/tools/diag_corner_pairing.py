@@ -32,10 +32,11 @@ import numpy as np
 from PIL import Image
 
 KIT = "/Users/zzh4206/Desktop_Pet/three_d/assets_src/blender_kit"
-OBJ = f"{KIT}/hunyuan_final.obj"
-ATLAS = f"{KIT}/hunyuan_final_atlas.png"
-FRONT = "/Users/zzh4206/Desktop_Pet/assets/rig_adult_walk_v1/references/front_rest.png"
-OUTDIR = "/Users/zzh4206/Desktop_Pet/three_d/assets_src/blender_kit"
+_argv = sys.argv[1:]
+OBJ = _argv[0] if len(_argv) > 0 else f"{KIT}/hunyuan_final.obj"
+ATLAS = _argv[1] if len(_argv) > 1 else f"{KIT}/hunyuan_final_atlas.png"
+FRONT = _argv[2] if len(_argv) > 2 else "/Users/zzh4206/Desktop_Pet/assets/rig_adult_walk_v1/references/front_rest.png"
+OUTDIR = "/".join(OBJ.split("/")[:-1])
 
 
 def parse_obj(path: str):
