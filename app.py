@@ -292,9 +292,6 @@ class PetApp:
         self.window.move_bottom_center(cx, bottom)
         self.window.show()
 
-        # v0.18.16 互斥呈现：主窗就绪后装配 3D（嵌入主窗或退伴随窗）
-        self._setup_render3d()
-
         # v0.2 交互入口（win signal 版，§2.3 手势消解在共享 WindowBase）
         self.window.patRequested.connect(lambda: self._interact("pet"))
         self.window.feedRequested.connect(lambda: self._interact("feed"))
@@ -348,6 +345,14 @@ class PetApp:
         except Exception:
             self.logger.exception(
                 "聊天初始化失败（key/tool/QML），宠物本体继续运行")
+
+        # v0.18.19 3D 装配时序：必须在所有 2D QML singleton 注册与 engine
+        # 创建（_setup_chat→_build_chat_panel）**之后**——3D 的 QQuickView 若
+        # 成为进程首个活跃 engine，PySide6 6.10 下后续注册的类型/singleton
+        # 不被新 engine 解析（mem_bridge 已录同签名病：Cannot assign … to
+        # list property "data"），聊天面板/rig 场景全挂（对照实验：3D 开=2
+        # 报错、3D 关=0）。3D 关时本调用零成本。
+        self._setup_render3d()
 
         # v0.6 主动关怀（win 主笔）+ v0.7 吃鼠标（mac）：
         # 30s 轮询；气泡锚宠物；idle 用传感器；有 DS key 时链式唤醒走 LLM
