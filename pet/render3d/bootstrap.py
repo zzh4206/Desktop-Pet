@@ -63,8 +63,8 @@ def create_renderer(cfg: dict | None):
         from pet.render3d.contract_adapter import Render3DAdapter
         from pet.render3d.scene_host import Render3DWindow
 
-        mesh = bundle.mesh_files[0]
-        window = Render3DWindow(mesh, sec)
+        window = Render3DWindow(bundle.qml_path, sec,
+                                asset_dir=os.path.dirname(bundle.qml_path))
         return Render3DAdapter(window, level=int(sec["light_level"]),
                                sidecars=bundle.sidecars)
     except Exception:

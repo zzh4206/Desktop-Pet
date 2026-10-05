@@ -38,7 +38,7 @@ class Render3DWindow:
     延迟 import Qt：本模块被 bootstrap 在未启用时 import 也不拖 Qt 进内存。
     """
 
-    def __init__(self, mesh_path: str, cfg: dict):
+    def __init__(self, model_qml: str, cfg: dict, asset_dir: str | None = None):
         from PySide6.QtCore import QUrl, QTimer
         from PySide6.QtGui import QColor, Qt
         from PySide6.QtQuick import QQuickView
@@ -57,7 +57,11 @@ class Render3DWindow:
             errs = "; ".join(e.toString() for e in self._view.errors())
             raise RuntimeError(f"scene3d.qml 加载失败: {errs}")
         self._root = self._view.rootObject()
-        self._root.setProperty("meshUrl", QUrl.fromLocalFile(mesh_path).toString())
+        # 模型 = Balsam 组件（Loader 装载，Joint 按骨名寻址）；贴图给 toon 材质
+        self._root.setProperty("modelUrl", QUrl.fromLocalFile(model_qml).toString())
+        tex = self._find_texture(asset_dir or os.path.dirname(model_qml))
+        if tex:
+            self._root.setProperty("textureUrl", QUrl.fromLocalFile(tex).toString())
         # D16 看门狗：基线=装载完的首测（含 mesh/引擎），超限即降级
         self._rss_baseline = _rss_mb()
         self._safe_rss_mb = float(cfg.get("safe_rss_mb", DEFAULT_SAFE_RSS_MB))
@@ -115,3 +119,17 @@ class Render3DWindow:
     def apply_uniforms(self, payload: dict) -> None:
         for k, v in payload.items():
             self._root.setProperty(k, v)
+
+    def apply_pose(self, payload: dict) -> None:
+        """bone_bridge 输出 {骨名: [qx,qy,qz,qw]} → QML posePayload 分发。"""
+        self._root.setProperty("posePayload", payload)
+
+    @staticmethod
+    def _find_texture(asset_dir: str) -> str | None:
+        import glob
+
+        for pat in ("maps/textureData.png", "maps/*.png", "*.png"):
+            hits = sorted(glob.glob(os.path.join(asset_dir, pat)))
+            if hits:
+                return hits[0]
+        return None

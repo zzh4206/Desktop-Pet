@@ -25,7 +25,8 @@ logger = logging.getLogger("pet.render3d")
 REQUIRED_QML = "model.qml"
 MESH_DIR = "meshes"
 SIDECAR_DIR = "sidecar"
-SIDECAR_FILES = ("spring_params.json", "expression_map.json", "skeleton3d.json")
+SIDECAR_FILES = ("spring_params.json", "expression_map.json", "skeleton3d.json",
+                 "rig_profile.json")   # 骨名↔语义角色映射（bone_bridge 解耦任意骨架）
 
 
 @dataclass(frozen=True)
