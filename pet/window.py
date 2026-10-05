@@ -345,6 +345,10 @@ class WindowBase(QWidget):
             # container 上不进本窗的手势消解（合成事件实测被截：单击丢失、
             # 拖拽走不同路径）。装事件过滤器把鼠标统一转发给本窗处理。
             container.installEventFilter(self)
+            # 双路径挂载：真实事件可能直达内部 QQuickView（QWindow 路径，
+            # 不经 container 的 QObject 过滤器——v0.13.4 实机 QQuickWidget 吞
+            # 原生事件的前车之鉴）；两侧都拦，防重入去重。
+            qquickview.installEventFilter(self)
             self._r3_container = container
             self._r3_view = qquickview
             self._label.hide()
@@ -374,18 +378,37 @@ class WindowBase(QWidget):
     def is_render3d(self) -> bool:
         return getattr(self, "_r3_container", None) is not None
 
-    def eventFilter(self, obj, event) -> bool:
-        """v0.18.18：3D container 的鼠标事件 → 本窗手势消解（单击/拖拽/
-        双击全走 2D 既有语义）。坐标同原点同尺寸，直接转发。"""
-        if obj is getattr(self, "_r3_container", None):
-            from PySide6.QtCore import QEvent, QCoreApplication
+    _R3_FORWARD_TYPES = None  # 类级缓存（见 eventFilter 首次调用初始化）
 
-            t = event.type()
-            if t in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
-                     QEvent.Type.MouseMove, QEvent.Type.MouseButtonDblClick):
-                QCoreApplication.sendEvent(self, event)
-                return True
-        return super().eventFilter(obj, event)
+    def eventFilter(self, obj, event) -> bool:
+        """v0.18.21：3D container/QQuickView 的原生事件 → 本窗手势消解。
+
+        覆盖：鼠标四类 + **ContextMenu**（右键菜单靠它——mac 由系统右键
+        直发 widget，container 上不转发则菜单死）+ Leave（拖出收尾）。
+        防重入：转发期间置 _r3_fwd，双侧路径同一事件只处理一次。"""
+        if obj not in (getattr(self, "_r3_container", None),
+                       getattr(self, "_r3_view", None)):
+            return super().eventFilter(obj, event)
+        if getattr(self, "_r3_fwd", False):
+            return False    # 转发回路（另一路径的同一事件）——放行
+        from PySide6.QtCore import QEvent, QCoreApplication
+
+        if self._R3_FORWARD_TYPES is None:
+            WindowBase._R3_FORWARD_TYPES = {
+                QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseMove, QEvent.Type.MouseButtonDblClick,
+                QEvent.Type.ContextMenu, QEvent.Type.Leave,
+            }
+        if event.type() not in self._R3_FORWARD_TYPES:
+            return False
+        # QWindow 路径的事件坐标是 QQuickView 局部系——与主窗同原点同尺寸，
+        # 直接转发；ContextMenu 的 globalPos 由 Qt 自带
+        self._r3_fwd = True
+        try:
+            QCoreApplication.sendEvent(self, event)
+        finally:
+            self._r3_fwd = False
+        return True
 
     def resizeEvent(self, event) -> None:
         """v0.18.16：3D container 跟随窗尺寸——否则窗 resize 后 3D 内容
