@@ -339,16 +339,14 @@ class WindowBase(QWidget):
 
             container = QQuickWidget.createWindowContainer(qquickview, self)
             container.setAttribute(Qt.WA_TranslucentBackground, True)
+            # v0.18.23 交互复用 2D 原生路径（用户拍板）：container 对鼠标
+            # 透明——原生事件（press/dblclick/contextMenu）直接落本窗
+            # QWidget，Qt 的双击合成/手势消解/菜单派发与 2D 完全同路。
+            # （先前的事件过滤器转发链实测破坏 QPA 双击合成=真实双击退化
+            # 两次单击；presenter 的 2D QQuickWidget 场景层同款先例。）
+            container.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             container.setGeometry(self.rect())
             container.show()
-            # ⚠️ window container 是独立渲染 surface——原生鼠标事件落在
-            # container 上不进本窗的手势消解（合成事件实测被截：单击丢失、
-            # 拖拽走不同路径）。装事件过滤器把鼠标统一转发给本窗处理。
-            container.installEventFilter(self)
-            # 双路径挂载：真实事件可能直达内部 QQuickView（QWindow 路径，
-            # 不经 container 的 QObject 过滤器——v0.13.4 实机 QQuickWidget 吞
-            # 原生事件的前车之鉴）；两侧都拦，防重入去重。
-            qquickview.installEventFilter(self)
             self._r3_container = container
             self._r3_view = qquickview
             self._label.hide()
@@ -378,14 +376,14 @@ class WindowBase(QWidget):
     def is_render3d(self) -> bool:
         return getattr(self, "_r3_container", None) is not None
 
-    _R3_FORWARD_TYPES = None  # 类级缓存（见 eventFilter 首次调用初始化）
-
     def _r3_hit_model(self, x: float, y: float) -> bool:
         """alpha 命中测试：点击处是否落在模型上（3D 帧离屏采样）。
 
         透明区（模型轮廓外的窗内空白）→ False：手势不触发——对齐"边界
         不渲染则不可点"的预期（2D 时代窗紧贴 sprite 无此问题，3D 窗大
         空白多）。grab 失败一律放行（宁可多响应不可失联）。
+        v0.18.23：事件原生落本窗后（container 鼠标透明），命中检查在本窗
+        各 handler 开头调用——不再有转发链。
         """
         v = getattr(self, "_r3_view", None)
         if v is None:
@@ -401,53 +399,6 @@ class WindowBase(QWidget):
             return img.pixelColor(ix, iy).alpha() > 28
         except Exception:
             return True
-
-    def eventFilter(self, obj, event) -> bool:
-        """v0.18.22：3D container/QQuickView 的原生事件 → 本窗手势消解。
-
-        * **alpha 命中**：press/dblclick/ContextMenu 在透明区直接消费
-          （不触发交互——见 _r3_hit_model）；
-        * **ContextMenu 直调**：sendEvent 对 ContextMenu 的 dispatch 实测
-          不到 contextMenuEvent（事件到达转发层但调用数=0），改为直接
-          调 self.contextMenuEvent(event)；
-        * 防重入 _r3_fwd：双侧挂载路径同一事件只处理一次。"""
-        if obj not in (getattr(self, "_r3_container", None),
-                       getattr(self, "_r3_view", None)):
-            return super().eventFilter(obj, event)
-        if getattr(self, "_r3_fwd", False):
-            return False    # 转发回路（另一路径的同一事件）——放行
-        from PySide6.QtCore import QEvent, QCoreApplication
-
-        if self._R3_FORWARD_TYPES is None:
-            WindowBase._R3_FORWARD_TYPES = {
-                QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
-                QEvent.Type.MouseMove, QEvent.Type.MouseButtonDblClick,
-                QEvent.Type.ContextMenu, QEvent.Type.Leave,
-            }
-        t = event.type()
-        if t not in self._R3_FORWARD_TYPES:
-            return False
-        # alpha 命中：带位置且会触发语义的事件，透明区直接消费
-        if t in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
-            pos = event.position()
-            if not self._r3_hit_model(pos.x(), pos.y()):
-                return True
-        elif t == QEvent.Type.ContextMenu:
-            pos = event.pos()
-            if not self._r3_hit_model(pos.x(), pos.y()):
-                return True
-            self._r3_fwd = True
-            try:
-                self.contextMenuEvent(event)   # 直调（sendElement dispatch 不达）
-            finally:
-                self._r3_fwd = False
-            return True
-        self._r3_fwd = True
-        try:
-            QCoreApplication.sendEvent(self, event)
-        finally:
-            self._r3_fwd = False
-        return True
 
     def resizeEvent(self, event) -> None:
         """v0.18.16：3D container 跟随窗尺寸——否则窗 resize 后 3D 内容
@@ -617,6 +568,10 @@ class WindowBase(QWidget):
         # M1（REVIEW-2026-09-04）：仅左键参与单击/拖拽——右键 release 先于
         # contextMenuEvent 送达，快速右键会启动单击消歧定时器并在 menu.exec()
         # 嵌套循环里照常触发"摸摸头"；右键按住移动还会进入拖拽。
+        if getattr(self, "_r3_active", False) and \
+                not self._r3_hit_model(event.position().x(), event.position().y()):
+            self._press_start = None      # 3D 透明区：不进手势（alpha 命中）
+            return
         if event.button() != Qt.LeftButton:
             self._press_start = None
             return
@@ -656,6 +611,9 @@ class WindowBase(QWidget):
     def mouseDoubleClickEvent(self, event):
         if event.button() != Qt.LeftButton:
             return  # M1：右键双击不喂食
+        if getattr(self, "_r3_active", False) and \
+                not self._r3_hit_model(event.position().x(), event.position().y()):
+            return    # 3D 透明区：双击不喂食
         self._single_shot.stop()  # 吞掉第一次单击，双击生效
         self.feedRequested.emit()
 
@@ -715,6 +673,9 @@ class WindowBase(QWidget):
         return " ⚠" if low else ""
 
     def contextMenuEvent(self, event):
+        if getattr(self, "_r3_active", False) and \
+                not self._r3_hit_model(event.pos().x(), event.pos().y()):
+            return    # 3D 透明区：不弹菜单
         # 右键菜单：互动 + 三种互斥移动模式 + 设置/退出
         menu = QMenu(self)
         # v0.17.0：聊天置顶直达（托盘两跳 → 右键一跳；热键 Cmd/Ctrl+Alt+P 零跳）
