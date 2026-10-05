@@ -124,6 +124,20 @@ class Render3DWindow:
         """bone_bridge 输出 {骨名: [qx,qy,qz,qw]} → QML posePayload 分发。"""
         self._root.setProperty("posePayload", payload)
 
+    # ---- 交互回调（D11 整窗语义：调用方注册，缺省=无操作） ----
+
+    def set_interaction(self, on_click=None, on_drag_start=None) -> None:
+        """挂接 QML petClicked/petDragStarted 信号（app 侧决定语义：喂食/
+        抚摸/提起等）。拖拽期间建议同步喂 PetSnapshot(airborne=True) → drag 姿势。"""
+        for name, cb in (("petClicked", on_click), ("petDragStarted", on_drag_start)):
+            sig = getattr(self._root, name, None)
+            if sig is None or cb is None:
+                continue
+            try:
+                sig.connect(cb)
+            except Exception:  # noqa: BLE001
+                logger.warning("render3d 交互信号挂接失败: %s", name)
+
     @staticmethod
     def _find_texture(asset_dir: str) -> str | None:
         import glob

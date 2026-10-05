@@ -29,6 +29,19 @@ Rectangle {
     property real wetness: 0
     property var jointMap: ({})    // objectName → Node（装载后收集）
 
+    // ---- 交互（D11 整窗语义：任何点击=宠物点击；按压=系统拖拽跟手） ----
+    signal petClicked()
+    signal petDragStarted()
+    MouseArea {
+        anchors.fill: parent
+        onClicked: root.petClicked()
+        onPressed: function(mouse) {
+            root.petDragStarted()
+            root.Window.window.startSystemMove()   // 无边框窗系统级拖动（跨平台）
+            mouse.accepted = false                  // 不吞事件，留给上层（如双击菜单）
+        }
+    }
+
     onPosePayloadChanged: {
         if (!Object.keys(posePayload).length) return
         for (var k in posePayload) {

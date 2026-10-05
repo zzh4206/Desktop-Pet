@@ -34,9 +34,13 @@ class Render3DBridge:
     """3D 呈现的生命周期与降级门面（Qt 依赖经 bootstrap 惰性进入）。"""
 
     def __init__(self, cfg: dict | None = None,
-                 on_degrade: Callable[[], None] | None = None):
+                 on_degrade: Callable[[], None] | None = None,
+                 on_click: Callable[[], None] | None = None,
+                 on_drag_start: Callable[[], None] | None = None):
         self._cfg = cfg
         self._on_degrade = on_degrade
+        self._on_click = on_click
+        self._on_drag = on_drag_start
         self._renderer = None
         self._mode = "2d"          # 3D 成功启动后才变 "3d"
         self._degraded = False     # 3D→2d 的降级只发生一次（含回调）
@@ -56,6 +60,14 @@ class Render3DBridge:
         if self._renderer is None:
             return False
         self._mode = "3d"
+        # 交互透传（QML 信号 → 调用方；窗口层异常不影响呈现）
+        try:
+            win = getattr(self._renderer, "_window", None)
+            if win is not None:
+                win.set_interaction(on_click=self._on_click,
+                                    on_drag_start=self._on_drag)
+        except Exception:  # noqa: BLE001
+            logger.warning("render3d 交互挂接失败（忽略，不影响呈现）")
         logger.info("render3d 呈现已启动")
         return True
 
