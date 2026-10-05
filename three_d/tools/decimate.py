@@ -32,6 +32,19 @@ for ob in bpy.context.scene.objects:
         mn, mx = Vector(map(min, mn, w)), Vector(map(max, mx, w))
 print(f"in: faces={total} bbox_min={tuple(round(v,3) for v in mn)} bbox_max={tuple(round(v,3) for v in mx)}")
 
+bpy.ops.object.select_all(action="SELECT")
+bpy.context.view_layer.objects.active = next(o for o in bpy.context.scene.objects if o.type == "MESH")
+
+# 先焊接再减面：glTF 按角属性拆顶点，直接在拆分网格上 decimate 会永久打断
+# 连通（χ 上千组件 → xatlas 微图表、装包利用率塌方）。母网格本水密，焊接恢复流形。
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="SELECT")
+bpy.ops.mesh.remove_doubles(threshold=1e-4)
+bpy.ops.object.mode_set(mode="OBJECT")
+welded_v = sum(len(o.data.vertices) for o in bpy.context.scene.objects if o.type == "MESH")
+welded_f = sum(len(o.data.polygons) for o in bpy.context.scene.objects if o.type == "MESH")
+print(f"welded: V={welded_v} F={welded_f}")
+
 for ob in bpy.context.scene.objects:
     if ob.type != "MESH":
         continue

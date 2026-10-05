@@ -11,6 +11,7 @@ FRONT = "/Users/zzh4206/Desktop_Pet/assets/rig_adult_walk_v1/references/front_re
 OUT = sys.argv[2] if len(sys.argv) > 2 else "/Users/zzh4206/Desktop_Pet/three_d/assets_src/blender_kit/hunyuan_final.obj"
 
 m = trimesh.load(MESH, force="mesh")
+m.merge_vertices(merge_tex=True, merge_norm=True)  # GLB UV 拆顶点→xatlas 微图表根治
 verts = np.asarray(m.vertices, dtype=np.float32)
 faces = np.asarray(m.faces, dtype=np.uint32)
 vmin, vmax = verts.min(0), verts.max(0)

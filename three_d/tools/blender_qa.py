@@ -46,9 +46,15 @@ scn.display.shading.color_type = "TEXTURE"
 scn.render.resolution_x = 900
 scn.render.resolution_y = 900
 
+# 五角度（OBJ 导入坐标：身高沿 Y、面朝 +Z）：显式欧拉旋转，纯水平机位。
+# 不用 look-at：track_quat 的上轴提示 'Y' 与身高轴重合时前/后视角会翻滚。
+R2 = 0.70710678
 for name, loc, rot in (
     ("front", (center.x, center.y, center.z + d), (0, 0, 0)),
+    ("diag_r", (center.x + d * R2, center.y, center.z + d * R2), (0, math.pi / 4, 0)),
     ("side", (center.x + d, center.y, center.z), (0, math.pi / 2, 0)),
+    ("diag_b", (center.x + d * R2, center.y, center.z - d * R2), (0, 3 * math.pi / 4, 0)),
+    ("back", (center.x, center.y, center.z - d), (0, math.pi, 0)),
 ):
     cam.location = loc
     cam.rotation_euler = rot
