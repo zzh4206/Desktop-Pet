@@ -206,7 +206,11 @@ class WindowBase(QWidget):
         _dbl = (_si.mouseDoubleClickInterval() if _si is not None
                 else _DOUBLE_CLICK_MS)
         self._single_shot.setInterval(int(_dbl) + 50)
-        self._single_shot.timeout.connect(self.patRequested.emit)
+        # v0.18.18：单击语义按呈现层分发——2D=patRequested（摸头），3D=
+        # _r3_click_cb（同样走 _interact 全链路；QML MouseArea 在嵌入模式下
+        # 收不到事件，命中统一在 QWidget 手势消解层）
+        self._r3_click_cb = None
+        self._single_shot.timeout.connect(self._emit_click_semantics)
         self.setAcceptDrops(True)   # v0.9 拖放文件给它打开
 
         # v0.3 帧动画：150ms/帧，播完回当前静帧
@@ -308,6 +312,17 @@ class WindowBase(QWidget):
 
     # ---- v0.18.16 3D 呈现承载（2D/3D 二选一；默认路径零变化） ----
 
+    def _emit_click_semantics(self) -> None:
+        """单击消歧到期：3D=回调（app 桥 → _interact），2D=patRequested。"""
+        if self._r3_click_cb is not None:
+            self._r3_click_cb()
+        else:
+            self.patRequested.emit()
+
+    def set_render3d_click(self, cb) -> None:
+        """3D 嵌入时注入单击回调（None=恢复 2D patRequested 语义）。"""
+        self._r3_click_cb = cb
+
     def attach_render3d(self, qquickview) -> bool:
         """把 3D QQuickView 的渲染内容嵌入本窗（互斥呈现的 3D 侧）。
 
@@ -326,6 +341,10 @@ class WindowBase(QWidget):
             container.setAttribute(Qt.WA_TranslucentBackground, True)
             container.setGeometry(self.rect())
             container.show()
+            # ⚠️ window container 是独立渲染 surface——原生鼠标事件落在
+            # container 上不进本窗的手势消解（合成事件实测被截：单击丢失、
+            # 拖拽走不同路径）。装事件过滤器把鼠标统一转发给本窗处理。
+            container.installEventFilter(self)
             self._r3_container = container
             self._r3_view = qquickview
             self._label.hide()
@@ -342,6 +361,19 @@ class WindowBase(QWidget):
 
     def is_render3d(self) -> bool:
         return getattr(self, "_r3_container", None) is not None
+
+    def eventFilter(self, obj, event) -> bool:
+        """v0.18.18：3D container 的鼠标事件 → 本窗手势消解（单击/拖拽/
+        双击全走 2D 既有语义）。坐标同原点同尺寸，直接转发。"""
+        if obj is getattr(self, "_r3_container", None):
+            from PySide6.QtCore import QEvent, QCoreApplication
+
+            t = event.type()
+            if t in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                     QEvent.Type.MouseMove, QEvent.Type.MouseButtonDblClick):
+                QCoreApplication.sendEvent(self, event)
+                return True
+        return super().eventFilter(obj, event)
 
     def resizeEvent(self, event) -> None:
         """v0.18.16：3D container 跟随窗尺寸——否则窗 resize 后 3D 内容

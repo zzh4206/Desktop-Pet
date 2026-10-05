@@ -535,7 +535,7 @@ class PetApp:
 
             self._render3d = Render3DBridge(
                 self.cfg,
-                on_click=lambda: self._r3_interact("click"),
+                on_click=None,               # 单击走 WindowBase 手势消解（下方注入）
                 on_drag_start=lambda: self._r3_interact("drag"),
             )
             if not self._render3d.start():
@@ -546,6 +546,10 @@ class PetApp:
             W3, H3 = 240, 420
             if self.window.attach_render3d(win._view):
                 self.window.resize(W3, H3)
+                # 单击命中在 QWidget 层（嵌入后 QML MouseArea 收不到事件）：
+                # 单击消歧到期 → 3D 摸头语义（_interact("pet") 全链路）
+                self.window.set_render3d_click(
+                    lambda: self._r3_interact("click"))
                 self._r3_embedded = True
                 self.logger.info("render3d 已嵌入主窗（互斥呈现，%dx%d）", W3, H3)
             else:
@@ -560,13 +564,13 @@ class PetApp:
             self._render3d = None
 
     def _r3_interact(self, kind: str) -> None:
-        """3D 窗交互 → **复用 2D 主交互通道** `_interact`（0.19.1 三态决策/
-        记忆/气泡/音效/飘字全链路兼容；不另造平行系统）。
-
-        映射：click→poke（逗一逗）；drag→2s airborne 姿势窗口（FSM 拖拽
-        会话仍由 2D 窗管理，这里只让 3D 同步摆出被提起姿势）。"""
+        """3D 呈现下的交互入口——**完全复用 2D 主通道** `_interact`（三态
+        决策/记忆/气泡/音效全链路）。单击=摸头语义（patRequested 等价），
+        由 WindowBase 手势消解层触发（嵌入模式下 QML MouseArea 收不到
+        事件——QWidget 是事件宿主）；拖拽走既有 dragStarted/dragReleased
+        信号链（app 已接 FSM drag 会话），此处只补 3D 姿势窗口。"""
         if kind == "click":
-            self._interact("poke")           # 全链路：数值/拒绝/疲劳/记忆/气泡
+            self._interact("pet")            # 与 2D 单击摸头完全同路径
         else:
             self._r3_airborne_until = self._r3_time.monotonic() + 2.0
 
