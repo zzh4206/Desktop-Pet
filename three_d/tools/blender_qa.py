@@ -18,7 +18,10 @@ PREFIX = argv[1] if len(argv) > 1 else f"{KIT}/qa_v9_fixed"
 
 bpy.ops.object.select_all(action="SELECT")
 bpy.ops.object.delete()
-bpy.ops.wm.obj_import(filepath=OBJ)
+if OBJ.lower().endswith(".glb"):
+    bpy.ops.import_scene.gltf(filepath=OBJ)
+else:
+    bpy.ops.wm.obj_import(filepath=OBJ)
 
 mn = Vector((1e9, 1e9, 1e9))
 mx = Vector((-1e9, -1e9, -1e9))

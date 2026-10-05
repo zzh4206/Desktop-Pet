@@ -40,12 +40,20 @@ def bbox(objects):
     return mn, mx
 
 
-def align_to_skeleton(mesh, a_mn, a_mx):
+def align_to_skeleton(mesh, a_mn, a_mx, scale_to_fit: bool = True):
+    """平移对齐 + 可选均匀缩放。第三方模型身高与骨架基准常差 20%+
+    （如 1.15m vs 1.36m），不缩放则关节全悬空、骨热错层。"""
+    if scale_to_fit:
+        m_mn, m_mx = bbox([mesh])
+        s = (a_mx.z - a_mn.z) / max(1e-9, m_mx.z - m_mn.z)
+        mesh.scale = (s, s, s)
+        bpy.context.view_layer.update()
     m_mn, m_mx = bbox([mesh])
     off = ((a_mn + a_mx) - (m_mn + m_mx)) * 0.5
     mesh.location += Vector((off.x, off.y, -m_mn.z))
     bpy.context.view_layer.update()
-    print(f"[rig] {mesh.name} aligned off=({off.x:+.3f},{off.y:+.3f},{-m_mn.z:+.3f})")
+    print(f"[rig] {mesh.name} aligned scale={mesh.scale.x:.3f} "
+          f"off=({off.x:+.3f},{off.y:+.3f},{-m_mn.z:+.3f})")
 
 
 def weld(mesh, thr):
