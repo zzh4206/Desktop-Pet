@@ -380,12 +380,37 @@ class WindowBase(QWidget):
 
     _R3_FORWARD_TYPES = None  # 类级缓存（见 eventFilter 首次调用初始化）
 
-    def eventFilter(self, obj, event) -> bool:
-        """v0.18.21：3D container/QQuickView 的原生事件 → 本窗手势消解。
+    def _r3_hit_model(self, x: float, y: float) -> bool:
+        """alpha 命中测试：点击处是否落在模型上（3D 帧离屏采样）。
 
-        覆盖：鼠标四类 + **ContextMenu**（右键菜单靠它——mac 由系统右键
-        直发 widget，container 上不转发则菜单死）+ Leave（拖出收尾）。
-        防重入：转发期间置 _r3_fwd，双侧路径同一事件只处理一次。"""
+        透明区（模型轮廓外的窗内空白）→ False：手势不触发——对齐"边界
+        不渲染则不可点"的预期（2D 时代窗紧贴 sprite 无此问题，3D 窗大
+        空白多）。grab 失败一律放行（宁可多响应不可失联）。
+        """
+        v = getattr(self, "_r3_view", None)
+        if v is None:
+            return True
+        try:
+            img = v.grabWindow()
+            if img.isNull():
+                return True
+            ix = min(img.width() - 1, max(0,
+                    int(x * img.width() / max(1, self.width()))))
+            iy = min(img.height() - 1, max(0,
+                    int(y * img.height() / max(1, self.height()))))
+            return img.pixelColor(ix, iy).alpha() > 28
+        except Exception:
+            return True
+
+    def eventFilter(self, obj, event) -> bool:
+        """v0.18.22：3D container/QQuickView 的原生事件 → 本窗手势消解。
+
+        * **alpha 命中**：press/dblclick/ContextMenu 在透明区直接消费
+          （不触发交互——见 _r3_hit_model）；
+        * **ContextMenu 直调**：sendEvent 对 ContextMenu 的 dispatch 实测
+          不到 contextMenuEvent（事件到达转发层但调用数=0），改为直接
+          调 self.contextMenuEvent(event)；
+        * 防重入 _r3_fwd：双侧挂载路径同一事件只处理一次。"""
         if obj not in (getattr(self, "_r3_container", None),
                        getattr(self, "_r3_view", None)):
             return super().eventFilter(obj, event)
@@ -399,10 +424,24 @@ class WindowBase(QWidget):
                 QEvent.Type.MouseMove, QEvent.Type.MouseButtonDblClick,
                 QEvent.Type.ContextMenu, QEvent.Type.Leave,
             }
-        if event.type() not in self._R3_FORWARD_TYPES:
+        t = event.type()
+        if t not in self._R3_FORWARD_TYPES:
             return False
-        # QWindow 路径的事件坐标是 QQuickView 局部系——与主窗同原点同尺寸，
-        # 直接转发；ContextMenu 的 globalPos 由 Qt 自带
+        # alpha 命中：带位置且会触发语义的事件，透明区直接消费
+        if t in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+            pos = event.position()
+            if not self._r3_hit_model(pos.x(), pos.y()):
+                return True
+        elif t == QEvent.Type.ContextMenu:
+            pos = event.pos()
+            if not self._r3_hit_model(pos.x(), pos.y()):
+                return True
+            self._r3_fwd = True
+            try:
+                self.contextMenuEvent(event)   # 直调（sendElement dispatch 不达）
+            finally:
+                self._r3_fwd = False
+            return True
         self._r3_fwd = True
         try:
             QCoreApplication.sendEvent(self, event)

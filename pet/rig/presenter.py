@@ -665,6 +665,11 @@ class RigWindow(WindowBase):
     def set_sprite(self, sprite: SpriteRef) -> None:
         """文件路径 → 场景同步直显；emoji 文本 → 还给基类 label 路径。"""
         self._sprite = sprite
+        if getattr(self, "_r3_active", False):
+            # 3D 互斥呈现：只记逻辑 sprite——场景/label 通道与 resize 全旁路
+            # （不拦则 _quick 被 show 回来=2D/3D 重合复活；窗口被 resize 回
+            # sprite 档=3D 画面被压缩，实测 240x420 被打回 256x256）
+            return
         is_file = os.path.isfile(sprite.path)
         if self.rig_active and is_file:
             if not self._quick.isVisible():
