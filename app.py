@@ -207,7 +207,6 @@ class PetApp:
         # 2D。3D 成功时预览窗伴随主宠物显示（M1 实验轨形态；窗体集成待定稿）。
         self._render3d = None
         self._r3_walk_phase = 0.0
-        self._setup_render3d()
 
         self.sensors = adapter.get_sensors()  # 注入式，不直 import sensor_mac
         # v0.10 provider 挂 idle_fn：idle 超时 → SLEEPY 立绘（_mood_from_state）
@@ -292,6 +291,9 @@ class PetApp:
         bottom = wa.get("y", 0) + wa.get("height", 0)
         self.window.move_bottom_center(cx, bottom)
         self.window.show()
+
+        # v0.18.16 互斥呈现：主窗就绪后装配 3D（嵌入主窗或退伴随窗）
+        self._setup_render3d()
 
         # v0.2 交互入口（win signal 版，§2.3 手势消解在共享 WindowBase）
         self.window.patRequested.connect(lambda: self._interact("pet"))
@@ -523,7 +525,9 @@ class PetApp:
     # ---- v0.18.12 三维呈现（render3d 实验线；全部防御式，3D 失败零影响 2D） ----
 
     def _setup_render3d(self) -> None:
-        """flag 开 → 启动 3D 预览窗并挂交互；任何异常只记日志（保持 2D）。"""
+        """v0.18.16 互斥呈现：flag 开且装配成功 → 3D 嵌入主窗（2D 立绘层
+        隐藏、窗尺寸切 3D 档）；失败/关闭 → 原路径一字不动。任何异常只记
+        日志（2D 永远是兜底）。"""
         import time as _time
         self._r3_time = _time
         try:
@@ -537,10 +541,18 @@ class PetApp:
             if not self._render3d.start():
                 self._render3d = None
                 return
-            # 预览窗放主宠物旁（右下角偏上，避免压住 2D 宠物行走区）
             win = self._render3d._renderer._window
-            win.place_bottom_right()
-            win.show()
+            # 嵌入主窗（互斥呈现）；失败回退伴随窗形态（实验轨保留）
+            W3, H3 = 240, 420
+            if self.window.attach_render3d(win._view):
+                self.window.resize(W3, H3)
+                self._r3_embedded = True
+                self.logger.info("render3d 已嵌入主窗（互斥呈现，%dx%d）", W3, H3)
+            else:
+                win.place_bottom_right()
+                win.show()
+                self._r3_embedded = False
+                self.logger.info("render3d 主窗嵌入失败，退伴随预览窗")
             self.logger.info("render3d 预览窗几何=%s visible=%s",
                              win._view.geometry(), win._view.isVisible())
         except Exception:

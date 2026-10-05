@@ -237,6 +237,12 @@ class WindowBase(QWidget):
         的小图（旧版存 1024×1536 全分辨率镜像图，64 条≈400MiB；且每次换帧
         都从全图 SmoothTransformation 缩放，CPU 持续消耗）——显示档单条
         <0.6MiB，键含尺寸防不同档混用。"""
+        if getattr(self, "_r3_active", False):
+            # 3D 互斥呈现：逻辑 sprite 照记（attach 前状态机仍会推进），
+            # 但不重画 2D 立绘层（label 已隐藏；回退 2D 时由 is_render3d
+            # 清理路径恢复）
+            self._sprite = sprite
+            return
         self._sprite = sprite
         mt = _mtime_cached(sprite.path)
         if mt:
@@ -292,6 +298,43 @@ class WindowBase(QWidget):
     def set_sprite_provider(self, provider) -> None:
         """注入 AssetProvider；on_state_change 据此换 sprite。"""
         self._provider = provider
+
+    # ---- v0.18.16 3D 呈现承载（2D/3D 二选一；默认路径零变化） ----
+
+    def attach_render3d(self, qquickview) -> bool:
+        """把 3D QQuickView 的渲染内容嵌入本窗（互斥呈现的 3D 侧）。
+
+        * createWindowContainer 挂进布局——QQuickView 仍由 render3d 桥驱动
+          （posePayload/看门狗/降级），只是渲染 surface 落到主窗内；
+        * 隐藏 2D 立绘层（label+阴影）并置 ``rig_active``——apply_enrichment/
+          set_sprite 等 2D 通道全部旁路（复用 rig 后端的既有旁路位）；
+        * 交互零改造：本窗的 pat/feed/poke/drag 信号链原样生效（3D 呈现
+          只替换"画什么"，不替换"怎么交互"——D11 整窗语义）。
+        返回 False=嵌入失败（调用方回退 2D，零影响）。
+        """
+        try:
+            from PySide6.QtQuickWidgets import QQuickWidget
+
+            container = QQuickWidget.createWindowContainer(qquickview, self)
+            container.setAttribute(Qt.WA_TranslucentBackground, True)
+            container.setGeometry(self.rect())
+            container.show()
+            self._r3_container = container
+            self._r3_view = qquickview
+            self._label.hide()
+            self._shadow.hide()
+            # 2D 通道旁路：rig_active 是 RigWindow 只读 property 不能赋值——
+            # 3D 用独立旁路位 _r3_active（apply_enrichment/set_sprite 各自检查）
+            self._r3_active = True
+            return True
+        except Exception:
+            import logging
+            logging.getLogger("pet.render3d").warning(
+                "attach_render3d 失败", exc_info=True)
+            return False
+
+    def is_render3d(self) -> bool:
+        return getattr(self, "_r3_container", None) is not None
 
     def set_conversation_mood(self, mood) -> None:
         """设置短时聊天表情；None 恢复养成状态决定的立绘。"""
@@ -627,7 +670,8 @@ class WindowBase(QWidget):
         shadow_*」两项安全增量；旋转 body_angle / 缩放 scale_x·scale_y /
         部件角 part_angles 留给 rig 后端（QML）消费，不在此强塞 QLabel 变换。
         """
-        if enrichment is None or getattr(self, "rig_active", False):
+        if enrichment is None or getattr(self, "rig_active", False) \
+                or getattr(self, "_r3_active", False):
             return
         try:
             # 呼吸纵向浮动（±3px）：整体 y 平移，脚底原点贴窗口底边。
