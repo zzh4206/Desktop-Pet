@@ -203,6 +203,12 @@ class PetApp:
         # 叠加到原有引擎 frames；任一环失败 → 恒等（原有引擎兜底，不阻断启动）。
         self._bridge = self._build_engine_bridge()
 
+        # v0.18.12 三维呈现（render3d 实验线）：flag 开才装配，失败/关闭零影响
+        # 2D。3D 成功时预览窗伴随主宠物显示（M1 实验轨形态；窗体集成待定稿）。
+        self._render3d = None
+        self._r3_walk_phase = 0.0
+        self._setup_render3d()
+
         self.sensors = adapter.get_sensors()  # 注入式，不直 import sensor_mac
         # v0.10 provider 挂 idle_fn：idle 超时 → SLEEPY 立绘（_mood_from_state）
         self.provider = self._make_provider()
@@ -513,6 +519,81 @@ class PetApp:
             self.logger.warning("新引擎风/光影通道装配失败，回退静态", exc_info=True)
             channels = None
         return EngineBridge(enricher, channels)
+
+    # ---- v0.18.12 三维呈现（render3d 实验线；全部防御式，3D 失败零影响 2D） ----
+
+    def _setup_render3d(self) -> None:
+        """flag 开 → 启动 3D 预览窗并挂交互；任何异常只记日志（保持 2D）。"""
+        import time as _time
+        self._r3_time = _time
+        try:
+            from pet.render3d.bridge import Render3DBridge
+
+            self._render3d = Render3DBridge(
+                self.cfg,
+                on_click=lambda: self._r3_interact("click"),
+                on_drag_start=lambda: self._r3_interact("drag"),
+            )
+            if not self._render3d.start():
+                self._render3d = None
+                return
+            # 预览窗放主宠物旁（右下角偏上，避免压住 2D 宠物行走区）
+            win = self._render3d._renderer._window
+            win.place_bottom_right()
+            win.show()
+            self.logger.info("render3d 预览窗几何=%s visible=%s",
+                             win._view.geometry(), win._view.isVisible())
+        except Exception:
+            self.logger.warning("render3d 装配失败，保持 2D", exc_info=True)
+            self._render3d = None
+
+    def _r3_interact(self, kind: str) -> None:
+        """3D 窗交互（整窗语义）：点击=逗一逗（与 2D poke 同义）；拖拽起手
+        记 airborne 标志（姿势走 drag；放下由 QML startSystemMove 结束驱动，
+        v0 简化：拖拽结束不追踪，走 2s 超时回 idle）。"""
+        try:
+            if kind == "click":
+                self.store.update(mood=min(100.0, self.store.get().mood + 4.0))
+                self.floating.show_float("+4", positive=True)
+            self._r3_airborne_until = (
+                self._r3_time.monotonic() + 2.0 if kind == "drag" else 0.0)
+        except Exception:
+            self.logger.warning("render3d 交互处理异常", exc_info=True)
+
+    def _render3d_tick(self) -> None:
+        """每拍喂 2D 实况 → 契约 → 3D 桥（内部任何失败自动永久降级）。"""
+        r3 = self._render3d
+        if r3 is None or r3.mode != "3d":
+            return
+        try:
+            from pet.render3d.semantic_source import PetSnapshot, scene_state
+
+            mode = self.fsm.mode
+            walking = (mode == "walk"
+                       or (mode == "idle" and self.fsm.motion_mode == "follow"))
+            vx, _vy = self.fsm.velocity
+            hz = max(0.9, min(2.0, 0.9 + abs(vx) / 400.0))
+            self._r3_walk_phase = (self._r3_walk_phase + hz * 0.05) % 1.0
+            airborne = mode in ("fall", "thrown", "drag") or \
+                self._r3_time.monotonic() < getattr(self, "_r3_airborne_until", 0.0)
+            sun = None
+            ch = getattr(self._bridge, "_channels", None)
+            src = getattr(ch, "_sun", None) if ch else None
+            try:
+                sun = src.current() if src else None
+            except Exception:
+                sun = None
+            snap = PetSnapshot(
+                action_type=mode, walking=walking,
+                walk_phase=self._r3_walk_phase, airborne=airborne,
+                mood=self.store.get().mood,
+                sun_azimuth_deg=getattr(sun, "azimuth_deg", 0.0) if sun else 0.0,
+                sun_elevation_deg=getattr(sun, "elevation_deg", 0.0) if sun else 0.0,
+            )
+            r3.apply(scene_state(snap))
+        except Exception:
+            self.logger.warning("render3d 喂入异常（已降级 2D）", exc_info=True)
+            self._render3d = None
 
     def _pet_anchor(self) -> tuple:
         """气泡锚点：宠物当前 bottom_center + 窗口高。"""
@@ -1717,6 +1798,8 @@ class PetApp:
             if abs(dx) > 0.4:
                 self.window.set_facing(1 if dx > 0 else -1)
         self._last_facing_x = self.fsm.pos[0]
+        # v0.18.12 三维呈现喂入（内部守卫 mode!=3d 即返回，零成本）
+        self._render3d_tick()
 
     # ---- v0.3 动画 ----
     # H1 修（REVIEW-2026-08-25）：随机小动作 key 集——_frame_tick 的兜底停
