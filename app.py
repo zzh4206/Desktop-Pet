@@ -548,17 +548,15 @@ class PetApp:
             self._render3d = None
 
     def _r3_interact(self, kind: str) -> None:
-        """3D 窗交互（整窗语义）：点击=逗一逗（与 2D poke 同义）；拖拽起手
-        记 airborne 标志（姿势走 drag；放下由 QML startSystemMove 结束驱动，
-        v0 简化：拖拽结束不追踪，走 2s 超时回 idle）。"""
-        try:
-            if kind == "click":
-                self.store.update(mood=min(100.0, self.store.get().mood + 4.0))
-                self.floating.show_float("+4", positive=True)
-            self._r3_airborne_until = (
-                self._r3_time.monotonic() + 2.0 if kind == "drag" else 0.0)
-        except Exception:
-            self.logger.warning("render3d 交互处理异常", exc_info=True)
+        """3D 窗交互 → **复用 2D 主交互通道** `_interact`（0.19.1 三态决策/
+        记忆/气泡/音效/飘字全链路兼容；不另造平行系统）。
+
+        映射：click→poke（逗一逗）；drag→2s airborne 姿势窗口（FSM 拖拽
+        会话仍由 2D 窗管理，这里只让 3D 同步摆出被提起姿势）。"""
+        if kind == "click":
+            self._interact("poke")           # 全链路：数值/拒绝/疲劳/记忆/气泡
+        else:
+            self._r3_airborne_until = self._r3_time.monotonic() + 2.0
 
     def _render3d_tick(self) -> None:
         """每拍喂 2D 实况 → 契约 → 3D 桥（内部任何失败自动永久降级）。"""
@@ -576,6 +574,10 @@ class PetApp:
             self._r3_walk_phase = (self._r3_walk_phase + hz * 0.05) % 1.0
             airborne = mode in ("fall", "thrown", "drag") or \
                 self._r3_time.monotonic() < getattr(self, "_r3_airborne_until", 0.0)
+            # 交互反应窗口（_interact 置 1.2s）：3D 摆 click 反应姿势
+            action_type = mode
+            if self._r3_time.monotonic() < getattr(self, "_r3_react_until", 0.0):
+                action_type = "animate"   # semantic_source 映射 → click 反应
             sun = None
             ch = getattr(self._bridge, "_channels", None)
             src = getattr(ch, "_sun", None) if ch else None
@@ -584,9 +586,13 @@ class PetApp:
             except Exception:
                 sun = None
             snap = PetSnapshot(
-                action_type=mode, walking=walking,
+                action_type=action_type, walking=walking,
                 walk_phase=self._r3_walk_phase, airborne=airborne,
                 mood=self.store.get().mood,
+                # 情绪/眨眼/凝视：chat_emotion 显式标签 + motion 眨眼脉冲
+                # （0.19.3 聊天↔养成双向联动在 3D 同样生效）
+                emotion_label=getattr(self, "_chat_emotion_active", None),
+                blink_progress=self._r3_blink_progress(),
                 sun_azimuth_deg=getattr(sun, "azimuth_deg", 0.0) if sun else 0.0,
                 sun_elevation_deg=getattr(sun, "elevation_deg", 0.0) if sun else 0.0,
             )
@@ -594,6 +600,20 @@ class PetApp:
         except Exception:
             self.logger.warning("render3d 喂入异常（已降级 2D）", exc_info=True)
             self._render3d = None
+
+    def _r3_blink_progress(self) -> float:
+        """本地低频自驱眨眼（4-7s 随机，300ms 三角波）→ 0-1 进度。"""
+        import random
+        now = self._r3_time.monotonic()
+        period = getattr(self, "_r3_blink_period", 5.0)
+        if now < getattr(self, "_r3_blink_until", 0.0):
+            span = 0.30
+            t = (now - (self._r3_blink_until - span)) / span
+            return max(0.0, min(1.0, 1.0 - abs(2.0 * t - 1.0)))
+        if now > getattr(self, "_r3_blink_next", 0.0):
+            self._r3_blink_until = now + 0.30
+            self._r3_blink_next = now + period * (0.6 + 0.8 * random.random())
+        return 0.0
 
     def _pet_anchor(self) -> tuple:
         """气泡锚点：宠物当前 bottom_center + 窗口高。"""
@@ -866,6 +886,11 @@ class PetApp:
 
             seg = memory_context(self.memory, text)
             status = pet_status_line(self.store.get())
+            if getattr(self, "_render3d", None) is not None \
+                    and self._render3d.mode == "3d":
+                status = (f"{status}\n（当前以 3D 立体形象陪伴主人，"
+                          f"可以自然提及自己的动作和姿态）") if status else \
+                        "（当前以 3D 立体形象陪伴主人）"
             if status:
                 seg = f"{seg}\n\n{status}" if seg else status
             self._chat_client.set_memory_context(seg)
@@ -1451,6 +1476,12 @@ class PetApp:
         if out.chew:
             self._play_feed_chew()
         self._remember_interaction(out)
+        # v0.18.14 3D 同步表达：任何生效交互让 3D 形象摆出反应姿势（click
+        # 反应动画语义）；喂食另有咀嚼帧（2D），3D 走同款 click 语义
+        r3 = getattr(self, "_render3d", None)
+        if r3 is not None and r3.mode == "3d":
+            self._r3_airborne_until = 0.0
+            self._r3_react_until = self._r3_time.monotonic() + 1.2
 
     def _remember_interaction(self, out) -> None:
         """F12：交互/拒绝/疲劳事件写 episodic 记忆。
