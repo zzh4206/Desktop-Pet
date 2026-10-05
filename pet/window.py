@@ -257,7 +257,7 @@ class WindowBase(QWidget):
             muted = bool(getattr(self, "_frames", None)) and _is_neglected_sprite(
                 getattr(self, "_static_sprite", None))
             key = (sprite.path, self._facing, sprite.width, sprite.height,
-                   mt, muted)
+                   mt, muted, round(self.devicePixelRatio(), 2))
             pm = self._pix_cache.get(key)
             if pm is not None:
                 self._pix_cache.move_to_end(key)   # 真 LRU：命中刷新热度
@@ -273,6 +273,13 @@ class WindowBase(QWidget):
                         sprite.width, sprite.height,
                         Qt.KeepAspectRatio, Qt.SmoothTransformation,
                     )
+                    # retina 清晰度（v0.18.17）：scaled 产出逻辑尺寸位图
+                    # （dpr=1），retina 屏 2x 拉伸=立绘发糊。源图物理像素足够
+                    # 时按屏 dpr 高清化（pixmap 内容不变，只声明密度）。
+                    _dpr = self.devicePixelRatio()
+                    if _dpr > 1.01 and raw.width() >= sprite.width * _dpr:
+                        pm = pm.copy()
+                        pm.setDevicePixelRatio(_dpr)
                     if muted:
                         pm = _mute_pixmap(pm)
                     self._pix_cache[key] = pm
@@ -335,6 +342,14 @@ class WindowBase(QWidget):
 
     def is_render3d(self) -> bool:
         return getattr(self, "_r3_container", None) is not None
+
+    def resizeEvent(self, event) -> None:
+        """v0.18.16：3D container 跟随窗尺寸——否则窗 resize 后 3D 内容
+        仍按 attach 时的旧尺寸渲染再被拉伸=画质模糊（实测抓到）。"""
+        super().resizeEvent(event)
+        c = getattr(self, "_r3_container", None)
+        if c is not None:
+            c.setGeometry(self.rect())
 
     def set_conversation_mood(self, mood) -> None:
         """设置短时聊天表情；None 恢复养成状态决定的立绘。"""
