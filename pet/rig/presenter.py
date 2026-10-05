@@ -205,6 +205,10 @@ class RigWindow(WindowBase):
 
     # ---------------- 场景初始化 ----------------
     def _init_quick(self) -> None:
+        if getattr(self, "_r3_active", False):
+            # 3D 互斥呈现已接管（attach 先于延迟初始化的时序）：跳过 2D QML
+            # 场景创建，避免 2D/3D 重合（互斥双向守卫，另一侧在 attach 内）
+            return
         try:
             from PySide6.QtCore import Qt
             from PySide6.QtQuickWidgets import QQuickWidget

@@ -349,6 +349,18 @@ class WindowBase(QWidget):
             self._r3_view = qquickview
             self._label.hide()
             self._shadow.hide()
+            # rig 档的 2D 画面是 QQuickWidget（_quick）不是 label——互斥必须
+            # 连它一起藏（0.18.19 修好 QML 注册后 rig 场景能正常创建，不藏
+            # 则 2D/3D 重合）；蒙皮 motion tick 一并停（纯省电，不影响恢复）
+            quick = getattr(self, "_quick", None)
+            if quick is not None:
+                quick.hide()
+            mtimer = getattr(self, "_motion_timer", None)
+            if mtimer is not None:
+                try:
+                    mtimer.stop()
+                except Exception:
+                    pass
             # 2D 通道旁路：rig_active 是 RigWindow 只读 property 不能赋值——
             # 3D 用独立旁路位 _r3_active（apply_enrichment/set_sprite 各自检查）
             self._r3_active = True
