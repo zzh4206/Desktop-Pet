@@ -34,6 +34,7 @@ class Render3DAdapter:
         rest_q = {j: tuple(v[3:7]) for j, v in rest_q.items()}
         self._springs = SpringRig((sidecars or {}).get("spring_params"), rest_q)
         self._profile = bone_bridge.RigProfile.from_sidecar(profile_sc)
+        self._yaw_state = bone_bridge.WalkYawState()   # 走路侧身状态机（S1.8 前置）
         self._last_t = time.monotonic()
         self._degraded = False
         self._logged = False
@@ -51,12 +52,13 @@ class Render3DAdapter:
             now = time.monotonic()
             dt = min(now - self._last_t, 0.1)
             self._last_t = now
-            # 姿势通道：语义角色程序化 + 弹簧骨（发丝/衣服/尾巴随风摆——
-            # 风从契约 light.wind_speed 取；motion 信号传给弹簧做走路姿态：
-            # 锚点 bob + 步频惯性甩动）
-            motion = {"_walking": state.pose.action_id == "walk",
+            # 姿势通道：语义角色程序化（走路侧身转体/停下回正——yaw_state
+            # 状态机）+ 弹簧骨（发丝/衣服/尾巴随风摆+步态惯性；风从契约取）
+            motion = {"_walking": state.pose.action_id == "walk" or
+                      self._yaw_state.mode in ("TURN_BACK", "TURN_SIDE"),
                       "_step_phase": state.pose.phase}
-            payload = bone_bridge.build_pose_payload(self._profile, state.pose, now)
+            payload = bone_bridge.build_pose_payload(
+                self._profile, state.pose, now, yaw_state=self._yaw_state, dt=dt)
             if len(self._springs):
                 try:
                     payload.update(self._springs.step(dt, state.light.wind_speed,
