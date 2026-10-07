@@ -352,6 +352,10 @@ class PetApp:
         self._chat_bridge = None
         self._chat_window = None
         self._chat_client = None
+        # v0.20 模型管理（_setup_chat 内填充；此处置默认防异常路径 AttributeError）
+        self._model_registry = None
+        self._model_providers = {}
+        self._model_selected = ""
         try:
             self._setup_chat()
         except Exception:
@@ -755,7 +759,15 @@ class PetApp:
         register_status_singleton(self._status_bridge)
         self.tray.set_status_callback(self._show_status)
 
+        # v0.20 模型管理：注册表留存 + 托盘入口。无 key 引导路径也要能进
+        # 管理对话框接入（新增模型+Key 后就地补建聊天，免重启）
+        self._model_registry = registry
         providers_cfg = self.cfg.get("llm", {}).get("providers", {})
+        self._model_providers = dict(providers_cfg)
+        self._model_selected = (self.cfg.get("llm", {}) or {}).get("selected", "")
+        self.tray.set_model_manager_callback(self._show_model_manager)
+        self._sync_model_tray()
+
         # 扫描已注入 key 的 provider（Keychain + env）
         available = []
         for name, pcfg in providers_cfg.items():
@@ -764,49 +776,56 @@ class PetApp:
             if key:
                 available.append((name, key))
 
-        if not available:
-            # 首次引导：默认 deepseek（config 里有的第一个）
-            default_name = next(iter(providers_cfg), "deepseek")
-            default_env = providers_cfg.get(default_name, {}).get("api_key_env", "DEEPSEEK_API_KEY")
-            key = self._ensure_llm_key(default_name, default_env)
-            if not key:
-                self.logger.warning("LLM key 未设置，聊天禁用（宠物仍跑）")
-                # 托盘聊天 fallback 也注册——点击有反馈（气泡提示）而非静默
-                self.tray.set_chat_callback(self._show_chat)
-                QTimer.singleShot(
-                    1500,
-                    lambda: self.bubble.show(
-                        "还没设置 API key，聊天暂时不可用～",
-                        anchor=self._pet_anchor(),
-                    ),
-                )
-                return
-            available = [(default_name, key)]
+        selected, key = None, None
+        # v0.20：记忆上次选择（llm.selected）——key 仍在就直接用，不再
+        # 每次启动弹选（多 provider 弹选改只在无记忆/记忆失效时出现）
+        if self._model_selected in providers_cfg:
+            k = self.adapter.get_llm_key(
+                self._model_selected,
+                providers_cfg[self._model_selected].get("api_key_env", ""))
+            if k:
+                selected, key = self._model_selected, k
 
-        # 多 provider 时弹选（每次启动都弹）
-        if len(available) == 1:
-            selected, key = available[0]
-        else:
-            selected, key = self._select_provider(available)
+        if selected is None:
+            if not available:
+                # 首次引导：默认 deepseek（config 里有的第一个）
+                default_name = next(iter(providers_cfg), "deepseek")
+                default_env = providers_cfg.get(default_name, {}).get("api_key_env", "DEEPSEEK_API_KEY")
+                key = self._ensure_llm_key(default_name, default_env)
+                if not key:
+                    self.logger.warning("LLM key 未设置，聊天禁用（宠物仍跑）")
+                    # 托盘聊天 fallback 也注册——点击有反馈（气泡提示）而非静默
+                    self.tray.set_chat_callback(self._show_chat)
+                    QTimer.singleShot(
+                        1500,
+                        lambda: self.bubble.show(
+                            "还没设置 API key，聊天暂时不可用～"
+                            "（托盘“模型管理…”可接入模型）",
+                            anchor=self._pet_anchor(),
+                        ),
+                    )
+                    return
+                available = [(default_name, key)]
 
-        # v0.4.15 工厂实例化（不再硬编码 DeepSeekClient）
-        from pet.llm import create_client
+            # 无记忆/记忆失效时才弹选
+            if len(available) == 1:
+                selected, key = available[0]
+            else:
+                selected, key = self._select_provider(available)
+            if selected != self._model_selected:
+                try:
+                    from pet.model_registry import save_llm_section
+                    save_llm_section(self._paths["config_path"], None, selected)
+                except Exception:
+                    self.logger.warning("模型选择写盘失败", exc_info=True)
+                self._model_selected = selected
 
-        self._chat_client = create_client(selected, key, registry, self.cfg)
-        # H4/M5 修（REVIEW-2026-08-25）：滚屏摘要走独立客户端实例——共享
-        # 实例的 _resp/usage 跨线程互踩（摘要与在飞聊天流并发时 cancel
-        # 可能误关对方的流）。配置同源，仅多一个实例。
-        self._sum_client = create_client(selected, key, registry, self.cfg)
-        # M5 修收尾：主动关怀决策同样独立实例（ChatWorker 与
-        # _ProactiveWorker 共享时 cancel/usage 同源竞态）。三个 worker
-        # 各持一个客户端，_resp 互不误伤。
-        self._proactive_client = create_client(
-            selected, key, registry, self.cfg)
-        self.logger.info("LLM provider: %s", selected)
+        self._activate_llm(selected, key)
         self._build_chat_panel(registry)
 
     def _select_provider(self, available) -> tuple:
-        """QInputDialog 下拉选 provider（每次启动多个时弹）。返 (name, key)。"""
+        """QInputDialog 下拉选 provider（仅无 llm.selected 记忆/记忆失效时弹）。
+        返 (name, key)。"""
         from PySide6.QtWidgets import QInputDialog
 
         names = [n for n, _ in available]
@@ -842,6 +861,126 @@ class PetApp:
             self.adapter.set_llm_key(provider, text)
             return self.adapter.get_llm_key(provider, env_var) or text
         return None
+
+    # ---- v0.20 模型管理（接入/改 Key/增删/切换）----
+
+    def _activate_llm(self, selected: str, key: str) -> None:
+        """按 provider 名实例化三个客户端（聊天/滚屏摘要/主动关怀）。
+
+        启动选择与运行时切换共用入口；三实例隔离 _resp/usage 的既有约束
+        不变（H4/M5）。调用方负责把新引用换进 bridge/scheduler（swap_clients
+        /set_client）——启动路径此时面板未建，无需换。"""
+        from pet.llm import create_client
+
+        self._chat_client = create_client(
+            selected, key, self._model_registry, self.cfg)
+        self._sum_client = create_client(
+            selected, key, self._model_registry, self.cfg)
+        self._proactive_client = create_client(
+            selected, key, self._model_registry, self.cfg)
+        self._model_selected = selected
+        self.logger.info("LLM provider: %s", selected)
+
+    def _sync_model_tray(self) -> None:
+        """托盘'切换模型'子菜单重建（当前项勾选 + 模型名/密钥态）。"""
+        try:
+            from pet.model_registry import entry_label
+
+            entries = []
+            for name, pcfg in (self._model_providers or {}).items():
+                has_key = bool(self.adapter.get_llm_key(
+                    name, pcfg.get("api_key_env", "")))
+                entries.append((name, entry_label(
+                    name, pcfg, self._model_selected, has_key)))
+            self.tray.set_models(entries, self._model_selected,
+                                 self._switch_model)
+        except Exception:
+            self.logger.warning("托盘模型菜单刷新失败", exc_info=True)
+
+    def _show_model_manager(self) -> None:
+        """托盘'模型管理…'：接入/编辑（自定义命名+URL+模型 ID+Key）、
+        测试连接、删除、设为当前使用。
+
+        对话框只管编辑态；落盘/切换经 on_commit/on_select 回调回来。"""
+        from pet.ui.model_dialog import ModelManagerDialog
+
+        def key_reader(name: str):
+            pcfg = (self._model_providers or {}).get(name) or {}
+            return self.adapter.get_llm_key(name, pcfg.get("api_key_env", ""))
+
+        dlg = ModelManagerDialog(
+            self._model_providers,
+            self._model_selected,
+            key_reader=key_reader,
+            key_writer=self.adapter.set_llm_key,
+            on_commit=self._commit_models,
+            on_select=self._switch_model,
+        )
+        dlg.exec()
+
+    def _commit_models(self, providers: dict, selected: str) -> None:
+        """对话框保存/删除回调：config 原子写（只动 llm 段）+ 内存/托盘同步
+        + 冷启动补建聊天（无 key 引导路径下首次接入立即生效，免重启）。"""
+        from pet.model_registry import save_llm_section
+
+        try:
+            save_llm_section(self._paths["config_path"], providers,
+                             selected or None)
+        except Exception:
+            self.logger.warning("模型配置写盘失败", exc_info=True)
+        self._model_providers = dict(providers)
+        self._model_selected = selected
+        # 内存 config 同步（create_client 读 self.cfg；不刷会拿旧配置）
+        llm_cfg = self.cfg.setdefault("llm", {})
+        llm_cfg["providers"] = dict(providers)
+        if selected:
+            llm_cfg["selected"] = selected
+        else:
+            llm_cfg.pop("selected", None)
+        self._sync_model_tray()
+        # 冷启动补建：聊天从未初始化（无 key 引导路径），新接入立即生效
+        if (self._chat_client is None and selected
+                and self._model_registry is not None):
+            pcfg = providers.get(selected) or {}
+            if self.adapter.get_llm_key(selected, pcfg.get("api_key_env", "")):
+                self._switch_model(selected)
+
+    def _switch_model(self, name: str) -> None:
+        """切换当前使用的模型（托盘子菜单/对话框'设为当前使用'）。
+
+        在飞轮次仍持旧 client 跑完（worker 构造时已捕获引用），新消息即走
+        新模型；llm.selected 写盘，下次启动直用。"""
+        pcfg = (self._model_providers or {}).get(name) or {}
+        key = self.adapter.get_llm_key(name, pcfg.get("api_key_env", ""))
+        if not key:
+            self.bubble.show(
+                f"“{name}”还没有 API Key，请在“模型管理…”里设置～",
+                anchor=self._pet_anchor())
+            return
+        try:
+            self._activate_llm(name, key)
+            llm_cfg = self.cfg.setdefault("llm", {})
+            llm_cfg["providers"] = dict(self._model_providers)
+            llm_cfg["selected"] = name
+        except Exception as exc:
+            self.logger.warning("切换模型 %s 失败: %s", name, exc)
+            self.bubble.show(f"切换失败：{exc}", anchor=self._pet_anchor())
+            return
+        try:
+            from pet.model_registry import save_llm_section
+
+            save_llm_section(self._paths["config_path"], None, name)
+        except Exception:
+            self.logger.warning("模型选择写盘失败", exc_info=True)
+        # 换引用：bridge 在飞 worker 不受影响；聊天未建过则就地补建
+        if self._chat_bridge is not None:
+            self._chat_bridge.swap_clients(self._chat_client, self._sum_client)
+        elif self._model_registry is not None:
+            self._build_chat_panel(self._model_registry)
+        if getattr(self, "_proactive", None) is not None:
+            self._proactive.set_client(self._proactive_client)
+        self._sync_model_tray()
+        self.bubble.show(f"已切换到 {name}～", anchor=self._pet_anchor())
 
     def _chat_avatar_url(self) -> str:
         """当前宠物立绘 → file:// URL（聊天面板"对方"头像）。

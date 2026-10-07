@@ -468,6 +468,16 @@ class ChatBridge(QAbstractListModel):
         # 保留原文（下次轮次完成再试）；失败细节 worker 已打日志
         self._sum_worker = None   # failed 先于 finished 送达，此刻清理安全
 
+    def swap_clients(self, client, sum_client=None) -> None:
+        """v0.20 运行时切换模型（app._switch_model 调）：换 chat/摘要客户端。
+
+        在飞 ChatWorker/_SummarizeWorker 构造时已捕获旧 client 引用，跑完
+        不受影响；新 send/_maybe_summarize 即走新 client。_resp 各实例隔离，
+        互不误伤（H4/M5 语义保持）。"""
+        self._client = client
+        if sum_client is not None:
+            self._sum_client = sum_client
+
     @Slot()
     def cancel(self) -> None:
         """shutdown 收口用：真中断流式 + 等待 worker 退出 + 断信号。

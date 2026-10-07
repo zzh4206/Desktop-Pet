@@ -34,6 +34,14 @@ class TrayManager(QObject):
         menu = QMenu()
         act_chat = menu.addAction("聊天")
         act_chat.triggered.connect(self._emit_chat)
+        # v0.20 模型管理：快速切换子菜单（set_models 动态重建）+ 管理对话框
+        self._models_menu = QMenu("切换模型")
+        self._on_model_switch = None
+        self._on_model_manager = None
+        self.set_models([], "", None)  # 初始占位（app 启动后 set_models 覆盖）
+        menu.addMenu(self._models_menu)
+        act_model_mgr = menu.addAction("模型管理…")
+        act_model_mgr.triggered.connect(self._emit_model_manager)
         act_reset = menu.addAction("重新开始")
         act_mem = menu.addAction("记忆管理")
         act_emotion = menu.addAction("聊天情绪设置")
@@ -134,6 +142,43 @@ class TrayManager(QObject):
     def set_reset_callback(self, cb) -> None:
         """v0.5：托盘'重新开始'→app 经 platform.confirm_dangerous 二次确认后清档复位。"""
         self._on_reset = cb
+
+    # ---- v0.20 模型管理 ----
+
+    def set_model_manager_callback(self, cb) -> None:
+        """托盘'模型管理…'→app._show_model_manager（增删改 Key/切换/测连接）。"""
+        self._on_model_manager = cb
+
+    def _emit_model_manager(self) -> None:
+        cb = getattr(self, "_on_model_manager", None)
+        if cb:
+            cb()
+        else:
+            logging.getLogger("pet").warning(
+                "托盘'模型管理…'点击但未注册 callback")
+
+    def set_models(self, entries, current, cb) -> None:
+        """重建'切换模型'子菜单。
+
+        ``entries``: [(name, label)]（app 传入，label 已含模型名/密钥态）；
+        ``current``: 当前使用中的 name（勾选态）；``cb(name)``: 选中回调。
+        空列表时放一个禁用占位行，子菜单不至于空白不可点。"""
+        self._on_model_switch = cb
+        self._models_menu.clear()
+        if not entries:
+            ph = self._models_menu.addAction("（未配置模型）")
+            ph.setEnabled(False)
+            return
+        for name, label in entries:
+            act = self._models_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(name == current)
+            # lambda 默认参绑定当前 name（闭包晚绑定陷阱）
+            act.triggered.connect(lambda _=False, n=name: self._emit_model_switch(n))
+
+    def _emit_model_switch(self, name: str) -> None:
+        if self._on_model_switch:
+            self._on_model_switch(name)
 
     def set_spit_callback(self, cb) -> None:
         """v0.7：托盘'强制吐出'→EatMouseSession.force_spit（停 CGEventTap + 回 idle）。"""

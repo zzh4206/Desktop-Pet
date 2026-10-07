@@ -274,6 +274,13 @@ class ProactiveScheduler:
         if self._next_wake_at is None:
             self.schedule_wake(random.uniform(*_LOCAL_WAKE_RANGE), {"boot": True})
 
+    def set_client(self, client) -> None:
+        """v0.20 运行时切换模型（app._switch_model 调）。
+
+        在飞 _ProactiveWorker 构造时已捕获旧 client，跑完不受影响；下一次
+        唤醒决策即走新模型。None=回退本地罐头。"""
+        self._client = client
+
     # ---- 链式唤醒 ----
 
     def schedule_wake(self, delay_min: float, reason_ctx: dict) -> None:

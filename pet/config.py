@@ -84,7 +84,7 @@ _SAFE_DEFAULTS: dict = {
     "log_level": "INFO",
     "sleepy_idle_minutes": 10,
     "hotkeys": {},
-    "llm": {"providers": {}},
+    "llm": {"providers": {}},  # v0.20: selected 亦合法（schema 见 _SECTION_SCHEMAS）
     "chat_emotion": {
         "enabled": True, "schedule": ["22:00"],
         "retention_hours": 48, "expression_minutes": 5,
@@ -311,6 +311,14 @@ _SECTION_SCHEMAS: dict[str, dict] = {
     "llm": {
         "type": "object",
         "properties": {
+            # v0.20 模型管理：selected=当前使用的 provider 名（模型管理对话框/
+            # 托盘切换时写回，启动据此免弹选）。
+            # providers **保持宽松**（仅 object）——严格条目校验失败会整段回退
+            # example 默认，用户自定义 provider 从合并配置里消失后，对话框
+            # 下一次提交会把盘上自定义条目抹掉（数据丢失）；条目合法性由
+            # model_registry.validate_entry 在对话框入口把关，坏 URL 会在
+            # 请求期可见地失败，好过静默吞配置。
+            "selected": {"type": "string"},
             "providers": {"type": "object"},
             "max_tokens": {"type": "number", "minimum": 256,
                            "maximum": 128000},

@@ -1,6 +1,7 @@
 {
   "config_version": 1,
   "llm": {
+    "selected": "deepseek",
     "providers": {
       "deepseek": {
         "model": "deepseek-chat",

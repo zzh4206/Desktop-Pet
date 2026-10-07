@@ -99,4 +99,7 @@
 # v0.19.8：帧率分档（pet/perf.py 三档节拍表+auto 判档+过载降档，右键菜单
 # 「流畅度」持久化 performance.frame_tier）+ 养成机制引擎（pet/needs.py
 # 区段命名/饿脏加压心情/双高抵扣/交互落账收口，config.needs 可调）。
-__version__ = "0.19.8"
+# v0.20.0：模型管理（pet/model_registry.py 注册表+pet/ui/model_dialog.py
+# 对话框；托盘「切换模型/模型管理…」；llm.selected 记忆免启动弹选；
+# 运行时切换 chat_bridge.swap_clients+proactive.set_client 热换客户端）。
+__version__ = "0.20.0"
