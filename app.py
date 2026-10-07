@@ -606,6 +606,12 @@ class PetApp:
                 sun = src.current() if src else None
             except Exception:
                 sun = None
+            # 风（S1.6 弹簧骨驱动源）：wind 通道 (gain 0-1, bias) → m/s 假设
+            # 满档 8（spring_driver 的 gain 映射基准）
+            try:
+                wg, _wb = self._bridge.wind()
+            except Exception:
+                wg = 0.0
             snap = PetSnapshot(
                 action_type=action_type, walking=walking,
                 walk_phase=self._r3_walk_phase, airborne=airborne,
@@ -616,6 +622,7 @@ class PetApp:
                 blink_progress=self._r3_blink_progress(),
                 sun_azimuth_deg=getattr(sun, "azimuth_deg", 0.0) if sun else 0.0,
                 sun_elevation_deg=getattr(sun, "elevation_deg", 0.0) if sun else 0.0,
+                wind_speed=max(0.0, float(wg)) * 8.0,
             )
             r3.apply(scene_state(snap))
         except Exception:

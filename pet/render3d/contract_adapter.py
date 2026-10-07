@@ -14,7 +14,8 @@ from __future__ import annotations
 import logging
 import time
 
-from pet.render3d import bone_bridge, lighting, morph, spring
+from pet.render3d import bone_bridge, lighting, morph
+from pet.render3d.spring_driver import SpringRig
 from pet.scene_contract import LightWeatherState, PoseSemantics, SceneState
 
 logger = logging.getLogger("pet.render3d")
@@ -25,8 +26,14 @@ class Render3DAdapter:
         self._window = window
         self._level = level
         self._resolver = morph.ExpressionResolver((sidecars or {}).get("expression_map"))
-        self._chains = spring.chains_from_sidecar((sidecars or {}).get("spring_params"))
-        self._profile = bone_bridge.RigProfile.from_sidecar((sidecars or {}).get("rig_profile"))
+        # 弹簧骨（S1.6）：链定义 sidecar + rig_profile 的 rest_q（骨绝对
+        # 四元数表达与 bone_bridge 一致）；无 sidecar 时空转（零影响）
+        profile_sc = (sidecars or {}).get("rig_profile") or {}
+        rest_q = {j: tuple(v) for j, v in (profile_sc.get("rest") or {}).items()
+                  if isinstance(v, (list, tuple)) and len(v) >= 7}
+        rest_q = {j: tuple(v[3:7]) for j, v in rest_q.items()}
+        self._springs = SpringRig((sidecars or {}).get("spring_params"), rest_q)
+        self._profile = bone_bridge.RigProfile.from_sidecar(profile_sc)
         self._last_t = time.monotonic()
         self._degraded = False
         self._logged = False
@@ -41,16 +48,19 @@ class Render3DAdapter:
             self._window.apply_uniforms(u.as_qml())
             # 表情权重（M1 存档——蒙皮模型就绪后驱动 morph target）
             self._morph_weights = self._resolver.resolve(state.expression)
-            # 姿势通道：语义角色程序化（任意骨架——profile 有则动、无则静）
             now = time.monotonic()
-            payload = bone_bridge.build_pose_payload(self._profile, state.pose, now)
-            if payload:
-                self._window.apply_pose(payload)
-            # 弹簧链步进（根=脚底锚点上方 1.4m≈头顶位置，v0 演示）
             dt = min(now - self._last_t, 0.1)
             self._last_t = now
-            for ch in self._chains:
-                ch.step(dt, (0.0, 1.35, 0.0))
+            # 姿势通道：语义角色程序化 + 弹簧骨（发丝/衣服/尾巴随风摆——
+            # 风从契约 light.wind_speed 取，静止姿态的活物感来源）
+            payload = bone_bridge.build_pose_payload(self._profile, state.pose, now)
+            if len(self._springs):
+                try:
+                    payload.update(self._springs.step(dt, state.light.wind_speed))
+                except Exception:  # noqa: BLE001
+                    logger.warning("弹簧骨步进异常（本拍跳过）", exc_info=True)
+            if payload:
+                self._window.apply_pose(payload)
         except Exception:
             self._degraded = True
             if not self._logged:
@@ -68,4 +78,5 @@ class Render3DAdapter:
 
     @property
     def spring_points(self) -> list:
-        return [list(ch.points) for ch in self._chains]
+        """调试/验收：各弹簧链当前节点（空=无 sidecar）。"""
+        return [list(ch.points) for ch in self._springs.chains]

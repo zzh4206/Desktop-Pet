@@ -38,23 +38,43 @@ class VerletChain:
                            for x, y, z in self.rest]
             self.prev = list(self.points)
 
-    def step(self, dt: float, root_now: tuple[float, float, float]) -> list[tuple[float, float, float]]:
-        """推进一帧；返回当前全部节点位置（[0]=根=root_now）。"""
+    def step(self, dt: float, root_now: tuple[float, float, float],
+             wind: tuple[float, float, float] = (0.0, 0.0, 0.0)
+             ) -> list[tuple[float, float, float]]:
+        """推进一帧；返回当前全部节点位置（[0]=根=root_now）。
+
+        wind：自由节点附加加速度（m/s²，链空间）——调用方算好时变风力
+        （幅度×正弦脉动×方向），静止姿态的随风摆动即由此驱动。
+        """
         dt = min(max(dt, 0.0), self.params.dt_clamp_s)
         self.root = root_now
         self.points[0] = root_now
         self.prev[0] = root_now
         g = self.params.gravity * dt * dt
+        wx, wy, wz = wind[0] * dt * dt, wind[1] * dt * dt, wind[2] * dt * dt
         for i in range(1, len(self.points)):
             cx, cy, cz = self.points[i]
             px, py, pz = self.prev[i]
             vx, vy, vz = (cx - px) * self.params.drag, (cy - py) * self.params.drag, (cz - pz) * self.params.drag
-            nx, ny, nz = cx + vx, cy + vy, cz + vz + g
+            nx, ny, nz = cx + vx + wx, cy + vy + wy + g, cz + vz + wz
             # 向静止位姿回弹（ stiffness 朝 rest 方向收）
             rx, ry, rz = root_now[0] + self.rest[i][0], root_now[1] + self.rest[i][1], root_now[2] + self.rest[i][2]
             nx += (rx - nx) * self.params.stiffness
             ny += (ry - ny) * self.params.stiffness
             nz += (rz - nz) * self.params.stiffness
+            # 骨长保持（VRM springBone 规范核心步骤）：节点钉在上一节点为
+            # 球心、半径=rest 段长的球面上——无此约束时风把链整体平移而非
+            # 弯曲（实测段方向不变=骨不转），力无法逐段传导成鞭状摆动
+            ax_, ay_, az_ = nx - self.points[i - 1][0], ny - self.points[i - 1][1], nz - self.points[i - 1][2]
+            seg = math.sqrt(ax_ * ax_ + ay_ * ay_ + az_ * az_)
+            want = math.sqrt((self.rest[i][0] - self.rest[i - 1][0]) ** 2
+                             + (self.rest[i][1] - self.rest[i - 1][1]) ** 2
+                             + (self.rest[i][2] - self.rest[i - 1][2]) ** 2)
+            if seg > 1e-9 and want > 1e-9:
+                s = want / seg
+                nx = self.points[i - 1][0] + ax_ * s
+                ny = self.points[i - 1][1] + ay_ * s
+                nz = self.points[i - 1][2] + az_ * s
             self.prev[i] = self.points[i]
             self.points[i] = (nx, ny, nz)
         return self.points
