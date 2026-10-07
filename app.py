@@ -577,6 +577,19 @@ class PetApp:
                 # 单击消歧到期 → 3D 摸头语义（_interact("pet") 全链路）
                 self.window.set_render3d_click(
                     lambda: self._r3_interact("click"))
+                # 钉所有 Space（v0.18.29 图层消失修复）：切换应用/切到全屏
+                # app 的 Space 后窗口留在原 Space 被盖=消失（点托盘触发
+                # 事件才回来）。CanJoinAllSpaces|Stationary 与聊天面板同款；
+                # 2D 模式看门狗 show() 能兜，3D 模式主窗 isVisible 恒 True
+                # 兜不到——必须在层级层根治
+                try:
+                    if self.adapter.move_window_to_all_spaces(self.window):
+                        self.logger.info("3D 主窗已钉所有 Space（CanJoinAllSpaces）")
+                    else:
+                        self.logger.warning("3D 主窗钉 Space 失败（非 mac 或 "
+                                            "NSWindow 获取失败），降级靠 raise 兜底")
+                except Exception:
+                    self.logger.warning("3D 主窗钉 Space 异常", exc_info=True)
                 self._r3_embedded = True
                 self.logger.info("render3d 已嵌入主窗（互斥呈现，%dx%d）", W3, H3)
             else:
