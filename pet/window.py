@@ -323,32 +323,25 @@ class WindowBase(QWidget):
         """3D 嵌入时注入单击回调（None=恢复 2D patRequested 语义）。"""
         self._r3_click_cb = cb
 
-    def attach_render3d(self, qquickview) -> bool:
-        """把 3D QQuickView 的渲染内容嵌入本窗（互斥呈现的 3D 侧）。
+    def attach_render3d(self, qquick_widget) -> bool:
+        """把 3D QQuickWidget 直接嵌入本窗（互斥呈现的 3D 侧）。
 
-        * createWindowContainer 挂进布局——QQuickView 仍由 render3d 桥驱动
-          （posePayload/看门狗/降级），只是渲染 surface 落到主窗内；
-        * 隐藏 2D 立绘层（label+阴影）并置 ``rig_active``——apply_enrichment/
-          set_sprite 等 2D 通道全部旁路（复用 rig 后端的既有旁路位）；
-        * 交互零改造：本窗的 pat/feed/poke/drag 信号链原样生效（3D 呈现
-          只替换"画什么"，不替换"怎么交互"——D11 整窗语义）。
+        v0.18.24：QQuickWidget reparent 嵌入（2D rig 的 presenter._init_quick
+        同款手法）——widget 层 WA_TransparentForMouseEvents 真正生效，原生
+        事件落本窗=双击/消歧/拖拽/菜单复用 2D 代码路径。此前 QQuickView+
+        createWindowContainer 的 native surface 上该属性无效（事件被 native
+        层吞=交互全灭，实测）。
         返回 False=嵌入失败（调用方回退 2D，零影响）。
         """
         try:
-            from PySide6.QtQuickWidgets import QQuickWidget
-
-            container = QQuickWidget.createWindowContainer(qquickview, self)
-            container.setAttribute(Qt.WA_TranslucentBackground, True)
-            # v0.18.23 交互复用 2D 原生路径（用户拍板）：container 对鼠标
-            # 透明——原生事件（press/dblclick/contextMenu）直接落本窗
-            # QWidget，Qt 的双击合成/手势消解/菜单派发与 2D 完全同路。
-            # （先前的事件过滤器转发链实测破坏 QPA 双击合成=真实双击退化
-            # 两次单击；presenter 的 2D QQuickWidget 场景层同款先例。）
-            container.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            container.setGeometry(self.rect())
-            container.show()
-            self._r3_container = container
-            self._r3_view = qquickview
+            qw = qquick_widget
+            qw.setParent(self)
+            qw.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            qw.setAttribute(Qt.WA_AlwaysStackOnTop, True)   # 3D 压过残留 2D 层
+            qw.setGeometry(self.rect())
+            qw.show()
+            self._r3_container = qw          # 命名沿用（resizeEvent 跟随用）
+            self._r3_view = qw
             self._label.hide()
             self._shadow.hide()
             # rig 档的 2D 画面是 QQuickWidget（_quick）不是 label——互斥必须
@@ -389,7 +382,7 @@ class WindowBase(QWidget):
         if v is None:
             return True
         try:
-            img = v.grabWindow()
+            img = v.grabFramebuffer()   # QQuickWidget API（grabFramebuffer→QImage）
             if img.isNull():
                 return True
             ix = min(img.width() - 1, max(0,

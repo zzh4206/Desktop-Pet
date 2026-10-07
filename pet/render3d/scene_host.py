@@ -33,7 +33,13 @@ def _rss_mb() -> float:
 
 
 class Render3DWindow:
-    """QQuickView 直窗薄封装。QQuickView 是 QWindow——无 setAttribute/move（spike 坑 4）。
+    """QQuickWidget 场景宿主（v0.18.24：QQuickView→QQuickWidget）。
+
+    QQuickWidget 是 QWidget——可直接 reparent 嵌入主窗（attach_render3d），
+    且 WA_TransparentForMouseEvents 真正生效（事件落主窗=复用 2D 原生
+    手势路径）；QQuickView+createWindowContainer 的 native surface 上该
+    属性无效（事件被吞=交互全灭，实测）。2D rig（presenter._init_quick）
+    的同款嵌入先例。顶层伴随模式照常可用（setWindowFlags+show）。
 
     延迟 import Qt：本模块被 bootstrap 在未启用时 import 也不拖 Qt 进内存。
     """
@@ -41,19 +47,22 @@ class Render3DWindow:
     def __init__(self, model_qml: str, cfg: dict, asset_dir: str | None = None):
         from PySide6.QtCore import QUrl, QTimer
         from PySide6.QtGui import QColor, Qt
-        from PySide6.QtQuick import QQuickView
+        from PySide6.QtQuickWidgets import QQuickWidget
 
-        self._view = QQuickView()
-        self._view.setColor(QColor(0, 0, 0, 0))
-        self._view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
-        self._view.setFlags(
+        self._view = QQuickWidget()
+        self._view.setClearColor(QColor(0, 0, 0, 0))
+        self._view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._view.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+        self._view.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
         self._view.resize(int(cfg.get("window_size_w", 240)), int(cfg.get("window_size_h", 420)))
         self._view.setSource(QUrl.fromLocalFile(QML))
-        if self._view.status() != QQuickView.Status.Ready:
+        if self._view.status() != QQuickWidget.Status.Error or not self._view.rootObject():
+            pass
+        if self._view.rootObject() is None:
             errs = "; ".join(e.toString() for e in self._view.errors())
             raise RuntimeError(f"scene3d.qml 加载失败: {errs}")
         self._root = self._view.rootObject()
@@ -78,8 +87,8 @@ class Render3DWindow:
 
         screen = QGuiApplication.primaryScreen().availableGeometry()
         g = self._view.geometry()
-        self._view.setPosition(screen.right() - g.width() - 40,
-                               screen.bottom() - g.height() - 40)
+        self._view.move(screen.right() - g.width() - 40,
+                        screen.bottom() - g.height() - 40)
 
     def show(self) -> None:
         self._view.show()
