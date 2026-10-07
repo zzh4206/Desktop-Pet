@@ -348,7 +348,11 @@ class WindowBase(QWidget):
             qw = qquick_widget
             qw.setParent(self)
             qw.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            qw.setAttribute(Qt.WA_AlwaysStackOnTop, True)   # 3D 压过残留 2D 层
+            # ⚠️ 不设 WA_AlwaysStackOnTop：Qt 文档明确警告该属性在
+            # QQuickWidget 上破坏正常合成（内容陈旧/间歇消失，expose 事件
+            # 才恢复=用户报的"开着但不显示、点任务栏又出来"）。透明背景由
+            # clearColor alpha=0 承担；3D 模式下 label/阴影已隐藏，没有
+            # 需要压层的兄弟控件，StackOnTop 无收益纯风险
             qw.setGeometry(self.rect())
             qw.show()
             self._r3_container = qw          # 命名沿用（resizeEvent 跟随用）

@@ -77,8 +77,24 @@ class Render3DWindow:
         self.degraded = False
         self._timer = QTimer()
         self._timer.setInterval(WATCHDOG_INTERVAL_MS)
-        self._timer.timeout.connect(self._check_rss)
+        self._timer.timeout.connect(self._on_timer)
         self._timer.start()
+
+    def _on_timer(self) -> None:
+        """看门狗 + 合成层保鲜（同一定时器，双职责）。"""
+        self._check_rss()
+        self.nudge()
+
+    def nudge(self) -> None:
+        """合成层保鲜脉冲（0.18.29）：请求 QQuickWidget 重绘——macOS 在
+        Space 切换/显示器休眠/遮挡后可能持陈旧合成层（内容透明但窗仍
+        "可见"，直到 expose 事件才恢复=用户报的图层消失），周期 update()
+        保证最多 WATCHDOG_INTERVAL_MS 自愈。"""
+        try:
+            if not self.degraded:
+                self._view.update()
+        except Exception:
+            pass
 
     # ---- 窗口管理 ----
 
