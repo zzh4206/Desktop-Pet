@@ -105,6 +105,17 @@ _SAFE_DEFAULTS: dict = {
         "enabled": False, "stage": "adult", "light_level": 1,
         "fps_cap": 30, "safe_rss_mb": 500.0,
     },
+    # v0.19.8 帧率分档（pet/perf.py）：auto=平台判档+过载自动降档；手动档
+    # 不降档。菜单「流畅度」选择持久化到用户 config 的本段。
+    "performance": {"frame_tier": "auto"},
+    # v0.19.8 养成联动（pet/needs.py）：饿/脏给心情加压，双高抵扣心情衰减。
+    # 均为点/小时（drag_*/content_* 为触发阈值）。
+    "needs": {
+        "hunger_mood_drag": 1.5, "dirt_mood_drag": 1.0,
+        "content_mood_gain": 2.0, "drag_fullness": 30,
+        "drag_cleanliness": 25, "content_fullness": 80,
+        "content_cleanliness": 65,
+    },
 }
 
 # 需校验的数值子段 schema（其余键 v0.2 不强校验）
@@ -364,6 +375,35 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "light_level": {"type": "integer", "minimum": 0, "maximum": 3},
             "fps_cap": {"type": "integer", "minimum": 5, "maximum": 120},
             "safe_rss_mb": {"type": "number", "minimum": 100, "maximum": 5000},
+        },
+        "additionalProperties": False,
+    },
+    # v0.19.8 帧率分档（pet/perf.py）
+    "performance": {
+        "type": "object",
+        "properties": {
+            "frame_tier": {"enum": ["auto", "low", "medium", "high"]},
+        },
+        "required": ["frame_tier"],
+        "additionalProperties": False,
+    },
+    # v0.19.8 养成联动（pet/needs.py；界与 needs._INTERLOCK_MAX 一致）
+    "needs": {
+        "type": "object",
+        "properties": {
+            "hunger_mood_drag": {"type": "number", "minimum": 0,
+                                 "maximum": 50},
+            "dirt_mood_drag": {"type": "number", "minimum": 0, "maximum": 50},
+            "content_mood_gain": {"type": "number", "minimum": 0,
+                                  "maximum": 50},
+            "drag_fullness": {"type": "number", "minimum": 0,
+                              "maximum": 100},
+            "drag_cleanliness": {"type": "number", "minimum": 0,
+                                 "maximum": 100},
+            "content_fullness": {"type": "number", "minimum": 0,
+                                 "maximum": 100},
+            "content_cleanliness": {"type": "number", "minimum": 0,
+                                    "maximum": 100},
         },
         "additionalProperties": False,
     },

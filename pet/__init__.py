@@ -96,4 +96,7 @@
 # 只有一套彩色版；rig 档新增场景属性 frameNeglected（与侧身行走共用
 # mirrorNode 灰调层同参），frames 档 WindowBase 按同参去饱和入 pix 缓存
 # （muted 入键，静态 neglected 立绘不二次压色）。
-__version__ = "0.19.7"
+# v0.19.8：帧率分档（pet/perf.py 三档节拍表+auto 判档+过载降档，右键菜单
+# 「流畅度」持久化 performance.frame_tier）+ 养成机制引擎（pet/needs.py
+# 区段命名/饿脏加压心情/双高抵扣/交互落账收口，config.needs 可调）。
+__version__ = "0.19.8"

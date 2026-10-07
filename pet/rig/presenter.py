@@ -158,6 +158,11 @@ class RigWindow(WindowBase):
         self._engine = MotionEngine(spec) if spec is not None else None
         self._motion_inputs = MotionInputs()
         self._motion_timer: QTimer | None = None
+        # v0.19.8 帧率分档：三档常数的实例副本（apply_frame_tier 改写；
+        # 缺省=模块常数，即 medium 档，独立使用 presenter 时行为不变）
+        self._tick_loco_ms = _TICK_LOCO_MS
+        self._tick_fast_ms = _TICK_FAST_MS
+        self._tick_slow_ms = _TICK_SLOW_MS
         # ---- v0.19 步态引擎（模块 3）：变 dt 时钟 + 原子提交 ----
         self._gait: GaitSolver | None = None
         self._gait_desired_vx = 0.0
@@ -468,8 +473,8 @@ class RigWindow(WindowBase):
         if (self._motion_timer is not None and self._loco is not None
                 and self._loco.active):
             # 升频沿即时设（interrupt/侧身启动不等下一拍）；降频统一由
-            # _adapt_tick 裁决（active=False 时下一拍回落 33/66ms）
-            self._motion_timer.setInterval(_TICK_LOCO_MS)
+            # _adapt_tick 裁决（active=False 时下一拍回落 fast/slow 档）
+            self._motion_timer.setInterval(self._tick_loco_ms)
         if mode == 1 and lf.clip is not None:
             fr = lf.clip.frames[lf.clip_index]
             x, y, w, h = fr.canvas_rect
@@ -977,7 +982,7 @@ class RigWindow(WindowBase):
           （1.8–2.9s 周期正弦）——15Hz 采样视觉平滑，安全降频。"""
         loco = self._loco
         if loco is not None and loco.active:
-            want = _TICK_LOCO_MS
+            want = self._tick_loco_ms
         else:
             eng = self._engine
             inp = self._motion_inputs
@@ -992,7 +997,7 @@ class RigWindow(WindowBase):
                         and (lf.mode != "front" or lf.settle < 0.999))
                 or self._gait_moving()
             )
-            want = _TICK_FAST_MS if fast else _TICK_SLOW_MS
+            want = self._tick_fast_ms if fast else self._tick_slow_ms
         timer = self._motion_timer
         # 不查 isActive：QA 工艺是停表手动步进 _motion_tick（qa_skinned_visual
         # 等皆 stop() 接管），守卫会让手动步进下切换永不发生；真实运行中本
@@ -1005,6 +1010,15 @@ class RigWindow(WindowBase):
         if getattr(self, "_gait_desired_vx", 0.0):
             return True
         return abs(getattr(self, "_gait_last_dx", 0.0)) > 1e-9
+
+    def apply_frame_tier(self, loco_ms: int, fast_ms: int, slow_ms: int) -> None:
+        """v0.19.8 帧率分档：换三档常数（FramePacer 注入）。
+
+        interval 由 _adapt_tick 逐拍对齐（含升频沿 _apply_loco），这里只改
+        值不碰 timer——最快下一拍（≤慢拍周期）即生效，无需即时重启。"""
+        self._tick_loco_ms = max(8, int(loco_ms))
+        self._tick_fast_ms = max(8, int(fast_ms))
+        self._tick_slow_ms = max(int(self._tick_fast_ms), int(slow_ms))
 
     def pause_render(self) -> None:
         """暂停常驻运动+渲染循环（全屏/不可见时由 app 调用）。

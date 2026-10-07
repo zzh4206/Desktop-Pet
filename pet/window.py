@@ -150,6 +150,7 @@ class WindowBase(QWidget):
     settingsRequested = Signal()
     quitRequested = Signal()
     motionModeRequested = Signal(str)  # "follow" / "free" / "edge"
+    frameTierRequested = Signal(str)   # v0.19.8 "auto"/"high"/"medium"/"low"
     petMoved = Signal(float, float, int)  # v0.3 (cx, bottom_y, height) 气泡跟随
     # v0.3 拖拽：参数为全局 bottom_center 坐标（抓取偏移已在窗内算好）
     dragStarted = Signal(float, float)
@@ -224,6 +225,10 @@ class WindowBase(QWidget):
         # v0.19.2 F10：需求触线阈值（右键菜单 ⚠ 标记；app 用 config 覆盖）
         self._need_thresholds = {"fullness": 30.0, "cleanliness": 25.0,
                                  "mood": 20.0}
+        # v0.19.8 流畅度子菜单状态（app 持久化并回填显示；_frame_tier_zh
+        # 是 auto 档的当前生效档中文名，如「高」）
+        self._frame_tier_choice = "auto"
+        self._frame_tier_zh = ""
 
     def set_need_thresholds(self, thresholds: dict) -> None:
         """v0.19.2 F10：注入需求触线阈值（app 从 proactive.need_bubble 取）。"""
@@ -232,6 +237,12 @@ class WindowBase(QWidget):
                 k: float(v) for k, v in thresholds.items()
                 if k in ("fullness", "cleanliness", "mood")
             } or {"fullness": 30.0, "cleanliness": 25.0, "mood": 20.0}
+
+    def set_frame_tier_state(self, choice: str, resolved_zh: str) -> None:
+        """v0.19.8：同步流畅度子菜单选中态与 auto 档显示名（app 调）。"""
+        if choice in ("auto", "high", "medium", "low"):
+            self._frame_tier_choice = choice
+        self._frame_tier_zh = str(resolved_zh or "")
 
     # ---- 渲染 ----
     def set_sprite(self, sprite: SpriteRef) -> None:
@@ -697,6 +708,25 @@ class WindowBase(QWidget):
             group.addAction(action)
             action.triggered.connect(
                 lambda checked=False, mode=key: self.motionModeRequested.emit(mode)
+            )
+        # v0.19.8 流畅度：auto 显示当前判档结果；选择经 app 持久化
+        tier_menu = menu.addMenu("流畅度")
+        tier_group = QActionGroup(tier_menu)
+        tier_group.setExclusive(True)
+        auto_label = "自动" + (f"（当前{self._frame_tier_zh}）"
+                               if self._frame_tier_zh else "")
+        for key, label in (
+            ("auto", auto_label),
+            ("high", "高"),
+            ("medium", "中"),
+            ("low", "低"),
+        ):
+            action = tier_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(key == self._frame_tier_choice)
+            tier_group.addAction(action)
+            action.triggered.connect(
+                lambda checked=False, t=key: self.frameTierRequested.emit(t)
             )
         menu.addSeparator()
         menu.addAction("设置", self.settingsRequested.emit)

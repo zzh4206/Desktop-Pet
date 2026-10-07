@@ -137,5 +137,17 @@
     "light_level": 1,
     "fps_cap": 30,
     "safe_rss_mb": 500.0
+  },
+  "performance": {
+    "frame_tier": "auto"
+  },
+  "needs": {
+    "hunger_mood_drag": 1.5,
+    "dirt_mood_drag": 1.0,
+    "content_mood_gain": 2.0,
+    "drag_fullness": 30,
+    "drag_cleanliness": 25,
+    "content_fullness": 80,
+    "content_cleanliness": 65
   }
 }

@@ -71,10 +71,11 @@ from pet.behavior import ActionType, BehaviorFSM
 from pet.bubble import BubbleType, BubbleWidget
 from pet.config import load_config
 from pet.floating import FloatingTextWidget
-from pet.interaction import (INTERACT_FIELD_LABEL, decide_interaction,
-                             memory_fact, pet_status_line)
+from pet.interaction import memory_fact, pet_status_line
 from pet.logging_setup import setup_logging
 from pet.llm import create_client  # v0.4.15 工厂（不再硬编码 DeepSeekClient）
+from pet.needs import NeedsEngine, status_line as needs_status_line
+from pet.perf import FramePacer, TIER_NAME_ZH
 from pet.pet_state import Mood, PetStateStore, Stage
 from pet.platform import get_platform_adapter
 from pet.sound import SoundFX
@@ -147,6 +148,10 @@ class PetApp:
         paths = adapter.get_paths()
         self._paths = paths   # v0.9.2(H1 修)：_setup_chat 等方法可引用
         self.cfg = load_config(paths["config_path"])
+        # v0.19.8 帧率分档（pet/perf.py）：FSM tick / rig 三档节奏由档位
+        # 决定；菜单「流畅度」改选后持久化到 performance.frame_tier
+        self.pacer = FramePacer(
+            (self.cfg.get("performance") or {}).get("frame_tier", "auto"))
         # v0.15.1 接回：风/光影 + 运动引擎统一经中间层 EngineBridge 装配
         # （见 _build_engine_bridge，在 store 就绪后调用；任一环失败恒等）。
         # config log_level 校准 logger 级别（main 里 setup_logging 用默认 INFO）
@@ -178,18 +183,20 @@ class PetApp:
 
         # 养成 store：启动 load（无存档→default）；重启数值一致靠此
         self.store = PetStateStore.load(self._state_path)
-        self._gains = dict(self.cfg.get("interaction_gain", {}))
-        # v0.19.0 F3：交互文案覆盖（interaction.messages，平铺 list 覆盖该交互全池）
-        self._interact_msg_overrides = dict(
-            (self.cfg.get("interaction") or {}).get("messages") or {})
-        # v0.19.1 F6/F7：饱和拒绝与疲劳窗口参数 + 各 kind 生效时间戳
+        # v0.19.8 养成机制引擎（pet/needs.py）：区段/联动/衰减/交互落账收口。
+        # 触线阈值仍以 proactive.need_bubble 为配置出处（alerts 按需传入）。
         icfg = self.cfg.get("interaction") or {}
-        self._interaction_cfg = {
-            "reject_fullness": float(icfg.get("reject_fullness", 92)),
-            "fatigue_times": int(icfg.get("fatigue_times", 5)),
-            "fatigue_window_min": float(icfg.get("fatigue_window_min", 10)),
-        }
-        self._interact_log: dict[str, list[float]] = {}
+        self.needs = NeedsEngine(
+            self.store,
+            needs_cfg=self.cfg.get("needs") or {},
+            gains=self.cfg.get("interaction_gain") or {},
+            interaction_cfg={
+                "reject_fullness": float(icfg.get("reject_fullness", 92)),
+                "fatigue_times": int(icfg.get("fatigue_times", 5)),
+                "fatigue_window_min": float(icfg.get("fatigue_window_min", 10)),
+            },
+            msg_overrides=icfg.get("messages") or {},
+        )
         # v0.19.2 F9/F10：需求触线阈值（托盘状态行 ⚠ 与右键菜单 ⚠ 共用；
         # 与 proactive.need_bubble 同源）
         need = (self.cfg.get("proactive") or {}).get("need_bubble")
@@ -240,6 +247,9 @@ class PetApp:
         self.window.set_sprite_provider(self.provider)
         # v0.19.2 F10：菜单 ⚠ 标记阈值与 proactive.need_bubble 同源
         self.window.set_need_thresholds(self._need_thresholds)
+        # v0.19.8：流畅度子菜单选中态 + auto 判档结果显示
+        self.window.set_frame_tier_state(
+            self.pacer.choice, TIER_NAME_ZH[self.pacer.tier])
         # 批次A/H1（REVIEW-2026-08-31）：进化换档重载 rig spec——三阶段
         # manifest 共用 figure 键，spec 终生绑启动阶段会把新阶段 neutral
         # 映射回旧阶段派生核心图（宠物在 rig/paperdoll 档"长不大"直到重启）。
@@ -305,6 +315,8 @@ class PetApp:
         self.window.dragMoved.connect(self._on_drag_moved)
         self.window.dragReleased.connect(self._on_drag_released)
         self.window.motionModeRequested.connect(self._set_motion_mode)
+        # v0.19.8 流畅度：菜单改档 → 即时生效 + 持久化
+        self.window.frameTierRequested.connect(self._on_frame_tier_requested)
         # v0.8 权限自检页：宠物右键"设置"唤出（win 运行时自检）
         self.window.settingsRequested.connect(self._show_perm)
         # v0.9 拖放文件给它打开（快捷启动器）
@@ -435,8 +447,9 @@ class PetApp:
             lambda: self.bubble.show("我醒啦～", anchor=self._pet_anchor()),
         )
 
-        # 传感器慢刷新（2s），FSM 快 tick（50ms），衰减 1s（wall-clock delta），
-        # 全屏检测 1s（独立于传感器缓存，缩短可拖/可见窗口期）
+        # 传感器慢刷新（2s），FSM 快 tick（间隔按帧率档位 33/50/66ms），
+        # 衰减 1s（wall-clock delta），全屏检测 1s（独立于传感器缓存，
+        # 缩短可拖/可见窗口期）
         self._sensor_timer = QTimer(self.app)
         self._sensor_timer.timeout.connect(self._refresh_sensors)
         self._sensor_timer.start(2000)
@@ -447,7 +460,12 @@ class PetApp:
 
         self._tick_timer = QTimer(self.app)
         self._tick_timer.timeout.connect(self._tick)
-        self._tick_timer.start(50)
+        # v0.19.8 帧率分档：FSM tick 间隔按档位（high 33 / medium 50 / low 66ms）
+        self._tick_timer.start(self.pacer.fsm_ms)
+        # v0.19.8：rig 三档常数按档位注入（frames 后端无此方法，幂等跳过）
+        _apply_tier = getattr(self.window, "apply_frame_tier", None)
+        if callable(_apply_tier):
+            _apply_tier(*self.pacer.rig_intervals())
 
         self._decay_timer = QTimer(self.app)
         self._decay_timer.timeout.connect(self._apply_decay)
@@ -664,17 +682,12 @@ class PetApp:
                          else self._pet_anchor())
 
     def _on_state_for_tray(self, state) -> None:
-        """F9：PetState → 托盘状态行 + 触线红点（永不外抛，坏了只丢状态行）。"""
+        """F9：PetState → 托盘状态行 + 触线红点（永不外抛，坏了只丢状态行）。
+
+        v0.19.8 措辞/判线收口 needs 引擎（与右键菜单 ⚠、状态板同一出处）。"""
         try:
-            thr = self._need_thresholds
-            parts, alert = [], False
-            for field in ("fullness", "mood", "cleanliness"):
-                v = float(getattr(state, field, 0.0))
-                low = v < thr.get(field, 0.0)
-                alert = alert or low
-                parts.append(f"{INTERACT_FIELD_LABEL[field]}{v:.0f}"
-                             + ("⚠" if low else ""))
-            self.tray.set_status("  ".join(parts))
+            line, alert = needs_status_line(state, self._need_thresholds)
+            self.tray.set_status(line)
             self.tray.set_alert(alert)
         except Exception:
             self.logger.warning("托盘状态行更新异常", exc_info=True)
@@ -1215,14 +1228,21 @@ class PetApp:
             healthy_thr = float(sc.get("healthy_threshold", 70))
 
             rows.append({"type": "section", "name": "养成"})
+            # v0.19.8：区段命名 + 触线判级收口 needs 引擎（与托盘/菜单同源）
+            _zones = self.needs.zones(state)
+            _alerts = set(self.needs.alerts(state, self._need_thresholds))
             rows.append({"type": "field", "name": "阶段", "value": state.stage.value, "level": "ok"})
             rows.append({"type": "field", "name": "分支", "value": state.branch.value,
                          "level": "ok" if state.branch.value == "healthy" else "warn"})
-            rows.append({"type": "field", "name": "心情", "value": f"{state.mood:.1f} · {mood}", "level": "ok"})
-            rows.append({"type": "field", "name": "饱食", "value": f"{state.fullness:.1f}",
-                         "level": "warn" if state.fullness < 20 else "ok"})
-            rows.append({"type": "field", "name": "清洁", "value": f"{state.cleanliness:.1f}",
-                         "level": "warn" if state.cleanliness < 20 else "ok"})
+            rows.append({"type": "field", "name": "心情",
+                         "value": f"{state.mood:.1f} · {mood} / {_zones['mood']}",
+                         "level": "warn" if "mood" in _alerts else "ok"})
+            rows.append({"type": "field", "name": "饱食",
+                         "value": f"{state.fullness:.1f} · {_zones['fullness']}",
+                         "level": "warn" if "fullness" in _alerts else "ok"})
+            rows.append({"type": "field", "name": "清洁",
+                         "value": f"{state.cleanliness:.1f} · {_zones['cleanliness']}",
+                         "level": "warn" if "cleanliness" in _alerts else "ok"})
             rows.append({"type": "field", "name": "年龄", "value": f"{state.age:.1f} 天", "level": "ok"})
             rows.append({"type": "field", "name": "养护分", "value": f"{score:.1f}",
                          "level": "ok" if score >= healthy_thr else "warn"})
@@ -1283,6 +1303,11 @@ class PetApp:
                 rows.append({"type": "section", "name": "呈现"})
                 rows.append({"type": "field", "name": "立绘来源", "value": self.cfg.get("provider", "emoji"), "level": "ok"})
                 rows.append({"type": "field", "name": "展示后端", "value": self.cfg.get("presentation", "rig"), "level": "ok"})
+                # v0.19.8 帧率分档：显示生效档位与 FSM tick 目标间隔
+                rows.append({"type": "field", "name": "流畅度",
+                             "value": f"{TIER_NAME_ZH[self.pacer.tier]}档"
+                                      f"（{self.pacer.choice}，FSM {self.pacer.fsm_ms}ms）",
+                             "level": "ok"})
                 w = self.window
                 rows.append({"type": "field", "name": "窗口", "value": f"{w.width()}×{w.height()} @ ({w.x()},{w.y()})", "level": "ok"})
             except Exception as exc:
@@ -1463,37 +1488,16 @@ class PetApp:
         """v0.2 养成交互入口：window signal 触发 → 决策 → 四通道反馈。
 
         v0.19.0 起反馈四通道：数值飘字（F1）+ 音效（F4）+ 文案池气泡（F3）
-        + 喂食咀嚼覆盖（F2，临时态不进 FSM）。v0.19.1 起三态决策
-        （pet.interaction.decide_interaction）：正常生效 / 饱和拒绝 /
-        互动疲劳——拒绝与疲劳不加数值但反馈照走（拒绝也是反馈）。
+        + 喂食咀嚼覆盖（F2，临时态不进 FSM）。v0.19.1 起三态决策：正常生效
+        / 饱和拒绝 / 互动疲劳——拒绝与疲劳不加数值但反馈照走（拒绝也是反馈）。
+        v0.19.8 决策+数值落账+疲劳记账收口 needs 引擎，此处只做反馈装配。
         emoji 切换仍由 on_change 订阅自动处理。
         """
         import time
 
-        now = time.monotonic()
-        cfg = self._interaction_cfg
-        state = self.store.get()
-        out = decide_interaction(
-            kind,
-            gain=float(self._gains.get(kind, 0)),
-            mood=state.mood,
-            fullness=state.fullness,
-            reject_fullness=cfg["reject_fullness"],
-            fatigue_times=cfg["fatigue_times"],
-            fatigue_window_s=cfg["fatigue_window_min"] * 60,
-            recent=self._interact_log.get(kind, ()),
-            now=now,
-            msg_overrides=self._interact_msg_overrides,
-        )
+        out = self.needs.interact(kind, now=time.monotonic())
         if out.field is None:
             return
-        if out.delta:
-            self.store.update(**{out.field: out.delta})
-            # 仅生效的交互计数；窗口外时间戳顺手清理（防列表无界增长）
-            window_s = cfg["fatigue_window_min"] * 60
-            log = [t for t in self._interact_log.get(kind, ()) if now - t <= window_s]
-            log.append(now)
-            self._interact_log[kind] = log
         if out.floating_text:
             self.floating.pop(out.floating_text, tone=out.floating_tone,
                               anchor=self._pet_anchor())
@@ -1556,6 +1560,50 @@ class PetApp:
 
         QTimer.singleShot(cycles * one_pass_ms + 120, _end_anim)
 
+    # ---- v0.19.8 帧率分档（流畅度菜单） / config 段落盘 ----
+    def _on_frame_tier_requested(self, choice: str) -> None:
+        """右键菜单「流畅度」改档：切档 → 节拍全链路即时生效 → 持久化。"""
+        tier = self.pacer.set_choice(choice)
+        # FSM tick：start() 对活跃 timer 即重启，换档当拍生效
+        self._tick_timer.start(self.pacer.fsm_ms)
+        apply_tier = getattr(self.window, "apply_frame_tier", None)
+        if callable(apply_tier):
+            apply_tier(*self.pacer.rig_intervals())
+        self.window.set_frame_tier_state(
+            self.pacer.choice, TIER_NAME_ZH[tier])
+        zh = TIER_NAME_ZH[tier]
+        msg = (f"已恢复自动判档（当前{zh}档）" if self.pacer.choice == "auto"
+               else f"已切换到{zh}档帧率")
+        if self._save_config_section(
+                "performance", {"frame_tier": self.pacer.choice}):
+            self.bubble.show(msg, anchor=self._pet_anchor())
+        else:
+            self.bubble.show(msg + "（写盘失败，重启后失效）",
+                             kind=BubbleType.WARNING,
+                             anchor=self._pet_anchor())
+
+    def _save_config_section(self, key: str, value: dict) -> bool:
+        """菜单改动持久化到用户 config（仅覆盖该段；原子写同聊天情绪先例）。"""
+        try:
+            path = self._paths["config_path"]
+            raw: dict = {}
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    raw = json.load(f)
+            if not isinstance(raw, dict):
+                raw = {}
+            raw[key] = value
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(raw, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            return True
+        except Exception:
+            self.logger.warning("config 段 %s 保存失败", key, exc_info=True)
+            return False
+
     # ---- 衰减 / 持久化 ----
     def _apply_decay(self) -> None:
         # M2：离线补衰减前快照养护分——apply_decay 一次推过多个 age 阈值时，
@@ -1568,7 +1616,9 @@ class PetApp:
             + float(score_cfg.get("fullness_weight", 0.4)) * pre_state.fullness
             + float(score_cfg.get("cleanliness_weight", 0.2)) * pre_state.cleanliness
         )
-        self.store.apply_decay(
+        # v0.19.8：衰减 + 联动修正收口 needs 引擎（wall-clock 语义不变：
+        # 基于时间戳补算，离线期间照衰减；联动取回档时点状态近似）
+        self.needs.tick_decay(
             self.cfg.get("decay_per_hour", {}),
             age_speed_multiplier=self.cfg.get("age_speed_multiplier", 1.0),
         )
@@ -1803,8 +1853,12 @@ class PetApp:
         # 策略不一致；钳上限防恢复瞬间 dt 过大把宠物瞬移/穿墙
         import time as _time
         now = _time.monotonic()
-        dt = min(0.25, max(0.01, now - getattr(self, "_last_tick_at", now)))
+        _last = getattr(self, "_last_tick_at", None)
+        _raw_dt = (now - _last) if _last is not None else 0.0
+        dt = min(0.25, max(0.01, _raw_dt))
         self._last_tick_at = now
+        # v0.19.8 过载守卫：auto 档持续超时自动降档（纯记账，绝不抛）
+        self.pacer.record_fsm_tick(_raw_dt if _raw_dt > 0 else None)
         loco = self._locomotion_pre_step()
         action = self.fsm.step(self.store.get(), self.sensors, dt)
         if loco:
