@@ -634,9 +634,18 @@ class PetApp:
                 wg, _wb = self._bridge.wind()
             except Exception:
                 wg = 0.0
+            # 行进朝向（v0.18.28 方向感知侧身）：与 2D 侧身线同款——按位移
+            # 方向判定（|dx|>0.4 才翻转），存 _r3_facing 供 PetSnapshot
+            last_x = getattr(self, "_r3_last_x", None)
+            if last_x is not None:
+                dx = self.fsm.pos[0] - last_x
+                if abs(dx) > 0.4:
+                    self._r3_facing = 1 if dx > 0 else -1
+            self._r3_last_x = self.fsm.pos[0]
             snap = PetSnapshot(
                 action_type=action_type, walking=walking,
                 walk_phase=self._r3_walk_phase, airborne=airborne,
+                facing=int(getattr(self, "_r3_facing", 1)),
                 mood=self.store.get().mood,
                 # 情绪/眨眼/凝视：chat_emotion 显式标签 + motion 眨眼脉冲
                 # （0.19.3 聊天↔养成双向联动在 3D 同样生效）

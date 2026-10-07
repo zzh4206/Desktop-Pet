@@ -50,6 +50,7 @@ class PetSnapshot:
     blink_progress: float = 0.0          # 0-1（motion 眨眼脉冲）
     gaze_x: float = 0.0                  # -1..1
     gaze_y: float = 0.0
+    facing: int = 1                      # 行进朝向：+1=右（屏幕向右走）、-1=左
 
 
 def _emotion_of(snap: PetSnapshot) -> str | None:
@@ -72,6 +73,16 @@ def _action_of(snap: PetSnapshot) -> tuple[str, float]:
     if snap.action_type in (_ANIMATE, _EAT_MOUSE):
         return ACTION_CLICK, 0.0
     return ACTION_IDLE, 0.0
+
+
+def _walk_yaw_deg(snap: PetSnapshot) -> float:
+    """行走朝向角（v0.18.28 方向感知侧身）：右走 +90（右肩朝观众）、
+    左走 −90（左肩朝观众）——这是**语义真值**（朝向哪边）；渲染层
+    bone_bridge 按 3/4 视角系数收窄（纯 90° 时相机看腿是纯侧棱，
+    迈步投影不可见=蠕虫感）。非行走 0（由调用方状态机过渡）。"""
+    if snap.walking or snap.action_type == _MOVE_TO:
+        return 90.0 if snap.facing >= 0 else -90.0
+    return 0.0
 
 
 def _color_temp_k(elev_deg: float) -> float:
@@ -98,7 +109,8 @@ def scene_state(snap: PetSnapshot) -> SceneState:
             color_temp_k=_color_temp_k(elev),
             wind_speed=max(0.0, snap.wind_speed),
         ),
-        pose=PoseSemantics(action_id=action_id, phase=phase),
+        pose=PoseSemantics(action_id=action_id, phase=phase,
+                           view_yaw_deg=_walk_yaw_deg(snap)),
         expression=ExpressionState(
             emotion_label=_emotion_of(snap),
             blink_progress=max(0.0, min(1.0, snap.blink_progress)),

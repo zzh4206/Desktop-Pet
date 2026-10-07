@@ -20,65 +20,62 @@ import math
 
 from pet.scene_contract import PoseSemantics
 
-# 侧身角：+90°=模型左肩朝向观众（展示行进的侧面轮廓）
-SIDE_YAW_DEG = 90.0
+# 侧身角语义：契约 view_yaw_deg 在行走时携带目标朝向（右走 +90/左走 −90，
+# semantic_source._walk_yaw_deg 生成）；状态机平滑过渡到该目标。
 TURN_SIDE_S = 0.55     # 起步转身时长
 TURN_BACK_S = 0.70     # 停下回正时长（略慢，"停下喘口气"的节奏感）
 
 
 class WalkYawState:
-    """走路侧身状态机（纯逻辑，可单测）：yaw 随 walk/idle 平滑过渡。
+    """走路侧身状态机（纯逻辑，可单测）：yaw 平滑逼近**契约目标角**。
 
-    TURN_SIDE：起身 0→90°（转身完成前摆幅按进度渐入——"边转边迈步"）
-    SIDE_WALK：侧身行走中（yaw 保持 90°）
-    TURN_BACK：停止 90°→0°（走姿摆幅按 1-进度渐出）
-    IDLE_YAW：正面静止（yaw=0）
+    单一目标源 = 契约 view_yaw_deg（semantic_source：行走 ±90=朝向真值，
+    idle=0）——本状态机只负责平滑（smoothstep 转身/回正两档节奏），
+    绝不自造目标角。曾有双重计入 bug：契约 ±90 + 状态机再转 ±90=135°
+    渲染（0.75 系数后）——重构后 yaw 恒等于 state.yaw。
+
+    模式（诊断用）：TURN_SIDE（走向目标，行走节奏）/ TURN_BACK（回 0，
+    停下节奏略慢）/ SIDE_WALK / IDLE_YAW（到位保持）。
     """
 
     def __init__(self) -> None:
         self.mode = "IDLE_YAW"
         self.yaw = 0.0            # 当前角（度）
         self._t = 0.0             # 模式内计时
-        self._from = 0.0          # 转身起点角
+        self._from = 0.0          # 段起点角
+        self._target = 0.0
+        self._walking = False
 
-    def update(self, walking: bool, dt: float) -> float:
-        """喂当拍 walk 状态与时长，返回当前 yaw（度）。"""
+    def update(self, walking: bool, dt: float, target_deg: float = 0.0) -> float:
+        self._walking = walking
         self._t += max(0.0, dt)
+        # walk_blend 独立连续演化（不依赖模式）：行走渐升 / 停止渐降——
+        # 走姿摆幅的淡入淡出系数（v0.18.28 重构后与转向解耦）
         if walking:
-            if self.mode in ("IDLE_YAW", "TURN_BACK"):
-                # 起步：从当前角转到侧身
-                self._from = self.yaw
-                self._t = 0.0
-                self.mode = "TURN_SIDE"
-            if self.mode == "TURN_SIDE":
-                k = min(1.0, self._t / TURN_SIDE_S)
-                k = k * k * (3 - 2 * k)               # smoothstep 缓入缓出
-                self.yaw = self._from + (SIDE_YAW_DEG - self._from) * k
-                if k >= 1.0:
-                    self.mode = "SIDE_WALK"
+            self._blend = min(1.0, getattr(self, "_blend", 0.0) + dt / TURN_SIDE_S)
         else:
-            if self.mode in ("SIDE_WALK", "TURN_SIDE"):
-                self._from = self.yaw
-                self._t = 0.0
-                self.mode = "TURN_BACK"
-            if self.mode == "TURN_BACK":
-                k = min(1.0, self._t / TURN_BACK_S)
-                k = k * k * (3 - 2 * k)
-                self.yaw = self._from + (0.0 - self._from) * k
-                if k >= 1.0:
-                    self.mode = "IDLE_YAW"
+            self._blend = max(0.0, getattr(self, "_blend", 0.0) - dt / TURN_BACK_S)
+        if abs(target_deg - self._target) > 0.5:
+            # 目标变了（起步 0→±90 / 掉头 ±90→∓90 / 停下 ±90→0）：开新段
+            self._from = self.yaw
+            self._t = 0.0
+            self._target = target_deg
+        turning = abs(self._target - self.yaw) > 0.5
+        if turning:
+            dur = TURN_SIDE_S if (walking or self._walking) else TURN_BACK_S
+            k = min(1.0, self._t / dur)
+            k = k * k * (3 - 2 * k)                   # smoothstep 缓入缓出
+            self.yaw = self._from + (self._target - self._from) * k
+            self.mode = "TURN_SIDE" if walking else "TURN_BACK"
+        else:
+            self.yaw = self._target
+            self.mode = "SIDE_WALK" if walking else "IDLE_YAW"
         return self.yaw
 
     @property
     def walk_blend(self) -> float:
-        """走姿摆幅系数（0-1）：转身期渐入渐出，保证"连贯无跳变"。"""
-        if self.mode == "SIDE_WALK":
-            return 1.0
-        if self.mode == "TURN_SIDE":
-            return min(1.0, self._t / TURN_SIDE_S)
-        if self.mode == "TURN_BACK":
-            return max(0.0, 1.0 - self._t / TURN_BACK_S)
-        return 0.0
+        """走姿摆幅系数（0-1）：行走渐升/停止渐降（独立连续值，update 维护）。"""
+        return getattr(self, "_blend", 0.0)
 
 
 # ---------------- 四元数工具（xyzw 存储，w-first 运算） ---------------- #
@@ -142,13 +139,14 @@ def build_pose_payload(profile: RigProfile, pose: PoseSemantics,
 
     raw_walking = pose.action_id == "walk"
     if yaw_state is not None:
-        yaw_state.update(raw_walking, dt)
-        walking = raw_walking or yaw_state.mode in ("TURN_BACK",)  # 回正期走姿渐出
+        yaw_state.update(raw_walking, dt, target_deg=pose.view_yaw_deg)
+        walking = raw_walking or yaw_state.mode == "TURN_BACK"   # 回正期走姿渐出
         blend = yaw_state.walk_blend
-        # 侧身角叠加在契约视角上——纯 idle（IDLE_YAW）时 state.yaw=0，
-        # 回退契约 view_yaw_deg（曾有 bug：state 强制 0 覆盖契约视角，
-        # 表现为"任何旋转都无效"——hips 每帧被写回 rest）
-        yaw = pose.view_yaw_deg + yaw_state.yaw
+        # 单一目标源（v0.18.28 重构）：yaw=state.yaw——状态机平滑逼近契约
+        # view_yaw_deg（±90=朝向真值/idle 0）。历史坑：state 与契约各自
+        # 贡献角度会双重计入（180→渲染 135°）；state 又曾强制 0 覆盖契约
+        # （"旋转无效"假象）。单一来源后两类 bug 结构性消除
+        yaw = yaw_state.yaw
     else:
         walking, blend, yaw = raw_walking, 1.0, pose.view_yaw_deg
     ph = pose.phase * 2.0 * math.pi
@@ -156,9 +154,8 @@ def build_pose_payload(profile: RigProfile, pose: PoseSemantics,
     bob = math.sin(2.0 * ph) * blend if raw_walking else 0.0
     swing_deg = 14.0 * blend if raw_walking else 2.0    # 摆幅随转身进度渐入渐出
 
-    # 根：整体朝向——走路侧身（yaw_state 驱动）或契约视角（外部给定）
-    set_rot(profile.bone("hips"), ry=math.radians(yaw))
     # 躯干：呼吸俯仰 + 行走起伏 + 侧身行走时的前倾（行进感）
+    #（hips 的朝向在四肢段统一设置——yaw_render 含 3/4 收窄系数）
     lean = 2.5 * blend if raw_walking else 0.0
     set_rot(profile.bone("spine"), rx=math.radians(1.2 * breath + 1.5 * bob + lean))
     set_rot(profile.bone("chest"), rx=math.radians(0.8 * breath + 1.0 * bob))
@@ -172,7 +169,12 @@ def build_pose_payload(profile: RigProfile, pose: PoseSemantics,
         set_rot(profile.bone("head"),
                 ry=math.radians(2.5 * math.sin(t * 2 * math.pi / 7.0)),
                 rx=math.radians(1.0 * math.sin(t * 2 * math.pi / 5.0)))
-    # 四肢：行走反相摆动 / idle 微摆
+    # 四肢：行走反相摆动 / idle 微摆。侧身行走时渲染角按 3/4 系数收窄
+    # （SIDE_FACTOR）：纯 90° 相机看迈步是纯侧棱（深度向），投影不可见
+    # =蠕虫感；~68° 既有明显侧身又看得到双腿交替迈步
+    SIDE_FACTOR = 0.75
+    yaw_render = yaw * SIDE_FACTOR if raw_walking else yaw
+    set_rot(profile.bone("hips"), ry=math.radians(yaw_render))
     swing = math.radians(swing_deg)
     ph_l = ph if raw_walking else t * 2 * math.pi / 4.0
     set_rot(profile.bone("arm_upper_l"), rx=+swing * math.sin(ph_l))
@@ -180,8 +182,15 @@ def build_pose_payload(profile: RigProfile, pose: PoseSemantics,
     set_rot(profile.bone("arm_lower_l"), rx=+0.4 * swing * math.sin(ph_l))
     set_rot(profile.bone("arm_lower_r"), rx=-0.4 * swing * math.sin(ph_l))
     if walking:
+        # 双腿真交替：大腿反相（迈步/蹬地），**膝部屈伸**（摆动腿抬膝弯曲、
+        # 支撑腿伸直）——无膝部动作的腿是圆规式挪步（蠕动感的另一半来源）
         set_rot(profile.bone("leg_upper_l"), rx=-swing * math.sin(ph_l))
         set_rot(profile.bone("leg_upper_r"), rx=+swing * math.sin(ph_l))
+        knee = math.radians(16.0 * blend)
+        set_rot(profile.bone("leg_lower_l"),
+                rx=+knee * max(0.0, math.sin(ph_l)))
+        set_rot(profile.bone("leg_lower_r"),
+                rx=+knee * max(0.0, -math.sin(ph_l)))
         set_rot(profile.bone("foot_l"), rx=0.3 * swing * math.sin(ph_l))
         set_rot(profile.bone("foot_r"), rx=-0.3 * swing * math.sin(ph_l))
     return out
