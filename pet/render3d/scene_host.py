@@ -84,6 +84,37 @@ class Render3DWindow:
         """看门狗 + 合成层保鲜（同一定时器，双职责）。"""
         self._check_rss()
         self.nudge()
+        self._check_compositor()
+
+    def _check_compositor(self) -> None:
+        """3D 看门狗（0.18.30 收敛为**默认关闭**）：occlusionState 指标
+        对「QQuickWidget 嵌入+LSUIElement」组合不可靠（实测 occ 恒 8192
+        且 hide+show/raise 均翻不过来——发病判据无法与常态区分）。
+        根治走 platform.pin_pet_float_window 的 NSWindow 锁层（Status
+        WindowLevel）。此看门狗仅排障用：RENDER3D_WD_DEBUG=1 时打印
+        occ 原始值（每 30s 一次）。"""
+        import os as _os
+        if not _os.environ.get("RENDER3D_WD_DEBUG"):
+            return
+        import time as _t
+        if _t.monotonic() - getattr(self, "_wd_dbg", 0.0) < 30.0:
+            return
+        try:
+            from ctypes import c_void_p
+
+            from objc import objc_object
+
+            self._wd_dbg = _t.monotonic()
+            view = objc_object(c_void_p=int(self._view.winId()))
+            nswin = view.window() if view is not None else None
+            if nswin is not None:
+                import logging
+                logging.getLogger("pet.render3d").info(
+                    "WD_DEBUG occ=%d level=%d visible=%s",
+                    int(nswin.occlusionState()), int(nswin.level()),
+                    bool(nswin.isVisible()))
+        except Exception:
+            pass
 
     def nudge(self) -> None:
         """合成层保鲜脉冲（0.18.29）：请求 QQuickWidget 重绘——macOS 在

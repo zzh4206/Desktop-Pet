@@ -335,6 +335,41 @@ if sys.platform == "darwin":
             except Exception:
                 return False
 
+        def pin_pet_float_window(self, widget) -> bool:
+            """v0.18.30 桌宠主窗钉扎+锁层。
+
+            ① CanJoinAllSpaces|IgnoresCycle（跟随每个 Space、不进 Cmd+Tab）
+            ——**不带 Stationary**（聊天面板语义，桌宠实测切应用后
+            onscreen=None 被移出合成）；
+            ② setLevel_(NSStatusWindowLevel=25)——直接锁窗口层，不依赖
+            Qt 的 WindowStaysOnTopHint（accessory app 失活时该 hint 映射
+            的 modal-panel 层会被系统降级=「切应用后消失」的根源；
+            StatusWindowLevel 是 OneDrop/贴纸类常驻浮窗的标准层位）。
+            """
+            try:
+                from ctypes import c_void_p
+
+                from AppKit import (
+                    NSStatusWindowLevel,
+                    NSWindowCollectionBehaviorCanJoinAllSpaces,
+                    NSWindowCollectionBehaviorIgnoresCycle,
+                )
+                from objc import objc_object
+
+                wid = int(widget.winId())
+                view = objc_object(c_void_p=wid)
+                nswin = view.window() if view is not None else None
+                if nswin is None:
+                    return False
+                nswin.setCollectionBehavior_(
+                    NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | NSWindowCollectionBehaviorIgnoresCycle
+                )
+                nswin.setLevel_(NSStatusWindowLevel)
+                return True
+            except Exception:
+                return False
+
         # ---- v0.7 吃鼠标平台注入（补遗#7：经 adapter 注入，共享层不直
         # import mouse_lock_mac；CGEventTap/pyobjc 全封在 mouse_lock_mac） ----
         def get_mouse_lock(self):
