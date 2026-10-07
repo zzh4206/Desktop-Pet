@@ -100,11 +100,13 @@ class SpringRig:
         walking = bool(motion and motion.get("_walking"))
         step_phase = float(motion.get("_step_phase", 0.0)) if motion else 0.0
         # 行走附加摆动：步频（walk ~1.2-2Hz）驱动的惯性力（链空间，+z 主向
-        # + 侧向交替），叠加在阵风上——静止=纯风，行走=风+步态合力
+        # + 侧向交替），叠加在阵风上——静止=纯风，行走=风+步态合力。
+        # 幅度 45 实测校准：20 时偏离占比仅 0.11（弱于满风 0.21，视觉上
+        # 被阵风盖住）；45 时步伐甩动肉眼可辨（裙摆/发梢节奏性后掠）
         gait = 0.0
         if walking:
-            gait = 14.0 * math.sin(step_phase * 2.0 * math.pi) + \
-                   6.0 * math.sin(step_phase * 4.0 * math.pi)
+            gait = 32.0 * math.sin(step_phase * 2.0 * math.pi) + \
+                   13.0 * math.sin(step_phase * 4.0 * math.pi)
         out: dict[str, list[float]] = {}
         # 锚点平移增量：hips 起伏（bob）在姿势里表现为 hips/spine 旋转，
         # 这里用简化模型——行走 bob 幅度直接取 bone_bridge 同款公式（±0.02m）
