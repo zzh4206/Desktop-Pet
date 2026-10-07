@@ -52,11 +52,15 @@ class Render3DAdapter:
             dt = min(now - self._last_t, 0.1)
             self._last_t = now
             # 姿势通道：语义角色程序化 + 弹簧骨（发丝/衣服/尾巴随风摆——
-            # 风从契约 light.wind_speed 取，静止姿态的活物感来源）
+            # 风从契约 light.wind_speed 取；motion 信号传给弹簧做走路姿态：
+            # 锚点 bob + 步频惯性甩动）
+            motion = {"_walking": state.pose.action_id == "walk",
+                      "_step_phase": state.pose.phase}
             payload = bone_bridge.build_pose_payload(self._profile, state.pose, now)
             if len(self._springs):
                 try:
-                    payload.update(self._springs.step(dt, state.light.wind_speed))
+                    payload.update(self._springs.step(dt, state.light.wind_speed,
+                                                      motion))
                 except Exception:  # noqa: BLE001
                     logger.warning("弹簧骨步进异常（本拍跳过）", exc_info=True)
             if payload:

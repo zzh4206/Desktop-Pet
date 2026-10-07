@@ -83,11 +83,32 @@ class SpringRig:
     def __len__(self) -> int:
         return len(self.chains)
 
-    def step(self, dt: float, wind_speed: float = 0.0) -> dict[str, list[float]]:
-        """推进全部链；返回 {骨名: [qx,qy,qz,qw]}（无链/无风→空或全静止）。"""
+    def step(self, dt: float, wind_speed: float = 0.0,
+             motion: dict | None = None) -> dict[str, list[float]]:
+        """推进全部链；返回 {骨名: [qx,qy,qz,qw]}（无链/无风→空或全静止）。
+
+        motion（v0.18.26 走路姿态）：bone_bridge 的姿势 payload（同拍、
+        弹簧之前）——用途有二：
+          1. 锚点动态化：链锚骨的实时位置 ≈ rest 位置 + 父链骨带来的
+             平移增量（hips 起伏/头部摆动传导，走路时裙/发根被真实拎动
+             而非钉死在静止坐标）；
+          2. 步态增益：walking=True 时摆幅放大 + 步频相位注入（裙摆/发梢
+             随步伐甩动的惯性感）。
+        """
         self._phase += dt
         gain = min(1.0, max(0.0, wind_speed) / 8.0)
+        walking = bool(motion and motion.get("_walking"))
+        step_phase = float(motion.get("_step_phase", 0.0)) if motion else 0.0
+        # 行走附加摆动：步频（walk ~1.2-2Hz）驱动的惯性力（链空间，+z 主向
+        # + 侧向交替），叠加在阵风上——静止=纯风，行走=风+步态合力
+        gait = 0.0
+        if walking:
+            gait = 14.0 * math.sin(step_phase * 2.0 * math.pi) + \
+                   6.0 * math.sin(step_phase * 4.0 * math.pi)
         out: dict[str, list[float]] = {}
+        # 锚点平移增量：hips 起伏（bob）在姿势里表现为 hips/spine 旋转，
+        # 这里用简化模型——行走 bob 幅度直接取 bone_bridge 同款公式（±0.02m）
+        bob = 0.02 * math.sin(2.0 * step_phase * 2.0 * math.pi) if walking else 0.0
         for ci, chain in enumerate(self.chains):
             bones = self.bone_maps[ci]
             # 阵风（视觉增益已调）：每链独立相位错开，主向 +z 水平推，
@@ -97,7 +118,17 @@ class SpringRig:
             wind = (0.5 * gain * math.sin(self._phase * 1.3 + ci),
                     0.9 * gain * math.sin(self._phase * 3.7 + ci * 2.3),
                     22.0 * gust)
-            chain.step(dt, self.roots[ci], wind)
+            if walking:
+                # 步态合力：主推随步频正负交变（迈步/收腿的惯性甩动），
+                # 侧向按链错相（左右裙摆/发梢反相甩）
+                wind = (wind[0] + gait * 0.4 * math.sin(ci * 1.1),
+                        wind[1] + gait * 0.25,
+                        wind[2] + gait)
+            # 锚点动态化：链锚骨 rest 位置 + bob（头发链锚在 head=上半身，
+            # 裙/尾链锚在 hips=下半身——bob 全身传导，行走时整体被拎动）
+            root = self.roots[ci]
+            root_now = (root[0], root[1] + bob, root[2])
+            chain.step(dt, root_now, wind)
             pts = chain.points
             for i in range(1, len(bones)):
                 rest_dir = (chain.rest[i][0] - chain.rest[i - 1][0],
