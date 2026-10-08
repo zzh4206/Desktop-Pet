@@ -91,3 +91,57 @@ def build_swe_tools(env) -> list:
         (BASH_SCHEMA, BashHandler(env)),
         (SUBMIT_SCHEMA, SubmitHandler()),
     ]
+
+
+# ---- 主聊天 registry 的委托工具：swe_task（v0.21 M4）----
+SWE_TASK_SCHEMA = ToolSchema(
+    name="swe_task",
+    description=(
+        "委托一个软件工程助手在沙箱工作区执行命令行任务（写脚本、查文件、"
+        "跑命令、统计目录、操作文件等），并把最终结果返回给你转述给用户。"
+        "用于用户提出需要操作终端/命令行/代码的请求。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "instruction": {"type": "string",
+                            "description": "要完成的任务描述（越具体越好）"},
+        },
+        "required": ["instruction"],
+        "additionalProperties": False,
+    },
+    dangerous=True,
+    # instruction 是自由任务描述（可含路径等），豁免 ToolRegistry 通用黑名单；
+    # 真正的命令安全由子代理的 SweEnvironment 统一把关。
+    text_fields=("instruction",),
+)
+
+
+class SweTaskHandler:
+    """主聊天 registry 的 ``swe_task`` 工具：委托 mini-swe agent 跑任务。
+
+    ``runner(instruction) -> dict``（SweAgent.run 的返回）；本 handler 只做
+    结果规约（exit_status → ToolResult），不 import Qt / LLM。
+    """
+
+    def __init__(self, runner) -> None:
+        self._runner = runner
+
+    def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
+        instruction = (args.get("instruction") or "").strip()
+        if not instruction:
+            return ToolResult(False, "需要 instruction 参数。")
+        try:
+            result = self._runner(instruction)
+        except Exception as exc:
+            return ToolResult(False, f"任务执行异常: {exc}")
+        if not isinstance(result, dict):
+            return ToolResult(False, "任务返回格式异常")
+        status = result.get("exit_status", "Error")
+        submission = (result.get("submission") or "").strip()
+        if status in ("Submitted", "Finished"):
+            return ToolResult(True, submission or "（任务完成，无额外说明）",
+                              data={"exit_status": status})
+        # 上限/超时/错误：标记失败回灌主 LLM，让它向用户如实转述
+        return ToolResult(False, submission or f"任务未完成（{status}）",
+                          data={"exit_status": status})

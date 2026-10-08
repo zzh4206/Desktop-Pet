@@ -60,15 +60,18 @@ _DANGEROUS_PATTERNS = (
     (re.compile(r"\brm\b", re.IGNORECASE), "删除文件"),
     (re.compile(r"\b(?:mv|cp|install|mkdir|touch|tee)\b", re.IGNORECASE),
      "写文件系统"),
-    (re.compile(r"\b(?:curl|wget|pip\s+install|git\s+(?:clone|push|fetch)"
-                r"|npm\s+install|brew|apt|apt-get|dnf|yum|ssh|scp|ftp"
-                r"|nc|ncat|telnet)\b", re.IGNORECASE), "网络/外部访问"),
     (re.compile(r"\b(?:chmod|chown|chattr)\b", re.IGNORECASE), "修改权限"),
     (re.compile(r"\b(?:kill|pkill|killall|taskkill)\b", re.IGNORECASE),
      "结束进程"),
     (re.compile(r"\b(?:python\w*|perl|ruby|node|sh|bash)\b\s+-\w*c\b",
                 re.IGNORECASE), "内联执行代码"),
 )
+
+# 网络/外部访问：默认走 confirm；``allow_network=False`` 时整体硬拒（no_network）。
+_NETWORK = re.compile(
+    r"\b(?:curl|wget|pip\s+install|git\s+(?:clone|push|fetch)"
+    r"|npm\s+install|brew|apt|apt-get|dnf|yum|ssh|scp|ftp"
+    r"|nc|ncat|telnet)\b", re.IGNORECASE)
 
 # 路径穿越 ``..`` 作为路径分量；``~`` 家目录逃逸（前导或跟在空白/分隔符后）
 _TRAVERSAL = re.compile(r"(?:^|[\s/])\.\.(?:/|$|[\s;|&])")
@@ -95,7 +98,7 @@ def _outside_workspace(command: str, workspace: str):
 
 
 def scan_command(command: str, workspace: str,
-                 extra_block_patterns=()) -> tuple:
+                 extra_block_patterns=(), allow_network: bool = True) -> tuple:
     """判定命令安全级别 → ``(decision, reason)``。
 
     decision ∈ {"block"（硬拒）, "confirm"（需确认）, "allow"（直接执行）}。
@@ -116,6 +119,10 @@ def scan_command(command: str, workspace: str,
     outside = _outside_workspace(command, workspace)
     if outside is not None:
         return "block", f"越出工作区路径: {outside}"
+    if _NETWORK.search(command):
+        if not allow_network:
+            return "block", "网络已禁用"
+        return "confirm", "网络/外部访问"
     for rx, why in _DANGEROUS_PATTERNS:
         if rx.search(command):
             return "confirm", why
@@ -237,7 +244,8 @@ class SweEnvironment:
     def __init__(self, workspace_dir: str, *,
                  command_timeout_s: float = DEFAULT_TIMEOUT_S,
                  output_max_chars: int = DEFAULT_OUTPUT_MAX_CHARS,
-                 block_patterns=None, confirm_fn=None) -> None:
+                 block_patterns=None, confirm_fn=None,
+                 allow_network: bool = True) -> None:
         if not workspace_dir:
             raise ValueError("workspace_dir 不能为空")
         self.workspace = os.path.realpath(os.path.expanduser(workspace_dir))
@@ -248,6 +256,7 @@ class SweEnvironment:
         self.timeout = float(command_timeout_s)
         self.output_max_chars = int(output_max_chars)
         self._confirm_fn = confirm_fn
+        self._allow_network = bool(allow_network)
         self._block_patterns = tuple(
             re.compile(p, re.IGNORECASE) for p in (block_patterns or [])
         )
@@ -257,7 +266,8 @@ class SweEnvironment:
         """执行命令，返回结果 dict（见 ``_run`` 返回结构）。"""
         cwd = cwd or self.workspace
         decision, reason = scan_command(command, self.workspace,
-                                        self._block_patterns)
+                                        self._block_patterns,
+                                        self._allow_network)
         if decision == "block":
             return {"output": "", "returncode": -1, "exception_info": "",
                     "truncated": False, "blocked": True,

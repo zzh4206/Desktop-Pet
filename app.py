@@ -842,6 +842,8 @@ class PetApp:
 
         self._activate_llm(selected, key)
         self._build_chat_panel(registry)
+        # v0.21：swe_task 委托工具注册须在 ChatBridge 建好之后（runner 流式回显）
+        self._setup_swe(registry)
 
     def _select_provider(self, available) -> tuple:
         """QInputDialog 下拉选 provider（仅无 llm.selected 记忆/记忆失效时弹）。
@@ -885,9 +887,9 @@ class PetApp:
     # ---- v0.20 模型管理（接入/改 Key/增删/切换）----
 
     def _activate_llm(self, selected: str, key: str) -> None:
-        """按 provider 名实例化三个客户端（聊天/滚屏摘要/主动关怀）。
+        """按 provider 名实例化客户端（聊天/滚屏摘要/主动关怀 + v0.21 swe）。
 
-        启动选择与运行时切换共用入口；三实例隔离 _resp/usage 的既有约束
+        启动选择与运行时切换共用入口；各实例隔离 _resp/usage 的既有约束
         不变（H4/M5）。调用方负责把新引用换进 bridge/scheduler（swap_clients
         /set_client）——启动路径此时面板未建，无需换。"""
         from pet.llm import create_client
@@ -898,8 +900,68 @@ class PetApp:
             selected, key, self._model_registry, self.cfg)
         self._proactive_client = create_client(
             selected, key, self._model_registry, self.cfg)
+        # v0.21：第 4 个客户端（swe 专用，独立实例隔离 _resp/usage）
+        self._swe_client = None
+        if (self.cfg.get("swe", {}) or {}).get("enabled"):
+            self._swe_client = create_client(
+                selected, key, self._model_registry, self.cfg)
         self._model_selected = selected
         self.logger.info("LLM provider: %s", selected)
+
+    def _setup_swe(self, registry) -> None:
+        """v0.21 mini-swe：装配沙箱环境 + 专用 registry + agent，并把 swe_task
+        委托工具注册进主聊天 registry。
+
+        须在 ChatBridge 建好之后调用（runner 经 bridge.sweStep 信号把每条
+        bash 步骤流式回显进聊天面板）。swe.enabled=false 时不注册（工具不进
+        schema，模型无从调用）。
+        """
+        swe_cfg = self.cfg.get("swe", {}) or {}
+        if not swe_cfg.get("enabled"):
+            return
+        if self._swe_client is None:
+            self.logger.warning("swe 已启用但客户端未建，跳过 swe_task 注册")
+            return
+        from pet.swe_agent import SweAgent
+        from pet.swe_env import SweEnvironment
+        from pet.swe_tools import (SWE_TASK_SCHEMA, SweTaskHandler,
+                                   build_swe_tools)
+        from pet.tools_schema import ToolRegistry
+
+        workspace = (swe_cfg.get("workspace_dir") or ""
+                     or os.path.join(self._paths["data_dir"], "workspace"))
+        env = SweEnvironment(
+            workspace,
+            command_timeout_s=swe_cfg.get("command_timeout_s", 30.0),
+            output_max_chars=swe_cfg.get("output_max_chars", 8000),
+            block_patterns=swe_cfg.get("block_patterns") or [],
+            allow_network=not swe_cfg.get("no_network", False),
+            confirm_fn=self.adapter.confirm_dangerous,
+        )
+        swe_registry = ToolRegistry()
+        for schema, handler in build_swe_tools(env):
+            swe_registry.register(schema, handler)
+        self._swe_agent = SweAgent(
+            self._swe_client, swe_registry,
+            step_limit=swe_cfg.get("step_limit", 10),
+            wall_time_s=swe_cfg.get("wall_time_s", 0.0),
+        )
+
+        def _run(instruction: str) -> dict:
+            bridge = getattr(self, "_chat_bridge", None)
+
+            def _emit(command: str, output: str) -> None:
+                if bridge is not None:
+                    try:
+                        bridge.sweStep.emit(command, output)
+                    except RuntimeError:
+                        pass  # bridge 已销毁（shutdown），丢弃步骤
+
+            return self._swe_agent.run(instruction, on_step=_emit)
+
+        registry.register(SWE_TASK_SCHEMA, SweTaskHandler(_run))
+        self.logger.info("mini-swe 已装配（workspace=%s, step_limit=%s）",
+                         env.workspace, swe_cfg.get("step_limit", 10))
 
     def _sync_model_tray(self) -> None:
         """托盘'切换模型'子菜单重建（当前项勾选 + 模型名/密钥态）。"""
@@ -999,6 +1061,9 @@ class PetApp:
             self._build_chat_panel(self._model_registry)
         if getattr(self, "_proactive", None) is not None:
             self._proactive.set_client(self._proactive_client)
+        # v0.21：swe agent 换 client（在飞任务已捕获旧 client，跑完不受影响）
+        if getattr(self, "_swe_agent", None) is not None:
+            self._swe_agent.set_client(self._swe_client)
         self._sync_model_tray()
         self.bubble.show(f"已切换到 {name}～", anchor=self._pet_anchor())
 

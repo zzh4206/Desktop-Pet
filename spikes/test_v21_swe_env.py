@@ -98,6 +98,14 @@ custom_env = SweEnvironment(ws, block_patterns=["secret"])
 decision, reason = scan_command("echo secret", ws, custom_env._block_patterns)
 check("M1.5 自定义黑名单命中", decision == "block" and reason == "自定义黑名单")
 
+# ---- M1.5b 网络开关（no_network）----
+check("M1.5b 默认网络访问走确认",
+      scan_command("curl example.com", ws)[0] == "confirm")
+no_net_env = SweEnvironment(ws, allow_network=False)
+r = no_net_env.execute("curl example.com")
+check("M1.5c no_network 硬拒网络",
+      r["blocked"] and "网络已禁用" in r["reason"])
+
 # ---- M1.6 超时杀树 ----
 t0 = time.time()
 r = env.execute("sleep 60", timeout=0.5)

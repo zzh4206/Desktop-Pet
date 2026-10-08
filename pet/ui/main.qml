@@ -402,10 +402,37 @@ ApplicationWindow {
                     Behavior on opacity { NumberAnimation { duration: 160 } }
                     Component.onCompleted: opacity = 1
 
-                    height: row.implicitHeight
+                    height: model.role === "swe" ? sweBlock.height : row.implicitHeight
+
+                    // v0.21 swe 步骤：整宽等宽终端块（无头像，纯文本）
+                    Rectangle {
+                        id: sweBlock
+                        visible: model.role === "swe"
+                        x: 12
+                        width: parent.width - 24
+                        radius: 8
+                        color: "#2b2b33"
+                        height: sweTxt.implicitHeight + 16
+                        Text {
+                            id: sweTxt
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: model.content
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: "#d8d8e0"
+                            font.family: Qt.platform.os === "osx" ? "Menlo" : "Consolas"
+                            font.pixelSize: 12
+                            lineHeight: 1.3
+                        }
+                    }
 
                     Row {
                         id: row
+                        visible: model.role !== "swe"
                         spacing: 8
                         // pet 行贴左（头像在左）/ user 行贴右（头像在右）：
                         // layoutDirection 只反转内部顺序，行本身须锚定

@@ -72,6 +72,11 @@ class SweAgent:
         self._wall_time_s = float(wall_time_s) if wall_time_s else 0.0
         self._ctx = ctx
 
+    def set_client(self, client) -> None:
+        """运行时切换模型（app._switch_model）：换 swe 客户端。在飞任务已
+        捕获旧 client 引用，跑完不受影响。"""
+        self._client = client
+
     def run(self, task: str, on_step=None) -> dict:
         """执行任务，返回 ``{exit_status, submission, steps}``。
 

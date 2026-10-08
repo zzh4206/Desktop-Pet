@@ -131,6 +131,7 @@ class ChatBridge(QAbstractListModel):
     failedReply = Signal(str)
     petAvatarChanged = Signal()
     sessionListChanged = Signal()   # v0.17.2 会话列表/标题/active 变化
+    sweStep = Signal(str, str)      # v0.21: swe 步骤流式回显 (command, output)
 
     def __init__(self, client, registry, make_ctx, parent=None,
                  sum_client=None, store=None) -> None:
@@ -165,6 +166,8 @@ class ChatBridge(QAbstractListModel):
         self.on_user_message = None  # v0.6 可选钩子：app 侧 follow-up 启发式
         self._offline = False
         self._pet_avatar = ""  # 对方头像 file:// URL；空=未注入（QML 回退 🐱）
+        # v0.21：swe 步骤信号 → 主线程追加终端块消息（跨线程 queued 派发）
+        self.sweStep.connect(self._append_swe_step)
 
     # ---- v0.17.1 会话视图 ----
     @property
@@ -680,6 +683,20 @@ class ChatBridge(QAbstractListModel):
         气泡）。非 active 不 emit——它本来就没在显示。"""
         if self._stream_bufs.pop(sid, None) is not None and sid == self._cur.id:
             self.streamingChanged.emit()
+
+    @Slot(str, str)
+    def _append_swe_step(self, command: str, output: str) -> None:
+        """v0.21：追加一条 swe 步骤消息（role="swe"），QML 用 content 渲染
+        等宽终端块。只进 UI 行（不进 DS history——不影响上下文/摘要）。"""
+        session = self._cur
+        row = len(session.messages)
+        content = f"$ {command}" + (f"\n{output}" if output else "")
+        self.beginInsertRows(QModelIndex(), row, row)
+        session.messages.append({"role": "swe", "content": content,
+                                 "rich": _md_to_html(content)})
+        self.endInsertRows()
+        session.touch()
+        self.sessionListChanged.emit()
 
     @Slot()
     def reset_offline(self) -> None:
