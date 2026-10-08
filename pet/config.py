@@ -116,6 +116,14 @@ _SAFE_DEFAULTS: dict = {
         "drag_cleanliness": 25, "content_fullness": 80,
         "content_cleanliness": 65,
     },
+    # v0.21 mini-swe 集成（pet/swe_env.py + swe_agent.py）：沙箱 CLI 能力。
+    # 默认关；首次经聊天 swe_task 工具触发时确认后启用。
+    "swe": {
+        "enabled": False, "workspace_dir": "", "step_limit": 10,
+        "wall_time_s": 300.0, "command_timeout_s": 30.0,
+        "output_max_chars": 8000, "no_network": False,
+        "block_patterns": [],
+    },
 }
 
 # 需校验的数值子段 schema（其余键 v0.2 不强校验）
@@ -413,6 +421,26 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "content_cleanliness": {"type": "number", "minimum": 0,
                                     "maximum": 100},
         },
+        "additionalProperties": False,
+    },
+    # v0.21 mini-swe 集成（pet/swe_env.py + swe_agent.py）
+    "swe": {
+        "type": "object",
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "workspace_dir": {"type": "string", "maxLength": 512},
+            "step_limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "wall_time_s": {"type": "number", "minimum": 0, "maximum": 3600},
+            "command_timeout_s": {"type": "number", "minimum": 1,
+                                  "maximum": 600},
+            "output_max_chars": {"type": "integer", "minimum": 256,
+                                 "maximum": 100000},
+            "no_network": {"type": "boolean"},
+            "block_patterns": {"type": "array", "maxItems": 50,
+                               "items": {"type": "string", "minLength": 1,
+                                         "maxLength": 256}},
+        },
+        "required": ["enabled"],
         "additionalProperties": False,
     },
 }

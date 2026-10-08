@@ -150,5 +150,15 @@
     "drag_cleanliness": 25,
     "content_fullness": 80,
     "content_cleanliness": 65
+  },
+  "swe": {
+    "enabled": false,
+    "workspace_dir": "",
+    "step_limit": 10,
+    "wall_time_s": 300,
+    "command_timeout_s": 30,
+    "output_max_chars": 8000,
+    "no_network": false,
+    "block_patterns": []
   }
 }
