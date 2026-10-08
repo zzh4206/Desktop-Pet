@@ -304,6 +304,18 @@ class OpenAICompatibleClient(LLMClient):
             data.get("usage") or {},
         )
 
+    def query_once(
+        self, messages: list, tools: Optional[list], on_delta=None
+    ) -> tuple[str, list, dict]:
+        """单次 LLM 调用（mini-swe 循环的 query 原语，v0.21）。
+
+        返回 ``(text, tool_calls, usage)``。带 ``on_delta`` 走流式，否则非流式。
+        供 ``pet.swe_agent.SweAgent`` 按步驱动（区别于 ``chat_once`` 的整轮循环）。
+        """
+        if on_delta is not None:
+            return self._stream_once(messages, tools, on_delta)
+        return self._non_stream_once(messages, tools)
+
     def _dispatch_tool_calls(
         self, tool_calls: list, ctx
     ) -> list[dict]:
