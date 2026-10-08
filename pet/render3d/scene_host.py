@@ -32,14 +32,42 @@ def _rss_mb() -> float:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
 
-class Render3DWindow:
-    """QQuickWidget 场景宿主（v0.18.24：QQuickView→QQuickWidget）。
+class _ExposeLogger:
+    """RENDER3D_WD_DEBUG=1 的渲染表面事件记录器（QObject eventFilter）。"""
 
-    QQuickWidget 是 QWidget——可直接 reparent 嵌入主窗（attach_render3d），
-    且 WA_TransparentForMouseEvents 真正生效（事件落主窗=复用 2D 原生
-    手势路径）；QQuickView+createWindowContainer 的 native surface 上该
-    属性无效（事件被吞=交互全灭，实测）。2D rig（presenter._init_quick）
-    的同款嵌入先例。顶层伴随模式照常可用（setWindowFlags+show）。
+    def __init__(self, view):
+        from PySide6.QtCore import QObject
+
+        # 动态建 QObject 子类实例（避免模块级 import Qt 破坏延迟导入约定）
+        class _F(QObject):
+            def eventFilter(self, obj, event) -> bool:
+                from PySide6.QtCore import QEvent
+
+                t = event.type()
+                if t in (QEvent.Type.Expose, QEvent.Type.Hide, QEvent.Type.Show,
+                         QEvent.Type.HideToParent, QEvent.Type.ShowToParent,
+                         QEvent.Type.WindowDeactivate, QEvent.Type.UpdateRequest):
+                    import logging
+                    logging.getLogger("pet.render3d").warning(
+                        "R3EV %s visible=%s", str(t).split(".")[-1],
+                        view.isVisible())
+                return False
+
+        self._f = _F(view)
+        self.qobj = self._f
+
+
+class Render3DWindow:
+    """3D 场景宿主（v0.18.32：QQuickView 独立窗 / native surface 对照实验）。
+
+    QQuickWidget 嵌入（FBO 贴图）在 mac 上连续暴露合成层问题（StackOnTop
+    坑 / 失活 unexpose 停帧丢 FBO / repaint 与 AppKit nudge 均无效），
+    故换 QQuickView（native surface）——理论上免疫 FBO 失活剔除。
+    嵌入主窗时由 window.attach_render3d 用 createWindowContainer 包一层，
+    交互由事件过滤器转发（eventFilter 把 native container 的鼠标事件转给
+    本窗手势消解；WA_TransparentForMouseEvents 管不到 native 层命中测试，
+    0.18.23 实测事件被吞）。
+    顶层伴随模式照常可用（setFlags+show）。
 
     延迟 import Qt：本模块被 bootstrap 在未启用时 import 也不拖 Qt 进内存。
     """
@@ -47,21 +75,22 @@ class Render3DWindow:
     def __init__(self, model_qml: str, cfg: dict, asset_dir: str | None = None):
         from PySide6.QtCore import QUrl, QTimer
         from PySide6.QtGui import QColor, Qt
-        from PySide6.QtQuickWidgets import QQuickWidget
+        # v0.18.32 架构对照实验：QQuickView 独立窗（native surface）——
+        # QQuickWidget 嵌入（FBO 贴图）在 mac 上连续暴露合成层问题
+        # （StackOnTop 坑/失活剔除/repaint 与 AppKit nudge 均无效），
+        # native surface 理论上免疫。若实测通过则正式定型。
+        from PySide6.QtQuick import QQuickView
 
-        self._view = QQuickWidget()
-        self._view.setClearColor(QColor(0, 0, 0, 0))
-        self._view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._view.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
-        self._view.setWindowFlags(
+        self._view = QQuickView()
+        self._view.setColor(QColor(0, 0, 0, 0))
+        self._view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        self._view.setFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
         self._view.resize(int(cfg.get("window_size_w", 240)), int(cfg.get("window_size_h", 420)))
         self._view.setSource(QUrl.fromLocalFile(QML))
-        if self._view.status() != QQuickWidget.Status.Error or not self._view.rootObject():
-            pass
         if self._view.rootObject() is None:
             errs = "; ".join(e.toString() for e in self._view.errors())
             raise RuntimeError(f"scene3d.qml 加载失败: {errs}")
@@ -85,6 +114,13 @@ class Render3DWindow:
         self._nudge_timer.setInterval(1000)
         self._nudge_timer.timeout.connect(self.nudge)
         self._nudge_timer.start()
+
+        # 事件级日志检测（0.18.31 排障）：记录 expose/hide/show 事件——
+        # 用户复现"消失"时日志直接给出发病瞬间真实状态
+        self._dbg_on = bool(os.environ.get("RENDER3D_WD_DEBUG"))
+        if self._dbg_on:
+            self._dbg_filter = _ExposeLogger(self._view)
+            self._view.installEventFilter(self._dbg_filter.qobj)
 
     def _on_timer(self) -> None:
         """看门狗 + 合成层保鲜（同一定时器，双职责）。"""
@@ -123,15 +159,21 @@ class Render3DWindow:
             pass
 
     def nudge(self) -> None:
-        """合成层/停帧保鲜（0.18.31 强化）：repaint() 同步强制重绘——
-        QQuickWidget 在 app 失活（切应用）时会被 unexpose 停渲染、FBO
-        内容丢弃=窗口在但 3D 透明（用户看到的"消失"）；update() 走调度
-        在停帧态无效，repaint 绕过渲染循环立即重绘。PySide6 未暴露
-        setPersistentOpenGLContext（绑定缺口，C++ 有），此为等效替代。
-        间隔 1s（WATCHDOG_MS 降频版，独立 1s 定时器在构造时启动）。"""
+        """合成层保鲜（0.18.32 QQuickView 版）：update() 调度渲染 +
+        NSWindow setViewsNeedDisplay 强制合成器取帧。"""
         try:
-            if not self.degraded:
-                self._view.repaint()
+            if self.degraded:
+                return
+            self._view.update()
+            if getattr(self, "_nswin", None) is None:
+                from ctypes import c_void_p
+
+                from objc import objc_object
+
+                view = objc_object(c_void_p=int(self._view.winId()))
+                self._nswin = view.window() if view is not None else False
+            if self._nswin:
+                self._nswin.setViewsNeedDisplay_(True)
         except Exception:
             pass
 

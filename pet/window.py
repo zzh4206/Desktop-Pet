@@ -335,28 +335,46 @@ class WindowBase(QWidget):
         self._r3_click_cb = cb
 
     def attach_render3d(self, qquick_widget) -> bool:
-        """把 3D QQuickWidget 直接嵌入本窗（互斥呈现的 3D 侧）。
+        """把 3D 场景宿主嵌入本窗（互斥呈现的 3D 侧）。
 
-        v0.18.24：QQuickWidget reparent 嵌入（2D rig 的 presenter._init_quick
-        同款手法）——widget 层 WA_TransparentForMouseEvents 真正生效，原生
-        事件落本窗=双击/消歧/拖拽/菜单复用 2D 代码路径。此前 QQuickView+
-        createWindowContainer 的 native surface 上该属性无效（事件被 native
-        层吞=交互全灭，实测）。
-        返回 False=嵌入失败（调用方回退 2D，零影响）。
+        宿主两种形态（v0.18.32）：
+        * QQuickWidget（QWidget，0.18.24 定型）：直接 reparent 嵌入，
+          WA_TransparentForMouseEvents 真正生效（2D rig 的 presenter._init_quick
+          同款手法），原生事件落本窗=双击/消歧/拖拽/菜单复用 2D 代码路径。
+        * QQuickView（QWindow / native surface，0.18.32 实验）：需
+          createWindowContainer 包成 QWidget 再嵌入。native 层命中测试不受
+          widget 属性管束（0.18.23 实测事件被吞）——点击改由事件过滤器
+          eventFilter 把鼠标事件转发给本窗，复用 2D 手势消解。
+        返回 False=嵌入失败（调用方回退伴随窗/2D，零影响）。
         """
         try:
             qw = qquick_widget
-            qw.setParent(self)
-            qw.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            # ⚠️ 不设 WA_AlwaysStackOnTop：Qt 文档明确警告该属性在
-            # QQuickWidget 上破坏正常合成（内容陈旧/间歇消失，expose 事件
-            # 才恢复=用户报的"开着但不显示、点任务栏又出来"）。透明背景由
-            # clearColor alpha=0 承担；3D 模式下 label/阴影已隐藏，没有
-            # 需要压层的兄弟控件，StackOnTop 无收益纯风险
-            qw.setGeometry(self.rect())
-            qw.show()
-            self._r3_container = qw          # 命名沿用（resizeEvent 跟随用）
-            self._r3_view = qw
+            from PySide6.QtGui import QWindow
+            if isinstance(qw, QWindow):          # QQuickView 是 QWindow
+                from PySide6.QtWidgets import QWidget
+                container = QWidget.createWindowContainer(qw, self)
+                container.setAttribute(Qt.WA_TranslucentBackground, True)
+                container.setGeometry(self.rect())
+                container.show()
+                # ⚠️ native surface 的鼠标事件落在 QQuickView 自己的 QNSView
+                # 上（hitTest 实证），不进 container 的 QWidget 事件体系——
+                # 所以事件过滤器必须装在 QQuickView（QWindow）上，把鼠标
+                # 事件转发给本窗（container 收不到，装 container 无效）。
+                qw.installEventFilter(self)
+                self._r3_container = container   # resizeEvent 跟随用
+                self._r3_view = qw               # 保留 QQuickView（grabWindow 命中采样 + 事件过滤）
+            else:
+                qw.setParent(self)
+                qw.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                # ⚠️ 不设 WA_AlwaysStackOnTop：Qt 文档明确警告该属性在
+                # QQuickWidget 上破坏正常合成（内容陈旧/间歇消失，expose 事件
+                # 才恢复=用户报的"开着但不显示、点任务栏又出来"）。透明背景由
+                # clearColor alpha=0 承担；3D 模式下 label/阴影已隐藏，没有
+                # 需要压层的兄弟控件，StackOnTop 无收益纯风险
+                qw.setGeometry(self.rect())
+                qw.show()
+                self._r3_container = qw
+                self._r3_view = qw
             self._label.hide()
             self._shadow.hide()
             # rig 档的 2D 画面是 QQuickWidget（_quick）不是 label——互斥必须
@@ -384,6 +402,26 @@ class WindowBase(QWidget):
     def is_render3d(self) -> bool:
         return getattr(self, "_r3_container", None) is not None
 
+    def eventFilter(self, obj, event) -> bool:
+        """v0.18.32：3D native QQuickView 的鼠标事件 → 本窗手势消解。
+
+        createWindowContainer 后 native surface 的鼠标事件落在 QQuickView
+        自己的 QNSView 上（hitTest 实证），不进 container 的 QWidget 事件
+        体系——事件过滤器必须装在 QQuickView（QWindow）上。它与本窗同原点
+        同尺寸，坐标无需变换，直接 sendEvent 给本窗（补 ContextMenu 使右键
+        菜单也复用 2D 路径）。"""
+        if obj is getattr(self, "_r3_view", None) \
+                or obj is getattr(self, "_r3_container", None):
+            from PySide6.QtCore import QCoreApplication, QEvent
+
+            t = event.type()
+            if t in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                     QEvent.Type.MouseMove, QEvent.Type.MouseButtonDblClick,
+                     QEvent.Type.ContextMenu):
+                QCoreApplication.sendEvent(self, event)
+                return True
+        return super().eventFilter(obj, event)
+
     def _r3_hit_model(self, x: float, y: float) -> bool:
         """alpha 命中测试：点击处是否落在模型上（3D 帧离屏采样）。
 
@@ -397,7 +435,7 @@ class WindowBase(QWidget):
         if v is None:
             return True
         try:
-            img = v.grabFramebuffer()   # QQuickWidget API（grabFramebuffer→QImage）
+            img = v.grabWindow() if hasattr(v, "grabWindow") else v.grabFramebuffer()
             if img.isNull():
                 return True
             ix = min(img.width() - 1, max(0,
