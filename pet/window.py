@@ -419,6 +419,19 @@ class WindowBase(QWidget):
                      QEvent.Type.MouseMove, QEvent.Type.MouseButtonDblClick,
                      QEvent.Type.ContextMenu):
                 QCoreApplication.sendEvent(self, event)
+                # QWindow（QQuickView）不合成 QContextMenuEvent（那是 QWidget
+                # 体系在 QWidgetWindow 里干的）——右键 release 后手动合成一次，
+                # 让右键菜单复用 2D 路径。
+                if t == QEvent.Type.MouseButtonRelease \
+                        and event.button() == Qt.RightButton:
+                    from PySide6.QtGui import QContextMenuEvent
+
+                    ce = QContextMenuEvent(
+                        QContextMenuEvent.Reason.Mouse,
+                        event.position().toPoint(),
+                        event.globalPosition().toPoint(),
+                    )
+                    QCoreApplication.sendEvent(self, ce)
                 return True
         return super().eventFilter(obj, event)
 
