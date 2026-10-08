@@ -80,6 +80,12 @@ class Render3DWindow:
         self._timer.timeout.connect(self._on_timer)
         self._timer.start()
 
+        # 停帧保鲜独立 1s 定时器（RSS 看门狗保持 5s 不变）
+        self._nudge_timer = QTimer()
+        self._nudge_timer.setInterval(1000)
+        self._nudge_timer.timeout.connect(self.nudge)
+        self._nudge_timer.start()
+
     def _on_timer(self) -> None:
         """看门狗 + 合成层保鲜（同一定时器，双职责）。"""
         self._check_rss()
@@ -117,13 +123,15 @@ class Render3DWindow:
             pass
 
     def nudge(self) -> None:
-        """合成层保鲜脉冲（0.18.29）：请求 QQuickWidget 重绘——macOS 在
-        Space 切换/显示器休眠/遮挡后可能持陈旧合成层（内容透明但窗仍
-        "可见"，直到 expose 事件才恢复=用户报的图层消失），周期 update()
-        保证最多 WATCHDOG_INTERVAL_MS 自愈。"""
+        """合成层/停帧保鲜（0.18.31 强化）：repaint() 同步强制重绘——
+        QQuickWidget 在 app 失活（切应用）时会被 unexpose 停渲染、FBO
+        内容丢弃=窗口在但 3D 透明（用户看到的"消失"）；update() 走调度
+        在停帧态无效，repaint 绕过渲染循环立即重绘。PySide6 未暴露
+        setPersistentOpenGLContext（绑定缺口，C++ 有），此为等效替代。
+        间隔 1s（WATCHDOG_MS 降频版，独立 1s 定时器在构造时启动）。"""
         try:
             if not self.degraded:
-                self._view.update()
+                self._view.repaint()
         except Exception:
             pass
 
