@@ -102,4 +102,11 @@
 # v0.20.0：模型管理（pet/model_registry.py 注册表+pet/ui/model_dialog.py
 # 对话框；托盘「切换模型/模型管理…」；llm.selected 记忆免启动弹选；
 # 运行时切换 chat_bridge.swap_clients+proactive.set_client 热换客户端）。
-__version__ = "0.20.0"
+# v0.21.0：mini-swe 集成（CLI 能力）——聊天侧新增 swe_task 委托工具，把需要
+# 操作终端/命令行的请求交给软件工程助手（pet/swe_env.py 沙箱命令执行器 +
+# pet/swe_agent.py 线性历史 agent 循环 + pet/swe_tools.py bash/submit）；
+# 安全三件套（沙箱工作区 / 白名单 / 危险确认，confirm_fn fail-closed），
+# config.swe 段默认关（enabled/workspace_dir/step_limit/wall_time_s/
+# command_timeout_s/output_max_chars/no_network/block_patterns），步骤经
+# bridge.sweStep 流式回显进聊天面板（role="swe" 等宽终端块，不进 DS 历史）。
+__version__ = "0.21.0"
