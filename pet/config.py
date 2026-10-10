@@ -118,11 +118,18 @@ _SAFE_DEFAULTS: dict = {
     },
     # v0.21 mini-swe 集成（pet/swe_env.py + swe_agent.py）：沙箱 CLI 能力。
     # 默认关；首次经聊天 swe_task 工具触发时确认后启用。
+    # v0.22 swe.context：线性历史 token 治理（T1 观测瘦身 + T2 轨迹滚屏
+    # 摘要，pet/swe_context.py）；budget_tokens 可按模型窗口自行调整。
     "swe": {
         "enabled": False, "workspace_dir": "", "step_limit": 10,
         "wall_time_s": 300.0, "command_timeout_s": 30.0,
         "output_max_chars": 8000, "no_network": False,
         "block_patterns": [],
+        "context": {
+            "budget_tokens": 24000, "keep_recent": 3,
+            "slim_head_chars": 600, "slim_tail_chars": 1200,
+            "summarize": True,
+        },
     },
 }
 
@@ -439,6 +446,21 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "block_patterns": {"type": "array", "maxItems": 50,
                                "items": {"type": "string", "minLength": 1,
                                          "maxLength": 256}},
+            "context": {
+                "type": "object",
+                "properties": {
+                    "budget_tokens": {"type": "integer", "minimum": 1000,
+                                      "maximum": 200000},
+                    "keep_recent": {"type": "integer", "minimum": 0,
+                                    "maximum": 50},
+                    "slim_head_chars": {"type": "integer", "minimum": 0,
+                                        "maximum": 50000},
+                    "slim_tail_chars": {"type": "integer", "minimum": 0,
+                                        "maximum": 50000},
+                    "summarize": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
         },
         "required": ["enabled"],
         "additionalProperties": False,

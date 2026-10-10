@@ -159,6 +159,13 @@
     "command_timeout_s": 30,
     "output_max_chars": 8000,
     "no_network": false,
-    "block_patterns": []
+    "block_patterns": [],
+    "context": {
+      "budget_tokens": 24000,
+      "keep_recent": 3,
+      "slim_head_chars": 600,
+      "slim_tail_chars": 1200,
+      "summarize": true
+    }
   }
 }
