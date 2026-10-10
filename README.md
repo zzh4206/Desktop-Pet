@@ -23,33 +23,83 @@
 
 ## 快速开始
 
-### 1. 准备环境
+### 1. 环境要求
 
-- Python 3.10 或更高版本
+- Python 3.10 – 3.12（3.13 / 3.14 暂不支持：依赖 PySide6 的版本上限尚未放开，在这两个版本上 `pip install` 会直接失败）
 - macOS 或 Windows
 
-克隆项目并创建虚拟环境：
+### 2. 获取项目
 
 ```bash
 git clone https://github.com/zzh4206/Desktop-Pet.git
 cd Desktop-Pet
-python -m venv .venv
 ```
 
-激活虚拟环境：
+没有安装 git 的话，也可以在 GitHub 仓库页面选择 Code → Download ZIP 下载后解压（解压出的目录名为 `Desktop-Pet-main`，下文命令里的 `cd Desktop-Pet` 相应换成 `cd Desktop-Pet-main`）。
+
+### 3. 安装 Python（仅 macOS）
+
+较新版本的 macOS 默认没有 `python` 命令，只有 `python3`；而系统自带的 `python3` 是 3.9，python.org 下载页首推的又是最新版（3.13+），都不在支持范围内。先在终端运行 `python3 --version` 检查：显示 3.10 / 3.11 / 3.12 即可跳过本节；否则按下面任一路线安装 3.12。
+
+**路线一：python.org 安装包（推荐）**
+
+到 [python.org 下载页](https://www.python.org/downloads/) 的版本列表里下载最新的 3.12.x（macOS 64-bit universal2 installer），双击安装，装完重新打开终端。
+
+**路线二：Homebrew**
+
+> 下面的命令请**逐条**复制到终端执行，不要整块粘贴：安装脚本会交互式询问开机密码，多行一起粘会被当作密码或按键吃掉。输入密码时屏幕不显示任何字符是正常的。
+
+```bash
+# 安装 Homebrew（会先自动安装 Xcode 命令行工具，需要输入密码，耐心等待）
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 装完按屏幕上 "Next steps" 的提示执行两行命令把 brew 加入 PATH，例如（Apple Silicon）：
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv)"
+# Intel 机器的路径是 /usr/local/bin/brew，以屏幕提示为准
+
+# 安装 Python 3.12
+brew install python@3.12
+```
+
+> Homebrew 的安装脚本需要访问 GitHub，网络不通时请改走路线一。
+
+两条路线装好后都有 `python3.12` 命令。装了多个 Python 时，`python3.12` 一定指向 3.12，`python3` 未必——后续步骤请按实际情况选择。
+
+### 4. 首次安装
 
 ```bash
 # macOS
+rm -rf .venv                   # 之前用过其他 Python 版本建过 .venv 的话先删掉重建；没有可跳过
+python3 -m venv .venv          # python3 --version 不在 3.10–3.12 时，改用 python3.12 -m venv .venv
 source .venv/bin/activate
-
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python app.py
 ```
 
-安装依赖并启动：
+```powershell
+# Windows PowerShell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python app.py
+```
+
+激活成功后命令行前会出现 `(.venv)` 前缀；虚拟环境内自带 `python` 和 `pip` 命令，依赖只装在虚拟环境里，不污染系统 Python。
+
+### 5. 之后每次启动
 
 ```bash
-pip install -r requirements.txt
+# macOS
+cd Desktop-Pet                 # 换成你的项目目录
+source .venv/bin/activate
+python app.py
+```
+
+```powershell
+# Windows PowerShell
+cd Desktop-Pet                 # 换成你的项目目录
+.venv\Scripts\Activate.ps1
 python app.py
 ```
 
