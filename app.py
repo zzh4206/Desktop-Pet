@@ -941,10 +941,28 @@ class PetApp:
         swe_registry = ToolRegistry()
         for schema, handler in build_swe_tools(env):
             swe_registry.register(schema, handler)
+        # v0.22 上下文管理：T1 观测瘦身 + T2 轨迹滚屏摘要（pet/swe_context）。
+        # 摘要闭包读 self._swe_client 属性（非捕获引用）——_switch_model 热换
+        # 后在飞任务的下一次压缩即用新客户端（与 set_client 语义一致）。
+        from pet.swe_context import (SWE_SUM_PROMPT, SWE_SUM_SYSTEM,
+                                     make_policy)
+        ccfg = swe_cfg.get("context", {}) or {}
+
+        def _summarize(transcript: str) -> str:
+            text, _tc, _usage = self._swe_client.query_once(
+                [{"role": "system", "content": SWE_SUM_SYSTEM},
+                 {"role": "user", "content": SWE_SUM_PROMPT + transcript}],
+                None)
+            return text or ""
+
         self._swe_agent = SweAgent(
             self._swe_client, swe_registry,
             step_limit=swe_cfg.get("step_limit", 10),
             wall_time_s=swe_cfg.get("wall_time_s", 0.0),
+            context_policy=make_policy(
+                ccfg,
+                summarize_fn=_summarize
+                if ccfg.get("summarize", True) else None),
         )
 
         def _run(instruction: str) -> dict:
