@@ -109,4 +109,10 @@
 # config.swe 段默认关（enabled/workspace_dir/step_limit/wall_time_s/
 # command_timeout_s/output_max_chars/no_network/block_patterns），步骤经
 # bridge.sweStep 流式回显进聊天面板（role="swe" 等宽终端块，不进 DS 历史）。
-__version__ = "0.21.0"
+# v0.22.0：mini-swe 上下文管理（pet/swe_context.py）——线性历史 token 治理：
+# T1 观测瘦身（keep_recent 外的 tool 消息头尾摘录，确定性零成本）+ T2 轨迹
+# 滚屏摘要（est token 超 budget_tokens → 最老一半可压步骤 LLM 压成单条
+# [此前步骤摘要]，失败回退 T1，fail-open）；压缩只影响喂 LLM 的 messages，
+# UI 步骤回显全量（摘要解耦哲学）；SweAgent(context_policy=) 注入，
+# config.swe.context 段（budget_tokens 默认 24000 可按模型窗口调整）。
+__version__ = "0.22.0"
