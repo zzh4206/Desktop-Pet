@@ -64,13 +64,16 @@ class SweAgent:
     def __init__(self, client, registry, *,
                  system_prompt: str = SWE_SYSTEM_PROMPT,
                  step_limit: int = 10, wall_time_s: float = 0.0,
-                 ctx=None) -> None:
+                 ctx=None, context_policy=None) -> None:
         self._client = client
         self._registry = registry
         self._system = system_prompt
         self._step_limit = int(step_limit) if step_limit and step_limit > 0 else 10
         self._wall_time_s = float(wall_time_s) if wall_time_s else 0.0
         self._ctx = ctx
+        # v0.22 上下文管理（pet/swe_context.py）：``messages -> (messages,
+        # info)`` 闭包；None = 不管理（线性历史原样，v0.21 行为）。
+        self._context_policy = context_policy
 
     def set_client(self, client) -> None:
         """运行时切换模型（app._switch_model）：换 swe 客户端。在飞任务已
@@ -139,6 +142,20 @@ class SweAgent:
                 messages.append({"role": "tool",
                                  "tool_call_id": tc_id, "content": content})
             last_text = text
+            # v0.22：本轮观测落定后、下一次 query 前应用上下文策略
+            # （T1 瘦身 / T2 滚屏摘要；只改喂 LLM 的 messages，UI 回显
+            # 已在上面全量发出）。策略自身异常不杀任务（fail-open）。
+            if self._context_policy is not None:
+                try:
+                    messages, cinfo = self._context_policy(messages)
+                    if cinfo.get("triggered"):
+                        log.info("[swe] 上下文压缩(%s): %d→%d est_tok（压 %d 步）",
+                                 cinfo.get("mode"), cinfo.get("before", -1),
+                                 cinfo.get("after", -1),
+                                 cinfo.get("compacted_steps", 0))
+                except Exception:
+                    log.warning("swe 上下文策略异常（保留原历史）",
+                                exc_info=True)
         return {"exit_status": "LimitsExceeded",
                 "submission": last_text or "（步数上限，未提交）",
                 "steps": n_calls}
