@@ -130,6 +130,12 @@ _SAFE_DEFAULTS: dict = {
             "slim_head_chars": 600, "slim_tail_chars": 1200,
             "summarize": True,
         },
+        # v0.22.1 swe.memory：跨任务本地记忆（pet/swe_memory.py）——任务
+        # 档案 .swe/history.jsonl + 相似召回注入 + NOTES.md 发现级记忆。
+        "memory": {
+            "enabled": True, "recall_k": 5, "recall_chars": 200,
+            "history_cap": 200, "notes": True, "notes_max_chars": 1000,
+        },
     },
 }
 
@@ -458,6 +464,22 @@ _SECTION_SCHEMAS: dict[str, dict] = {
                     "slim_tail_chars": {"type": "integer", "minimum": 0,
                                         "maximum": 50000},
                     "summarize": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            "memory": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "recall_k": {"type": "integer", "minimum": 1,
+                                 "maximum": 20},
+                    "recall_chars": {"type": "integer", "minimum": 20,
+                                     "maximum": 2000},
+                    "history_cap": {"type": "integer", "minimum": 1,
+                                    "maximum": 1000},
+                    "notes": {"type": "boolean"},
+                    "notes_max_chars": {"type": "integer", "minimum": 0,
+                                        "maximum": 10000},
                 },
                 "additionalProperties": False,
             },

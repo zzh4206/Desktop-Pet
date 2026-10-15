@@ -166,6 +166,14 @@
       "slim_head_chars": 600,
       "slim_tail_chars": 1200,
       "summarize": true
+    },
+    "memory": {
+      "enabled": true,
+      "recall_k": 5,
+      "recall_chars": 200,
+      "history_cap": 200,
+      "notes": true,
+      "notes_max_chars": 1000
     }
   }
 }
