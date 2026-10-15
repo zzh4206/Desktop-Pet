@@ -329,6 +329,7 @@ python -m compileall app.py pet
 | v0.20 | 模型管理：`pet/model_registry.py` 注册表 + `pet/ui/model_dialog.py` 对话框；托盘「切换模型 / 模型管理…」；`llm.selected` 记忆免启动弹选；运行时切换 `chat_bridge.swap_clients` + `proactive.set_client` 热换客户端。 |
 | v0.21 | mini-swe 集成（桌宠具备操纵 CLI 的能力）：聊天侧新增 `swe_task` 委托工具，把「操作终端 / 命令行」的请求交给软件工程助手——`pet/swe_env.py` 沙箱命令执行器 + `pet/swe_agent.py` 线性历史 agent 循环 + `pet/swe_tools.py` bash/submit 工具（只复用 mini-swe-agent 约百行核心，不加 litellm/pydantic 依赖，走现有 `OpenAICompatibleClient`）；安全三件套（沙箱工作区 + 白名单 + 危险确认，fail-closed）；`config.swe` 段默认关；执行步骤经 `bridge.sweStep` 流式回显进聊天面板（`role="swe"` 等宽终端块，不进 DS 历史）。 |
 | v0.22 | mini-swe 上下文管理（`pet/swe_context.py`）：线性历史 token 治理两层手段——T1 观测瘦身（`keep_recent` 外老步骤 tool 消息头尾摘录，确定性零成本）+ T2 轨迹滚屏摘要（估算 token 超 `budget_tokens` → 最老一半可压步骤 LLM 压成单条 `[此前步骤摘要]`，单条滚动不累积；失败/关闭回退 T1，fail-open 不杀任务）；压缩只影响喂 LLM 的 messages、UI 步骤回显全量（同 v0.17.1 摘要解耦哲学）；压缩单位为步骤对（assistant `tool_calls` 与 tool 消息按 `tool_call_id` 配对整对替换，杜绝孤儿 tool_call 400）；`SweAgent(context_policy=)` 注入，`config.swe.context` 段（`budget_tokens` 默认 24000 可按模型窗口调整，`summarize=false` 即 T1-only）。 |
+| v0.22.1 | mini-swe 本地任务记忆（`pet/swe_memory.py`）：跨任务「本地上下文」三件套——M1 任务档案（任务结束把 instruction/exit_status/submission 追加进工作区 `.swe/history.jsonl`，上限可配、坏行容错、本地明文可删）+ M2 相似召回注入（新任务起跑按 instruction 相似度取 top-k 历史记录拼进任务前缀；分词复用 `pet.memory._tokenize` 单一实现，平滑 IDF 加权 + 重合度 <0.2 视为零相关不注入 + 30 天近期加分）+ M3 NOTES.md 发现级记忆（system prompt 新增规则：旧记忆需命令验证后采信、值得跨任务保留的发现写入工作区 `NOTES.md`，任务起跑注入其头部）；归档只存原始 instruction（防记忆自噬膨胀）；`config.swe.memory` 段（`recall_k=5`/`recall_chars=200`/`history_cap=200`/`notes` 开关）。 |
 
 ## 参与贡献
 

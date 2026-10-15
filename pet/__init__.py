@@ -115,4 +115,10 @@
 # [此前步骤摘要]，失败回退 T1，fail-open）；压缩只影响喂 LLM 的 messages，
 # UI 步骤回显全量（摘要解耦哲学）；SweAgent(context_policy=) 注入，
 # config.swe.context 段（budget_tokens 默认 24000 可按模型窗口调整）。
-__version__ = "0.22.0"
+# v0.22.1：mini-swe 本地任务记忆（pet/swe_memory.py）——跨任务「本地上下文」：
+# 任务档案 .swe/history.jsonl（上限 history_cap 条，坏行容错）+ 新任务相似
+# 召回注入（复用 pet.memory._tokenize 单一实现，平滑 IDF + overlap<0.2 零相关
+# 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
+# prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
+# 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
+__version__ = "0.22.1"
