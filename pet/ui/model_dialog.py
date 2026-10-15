@@ -19,7 +19,8 @@ import logging
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTextBrowser,
+    QVBoxLayout,
 )
 
 from ..model_registry import entry_label, validate_entry
@@ -62,7 +63,7 @@ class ModelManagerDialog(QDialog):
                  on_commit, on_select, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("模型管理")
-        self.resize(560, 380)
+        self.resize(560, 430)
         # 对话框持有 providers 深拷贝编辑态；提交经 on_commit 交 app 落盘
         import copy
 
@@ -115,12 +116,19 @@ class ModelManagerDialog(QDialog):
         self._key_hint.setWordWrap(True)
         form.addRow("", self._key_hint)
         self._btn_ping = QPushButton("测试连接")
-        self._ping_label = QLabel("")
-        self._ping_label.setWordWrap(True)
+        # 测试结果独占整行（旧版与按钮挤同行、单行高，长错误被裁剪看不清）：
+        # 只读 QTextBrowser 高度贴合内容（一行=小框），超长封顶三行出滚动条
+        # ——QLabel 在 QFormLayout 里拿不到正确 height-for-width，换行文本
+        # 会被裁尾（offscreen 实测），故用 QTextBrowser + 自适应定高
+        self._ping_label = QTextBrowser()
+        self._ping_label.setReadOnly(True)
+        self._ping_label.setOpenExternalLinks(False)
+        self._ping_label.textChanged.connect(self._fit_ping_height)
         ping_row = QHBoxLayout()
         ping_row.addWidget(self._btn_ping)
-        ping_row.addWidget(self._ping_label, 1)
+        ping_row.addStretch(1)
         form.addRow("", ping_row)
+        form.addRow("", self._ping_label)
         btn_save = QPushButton("保存修改")
         right = QVBoxLayout()
         right.addWidget(form_box)
@@ -343,6 +351,20 @@ class ModelManagerDialog(QDialog):
         self._btn_ping.setEnabled(True)
         self._ping = None
         self._ping_label.setText(("✅ " if ok else "❌ ") + detail)
+
+    def _fit_ping_height(self) -> None:
+        """结果框高度贴合内容：一行文字=紧凑小框，超长封顶三行+滚动。
+
+        按 document 实际排版高度定 fixed height（documentMargin 已含在
+        doc.size 内）；上限 76px≈3 行，下限 28px≈单行输入框高度。"""
+        box = self._ping_label
+        h = int(box.document().size().height()) + 2 * box.frameWidth() + 2
+        box.setFixedHeight(min(max(h, 28), 76))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        # 窗口拖宽/收窄会改变换行数，重算结果框高度
+        super().resizeEvent(event)
+        self._fit_ping_height()
 
     def reject(self) -> None:  # noqa: D102 - 关闭时摘除在飞 ping 的 UI 回调
         if self._ping is not None and self._ping.isRunning():
