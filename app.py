@@ -965,6 +965,12 @@ class PetApp:
                 if ccfg.get("summarize", True) else None),
         )
 
+        # v0.22.1 本地任务记忆（pet/swe_memory）：起跑注入（相似召回 +
+        # NOTES.md 头部）/ 结束归档。归档存**原始 instruction**——compose
+        # 后文本含上次注入的前缀，回写会记忆自噬膨胀（D9 契约）。
+        from pet.swe_memory import TaskArchive, compose_task
+        mcfg = swe_cfg.get("memory", {}) or {}
+
         def _run(instruction: str) -> dict:
             bridge = getattr(self, "_chat_bridge", None)
 
@@ -975,7 +981,26 @@ class PetApp:
                     except RuntimeError:
                         pass  # bridge 已销毁（shutdown），丢弃步骤
 
-            return self._swe_agent.run(instruction, on_step=_emit)
+            task = instruction
+            try:
+                task = compose_task(instruction, env.workspace, mcfg)
+            except Exception:
+                self.logger.warning("swe 记忆装配失败（原样起跑）",
+                                    exc_info=True)
+            result = self._swe_agent.run(task, on_step=_emit)
+            if mcfg.get("enabled", True):
+                try:
+                    TaskArchive(
+                        env.workspace,
+                        history_cap=mcfg.get("history_cap", 200),
+                    ).append(instruction,
+                             result.get("exit_status", "Error"),
+                             result.get("submission", ""),
+                             steps=result.get("steps", 0))
+                except Exception:
+                    self.logger.warning("swe 任务留痕失败（不影响结果）",
+                                        exc_info=True)
+            return result
 
         registry.register(SWE_TASK_SCHEMA, SweTaskHandler(_run))
         self.logger.info("mini-swe 已装配（workspace=%s, step_limit=%s）",
