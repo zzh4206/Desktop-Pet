@@ -1626,8 +1626,8 @@ class PetApp:
         自动路径（全屏丢弃/来源标记沿用既有链）；FSM 事件走 fsm.handle_event
         （0.25.3 起有 focus_rest_on/off 分支）；DND 读 config.proactive.dnd
         （只静默提醒、节律照走，与吃鼠标「DND 立即吐出」相反，§9）；
-        idle_fn 供 break_enforce 计量（默认关，零输入抑制红线）、0.25.5 起再
-        注入 store/state_path（养成 + 重启重水化）。
+        idle_fn 供 break_enforce 计量（默认关，零输入抑制红线）；store +
+        state_path 供养成联动与重启续算（0.25.5；档案落 data_dir）。
         """
         cfg = self.cfg.get("focus") or {}
         if not cfg.get("enabled", True):
@@ -1645,7 +1645,6 @@ class PetApp:
                 fsm_event_fn=lambda ev: self.fsm.handle_event(ev),
                 sound_fn=lambda: self.sfx.play("focus"),
                 dnd_fn=lambda: bool(_pro.get("dnd", False)),
-                # 全屏中到点：只气泡不切 FSM 姿态（focus.py 内判，§4.1）
                 # 0.25.4 休息执法计量（仅 break_enforce=true 生效；默认关 =
                 # 零输入抑制红线，绝不碰 mouse_lock）：系统空闲 <2s 视为
                 # 「有键鼠活动」，累计 >10s 记一次打断（§9 拍板阈值）
@@ -1658,7 +1657,14 @@ class PetApp:
             return None
 
     def _toggle_focus(self) -> None:
+                # 全屏中到点：只气泡不切 FSM 姿态（focus.py 内判，§4.1）
         """托盘/热键/工具三入口共用的 toggle：非 IDLE → stop，IDLE → start。
+                # 0.25.5 统计养成：完成番茄 store.update(mood=+mood_gain) 走
+                # observer（托盘状态行自动刷新）；当日数/时长/打断数/连续天数
+                # 落 focus_state.json（data_dir，README 可删），重启续算
+                store=self.store,
+                state_path=os.path.join(self._paths["data_dir"],
+                                        "focus_state.json"),
 
         §4.3 反向互斥：吃鼠标中开番茄 → 先 force_spit（幂等，未吃时 no-op）
         再 start——用户显式意图优先。

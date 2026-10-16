@@ -121,7 +121,13 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.25.4"
+__version__ = "0.25.5"
+# v0.25.5：番茄统计与养成——app 注入 store（完成番茄 store.update(mood=
+# +mood_gain) 走 observer，托盘状态行自动刷新）+ state_path=data_dir/
+# focus_state.json（当日完成数/累计专注秒/打断数/连续天数，跨日归零、
+# streak_days 按当日有完成维护）；重启续算按 deadline 恢复进行中节律（5min
+# 宽限内且同日），恢复到 FOCUS 段时补发 focus_rest_on 陪伴姿态（全屏静默
+# 守卫照旧），IDLE/休息段不补发。
 # v0.25.4：番茄休息执法（可选，break_enforce 默认 false = 零输入抑制红线）
 # ——app 注入 idle_fn（系统空闲 <2s 视为有键鼠活动）；休息段开始 30s 窗口内
 # 活动累计每 10s 记一次 breaks_cut、累计 ≥20s 才温和气泡一次（§9 拍板），

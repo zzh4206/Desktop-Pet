@@ -453,6 +453,12 @@ class FocusSession:
                 self._completed_in_cycle = _int(
                     raw.get("completed_in_cycle"), 0, self._cycles)
                 _log.info("[番茄] 恢复进行中节律（%s）", phase)
+                # 0.25.5 重启续算：恢复成 FOCUS 中 → 补发陪伴姿态事件。构造期
+                # 没有「进入专注段」这一刻，不补发则重启后宠物不趴下（节律/
+                # 托盘/门禁都对，只有姿态漏）。_fsm_event 内含全屏守卫与异常
+                # 兜底，未注入 fsm_event_fn（纯逻辑测试）时为 no-op。
+                if self._state is FocusPhase.FOCUS:
+                    self._fsm_event("focus_rest_on")
             else:
                 self._state = FocusPhase.IDLE
                 self._deadline = None

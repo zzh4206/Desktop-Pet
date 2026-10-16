@@ -355,6 +355,7 @@ python -m compileall app.py pet
 
 欢迎通过 Issue 或 Pull Request 参与改进。提交前请尽量保持 macOS 与 Windows 的适配层一致，并运行与改动模块相关的 `spikes/` 验证脚本。
 | v0.25.4 | 番茄休息执法（可选，`focus.break_enforce` **默认 false = 零输入抑制红线**）：app 注入 `idle_fn`（系统空闲 <2s 视为有键鼠活动），休息段开始 30s 窗口内活动累计每 10s 记一次 `breaks_cut`、累计 ≥20s 才温和气泡一次（单次误触不提醒，§9 拍板阈值）；**不接 mouse_lock、不做任何输入抑制**。同版修：`FocusSession._emit` 文案池元组 → 随机取一条 `str`（旧版把整池交给 `bubble_fn`，与 `_auto_bubble/BubbleManager.show` 的 `text: str` 契约不符）。 |
+| v0.25.5 | 番茄统计与养成：app 注入 `store`（完成番茄 `store.update(mood=+mood_gain)` 走 observer，托盘状态行自动刷新）+ `state_path=data_dir/focus_state.json`（当日完成数/累计专注秒/打断数/连续天数，跨日归零、`streak_days` 按当日有完成维护）；**重启续算**——进行中节律按 deadline 恢复（5min 宽限内且同日），恢复到 FOCUS 段时补发 `focus_rest_on` 陪伴姿态（全屏静默守卫照旧），IDLE/休息段不补发。 |
 
 ## 许可证
 
