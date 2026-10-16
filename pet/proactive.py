@@ -210,6 +210,11 @@ class ProactiveScheduler:
         weather_alerts=None,
         state_path: str | None = None,   # 批次B/P2-6（REVIEW-2026-09-05）：
         #   问候/节日/follow-up/唤醒链持久化档案路径；None=不持久化（测试）
+        focus_fn=None,                   # v0.25.3 番茄线：callable() -> bool
+        #   番茄会话是否运行中（state != IDLE）。None / 异常 / 未挂载一律视为
+        #   非专注（§1 IDLE 惰性接管不变量：未开番茄时行为与旧版完全一致）。
+        #   门禁只作用于「新发起」的久坐提醒/吃鼠标/唤醒链，不打断已在进行的
+        #   吃鼠标（勿扰铁律4 的既有语义不变）。
     ) -> None:
         self._store = store
         self._bubble = bubble_fn
@@ -254,6 +259,9 @@ class ProactiveScheduler:
         self._weather_seen_at = 0.0          # 已评估过的 fetched_at
         self._weather_fired_day: date | None = None
         self._weather_fired: set = set()     # 当日已发 alert id
+
+        # v0.25.3 番茄线注入（互斥门禁；IDLE 恒放行，§1 不变量）
+        self._focus_fn = focus_fn
 
         # v0.7 平台注入
         self._mouse_lock = mouse_lock
@@ -423,6 +431,11 @@ class ProactiveScheduler:
             idle_s = self._idle()
         except Exception:
             _log.warning("[吃鼠标] idle_fn 异常，跳过", exc_info=True)
+        # v0.25.3 番茄互斥（§4.3）：专注运行中不吃鼠标（静默，不叠加气泡）；
+        # 已在进行的抑制不打断（勿扰铁律4 语义照旧）；IDLE 恒放行（§1）
+        if self._focus_active():
+            _log.info("[吃鼠标] 番茄专注运行中，跳过")
+            return sess
             idle_s = 0.0
         if idle_s < self._eat_idle_min * 60.0:
             return sess
@@ -638,6 +651,22 @@ class ProactiveScheduler:
         （用户正在聊天=在场），DND 仍在 _check_needs 内把守。返是否发了求助。"""
         return self._check_needs(self._now())
 
+    def _focus_active(self) -> bool:
+        """v0.25.3 番茄互斥探测：番茄会话运行中（state != IDLE）→ True。
+
+        fail-open：``focus_fn`` 未注入 / 抛异常 / 未挂载一律视为**非专注**——
+        IDLE 惰性接管不变量（§1）要求未开番茄时行为与旧版逐字一致，故此处
+        宁可放行也不静默。
+        """
+        fn = self._focus_fn
+        if fn is None:
+            return False
+        try:
+            return bool(fn())
+        except Exception:
+            _log.warning("[番茄] focus_fn 异常，按非专注放行", exc_info=True)
+            return False
+
     def _check_needs(self, now: float) -> bool:
         """F8 需求求助：任一数值 < 阈值 → 求助气泡（每需求独立冷却）。
 
@@ -747,6 +776,12 @@ class ProactiveScheduler:
             if quiet:
                 # 重排到 quiet 结束时刻（次日 end 点），链条不断
                 next_t = self._quiet_end_after(now)
+        # v0.25.3 番茄互斥（§4.3）：专注运行中静默链式唤醒节律提醒——顺延
+        # 10min（链不断，非丢弃）；IDLE 恒放行（§1 不变量）
+        if (self._next_wake_at is not None and now >= self._next_wake_at
+                and self._focus_active()):
+            self._next_wake_at = now + 600.0
+            _log.info("[主动] 番茄专注运行中，唤醒链顺延 10min")
                 self._next_wake_at = next_t
                 _log.info("[主动] 深夜唤醒顺延到 %s",
                           datetime.fromtimestamp(next_t).strftime("%m-%d %H:%M"))
@@ -784,7 +819,14 @@ class ProactiveScheduler:
         except Exception:
             _log.warning("[主动] idle_fn 异常，久坐检测跳过本轮", exc_info=True)
             idle_min = 0.0
-        if idle_min >= self._sedentary_min:
+        if self._focus_active():
+            # v0.25.3 番茄互斥（§4.3）：专注运行中静默久坐提醒 + 吃鼠标；
+            # 仍推进冷却记账（_last_sedentary_at=now），专注结束后不立刻
+            # 补发一条久坐提醒；IDLE 恒放行（§1 不变量）
+            self._sedentary_since = None
+            self._sedentary_count = 0
+            self._last_sedentary_at = now
+        elif idle_min >= self._sedentary_min:
             if self._sedentary_since is None:
                 self._sedentary_since = now
                 self._sedentary_count = 0

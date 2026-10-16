@@ -88,6 +88,12 @@ _PESTER = "pester"
 _PESTER_ARRIVE_PX = 10.0
 _PESTER_APPROACH_TIMEOUT_S = 5.0
 _PESTER_WINDOW_S = 30.0         # 待摸头窗口期（秒）
+# v0.25.3 番茄专注「陪伴」模式：用户专注段（FOCUS）中宠物趴下静姿态陪伴
+# （停 WANDER 目标 +
+# 冻结横移/物理）。与 _EAT_MOUSE/_PESTER 同款冻结语义——期间忽略 motion_mode
+# 切换、退出按存量恢复（批次D/L3 + L9/M4 教训）；零新立绘（呈现层按 idle
+# 静帧兜底，见 app._frame_tick）。
+_FOCUS_REST = "focus_rest"
 # follow 跟手（G7）：到达/再起步滞后带。到达阈值小（贴住光标），再起步
 # 阈值放宽到覆盖步态收步动量（刹车 0.4s 线性 + 收步前移，120–200 px/s
 # 下过冲 ~10 px）——过窄会在光标附近 WALK↔IDLE 高频翻转，方向一反就是
@@ -432,7 +438,8 @@ class BehaviorFSM:
 
     def handle_event(self, event: str) -> None:
         """v0.3：fullscreen_on/off（暂停/恢复 WANDER，空中/攀爬传送回底边中央）、
-        follow_toggle、motion_mode:<free|follow|edge>。v0.7：eat_mouse/eat_mouse_off。"""
+        follow_toggle、motion_mode:<free|follow|edge>。v0.7：eat_mouse/eat_mouse_off。
+        v0.24.2：pester/pester_off。v0.25.3：focus_rest_on/focus_rest_off。"""
         if event == "fullscreen_on":
             self._suppressed = True
             # 全屏中不可见：空中/攀爬态收敛到地面（维持"不往顶上走"）；
@@ -464,8 +471,8 @@ class BehaviorFSM:
             # edge 分支强置 _mode=IDLE 会让 FSM 与 EatMouseSession 的抑制态
             # 脱钩（锁还挂着、FSM 已回 idle）。菜单选中态由 app 回读
             # fsm.motion_mode 同步，忽略后不脱节
-            if self._mode in (_EAT_MOUSE, _EAT_APPROACH, _PESTER):
-                _log.info("[吃鼠标/纠缠] 期间忽略移动模式切换: %s", mode)
+            if self._mode in (_EAT_MOUSE, _EAT_APPROACH, _PESTER, _FOCUS_REST):
+                _log.info("[吃鼠标/纠缠/番茄陪伴] 期间忽略移动模式切换: %s", mode)
                 return
             self._motion_mode = mode
             self._follow = mode == "follow"
@@ -506,6 +513,23 @@ class BehaviorFSM:
                 self._mode = _IDLE
                 self._idle_left = self._new_idle()
                 self._pester_arrived = False
+                self._follow = self._motion_mode == "follow"
+        elif event == "focus_rest_on":
+            # v0.25.3 番茄专注：进陪伴态（用户专注段）——就地趴下（不收敛位置、不出
+            # WANDER/物理/攀爬），速度清零防残留惯性；_motion_mode 不动
+            # （focus_rest_off 按存量恢复跟随，同 eat_mouse_off 批次D/M4 教训）。
+            # 已在休息陪伴态则幂等（专注段→休息段连续发事件不重置位置）。
+            if self._mode != _FOCUS_REST:
+                self._mode = _FOCUS_REST
+                self._vx = self._vy = 0.0
+                self._stand_win = None
+                self._follow = False
+        elif event == "focus_rest_off":
+            # 专注段结束（进休息段）/停止番茄/跳过 → 回 idle（非此态 no-op）；按 motion_mode
+            # 恢复跟随（否则 UI 显示跟随而实际不动）
+            if self._mode == _FOCUS_REST:
+                self._mode = _IDLE
+                self._idle_left = self._new_idle()
                 self._follow = self._motion_mode == "follow"
 
     @property
@@ -655,6 +679,11 @@ class BehaviorFSM:
 
         if self._mode == _EAT_MOUSE:
             return Action(ActionType.EAT_MOUSE, {"pos": self._pos})
+
+        # v0.25.3 番茄陪伴：冻结横移/物理，就地静姿态（在边缘模式分支之前，
+        # 否则 edge 分支会强置 IDLE 把陪伴态打散，同吃鼠标 D/L3 教训）
+        if self._mode == _FOCUS_REST:
+            return self._step_focus_rest(dt)
 
         # 边缘模式不再游走/跟随/受重力影响；屏幕工作区变化时仍重新吸附最近边。
         # 拖拽可临时移动，松手后在下一 tick 回到边缘。
@@ -940,6 +969,16 @@ class BehaviorFSM:
             self._pos[0] + dx / dist * step,
             self._pos[1] + dy / dist * step,
         )
+        return Action(ActionType.MOVE_TO, {"pos": self._pos})
+
+    def _step_focus_rest(self, dt: float) -> Action:
+        """v0.25.3 番茄专注：陪伴段（用户 FOCUS 段）就地趴下（冻结模式，仿 EAT_MOUSE）。
+
+        不游走、不受重力、不攀爬、不吸附边缘——每拍返回原位的 MOVE_TO，
+        呈现层按 mode == "focus_rest" 落 idle 静帧（零新立绘）。位置由
+        ``focus_rest_on`` 时的现状定格（用户拖拽仍可挪动：DRAG 分支在
+        ``_step_once`` 更早处分流，松手后回到本分支继续冻结）。
+        """
         return Action(ActionType.MOVE_TO, {"pos": self._pos})
 
     def _step_air(self, dt: float) -> Action:

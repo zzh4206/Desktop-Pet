@@ -461,6 +461,12 @@ class PetApp:
             # 批次B/P2-6（REVIEW-2026-09-05）：问候/节日/follow-up/唤醒链
             # 持久化——旧版全内存，重启重发早晚安/节日、回访静默丢失
             state_path=os.path.join(paths["data_dir"], "proactive_state.json"),
+            # v0.25.3 番茄互斥（§4.3）：专注会话运行中静默久坐提醒/吃鼠标/
+            # 唤醒链（门禁只挡新发起，不打断已在进行的吃鼠标）；focus 未挂载
+            # /IDLE 恒 False → 行为与旧版逐字一致（§1 惰性接管不变量）
+            focus_fn=lambda: bool(
+                getattr(self, "_focus_session", None) is not None
+                and self._focus_session.active),
         )
         # v0.23 天气刷新：daemon 线程拉新（refresh_async 内部 TTL/退避把守，
         # 未到期立即返回）；快照消费走 _proactive.poll（30s）与 get_weather 工具
@@ -2402,7 +2408,7 @@ class PetApp:
     # ---- ADULT / FINAL 侧身行走（各阶段 locomotion 配置）----
     _LOCO_SPEED_CAP = 200.0     # px/s；跟随模式 600 px/s 限速到步行上限（方案 §8 决策 4 缺省）
     _LOCO_BREAK_MODES = ("fall", "thrown", "drag", "climb", "eat_approach",
-                         "eat_mouse", "pester")
+                         "eat_mouse", "pester", "focus_rest")
     # G7 跟手/边缘：意图按误差比例给速——远处贴上限、近处随距离减速，步态
     # 刹车（0.4s 线性）+ 收步前移的动量不再冲过目标（旧版恒速 120/200 到
     # 达，过冲 ~30-70px → follow 反向再起步 = 侧身⇄正面转身片段循环）。

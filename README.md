@@ -349,6 +349,7 @@ python -m compileall app.py pet
 | v0.25.0 | 番茄专注核心（`pet/focus.py`）：可选节律器 `FocusSession`（`IDLE→FOCUS→SHORT→LONG` 迁移链、`start/stop/skip/tick/on_dnd_active`、`active` 门禁、虚拟时钟 `now_fn` 注入、`focus_state.json` 原子写重水化、当日统计 + streak）；**IDLE 惰性接管不变量**——不 start 即零影响。 |
 | v0.25.1 | 番茄专注配置：`config.focus` 段（`enabled` 默认 true=入口可见但绝不自动运行、`work_min`/`short_min`/`long_min`/`cycles`/`break_enforce` 默认关/`mood_gain`）+ `hotkeys.focus`（mac ⌘⌥F / win Ctrl+Alt+F，id=3）；测试口径纠正为本地不入库，`focus.py` docstring 的「CI 单测」表述更正为「平台库-free + 本地单测」（本仓无 CI）。 |
 | v0.25.2 | 番茄专注入口：托盘「🍅 开始/停止番茄钟」动态项 + 全局热键 id=3（双平台 shim 注册、冲突沿用 `on_conflict` 改键气泡）+ `platform.start_hotkeys` 透传 `focus_key`/`on_focus` + app 装配 `FocusSession`（气泡/FSM 事件/DND/全屏注入 + 每拍 tick + 三入口收敛 toggle）+ ToolRegistry `start_pomodoro`/`stop_pomodoro`（无危险级）；`focus.enabled=false` 时托盘项与热键同步隐藏。 |
+| v0.25.3 | 番茄陪伴 + 互斥：`behavior.py` 增冻结模式 `_FOCUS_REST`（事件 `focus_rest_on/off`——停 WANDER/物理/攀爬、期间忽略 motion_mode 切换、退出按存量恢复，零新立绘走 idle 静帧）+ `app._LOCO_BREAK_MODES` 收编；`proactive.py` 注入 `focus_fn` 门禁（专注运行中静默久坐提醒/吃鼠标、链式唤醒顺延 10min；只挡新发起不打断已在进行的抑制，fail-open 且 IDLE 恒放行）；0.24 纠缠经既有 `_focus_state` duck-typing 自动静默。 |
 
 ## 参与贡献
 
