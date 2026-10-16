@@ -121,7 +121,17 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.25.3"
+__version__ = "0.24.3"
+# v0.24.3：主动纠缠「行为② 气泡撒娇」——pet/pester_lines.py（纯共享层，零平台库）：
+# 三级罐头池按纠缠阶段分档（low_attention 低陪伴度撒娇 / pat_failed 求摸头未遂 /
+# ignored 被无视委屈；语气逐级**收敛**，对齐退让铁律——委屈而非指责/升级）+
+# LLM 抽样 ≤1/3 **累计硬上限**（3 选 1 确定性节拍，非随机抖动，比例可日志核查）+
+# 隔离调用专用 system_override（鲸鱼娘撒娇人设：禁用猫狗式行为与真整蛊）——调用方
+# 以 tools_override=None 装配，本模块仅注入 llm_fn 故零依赖 + 失败/离线/坏返回一律
+# 回落罐头（拔网线不崩；失败不计入 LLM 用量，比例统计诚实）+ 「N 天没理我」事实注入
+# （days_since 由 RelationMemory.last_interact_at 算出——Anchor 审计：模型轨迹记忆
+# 仅 44.4% 接近随机不可靠，故事实由状态层给、模型只负责措辞；无记录不编造）+
+# config `attention.pester.lines` 逐类覆写。发射接线（_emit_bubble 限速管线）归 0.24.4。
 # v0.25.3：番茄陪伴 + 互斥——behavior.py 增冻结模式 _FOCUS_REST
 # （focus_rest_on/off 事件：停 WANDER/物理/攀爬、期间忽略 motion_mode 切换、
 # 退出按存量 _motion_mode 恢复，零新立绘走 idle 静帧）+ app._LOCO_BREAK_MODES
