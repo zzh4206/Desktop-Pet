@@ -121,7 +121,15 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.23.6"
+__version__ = "0.24.0"
+# v0.24.0：主动纠缠互动核心（pet/attention.py，wiki 设计-纠缠互动技术方案）——
+# attention 第四独立数值 + 纠缠触发决策纯逻辑引擎（零平台库，mac/win 同代码）：
+# Stage 分档衰减（YOUNG 4/ADULT 2.5/FINAL 1.5 每小时）+ 交互增益（摸头/逗一逗/
+# 聊天）+ 五重门 should_pester（静默→breakpoint 时机→focus 防御探测→阈值→
+# 退避→频控/日频）+ 被无视指数退避（300→1800→7200 封顶，退让而非升级铁律）
+# + 关系记忆 RelationMemory（昵称/摸头计数/last_interact_at，显式结构化）；
+# 单测 tests/test_attention.py 21 例全绿。数值本版存引擎内部，0.24.1 接
+# pet_state 持久化（migrate v1→v2 + _NUMERIC_FIELDS 加 attention）。
 # v0.23.0：天气感知与提醒（pet/weather.py，wiki 设计-天气感知与提醒 +
 # 设计-天气模块技术方案）——Open-Meteo 免 key 数据源（非商用条款 + CC BY
 # 4.0 署名，README「Powered by Open-Meteo」）；手动城市默认（city 留空=
