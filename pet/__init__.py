@@ -121,7 +121,20 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.25.7"
+__version__ = "0.24.5"
+# v0.24.5：主动纠缠「配置与开关」——config **三处同步**（_SECTION_SCHEMAS +
+# _SAFE_DEFAULTS + config.example.json；additionalProperties:False 陷阱见调查报告
+# 缺口 3，behaviors 用 enum 挡下拼错的行为名——写错的行为只会静默不触发）+ 托盘
+# 「安静模式」checkable QAction（整段仿 autostart/voice：blockSignals 防 setChecked
+# 回环，勾选写 ``attention.pester.enabled=false``）。**两道粒度不同的闸**：
+#   attention.enabled=false        = 整段陪伴系统总闸（不演化也不纠缠）
+#   attention.pester.enabled=false = 安静模式（**只 gate 行为**：attention 数值与
+#                                    关系记忆照常演化，故关掉再开是「接着算」）
+# 引擎侧 AttentionConfig.pester_enabled 即「门 0 总闸」；set_pester_enabled 用
+# dataclasses.replace 换 frozen cfg 的单字段以**保留全部运行时状态**（数值/连续
+# 被无视计数/退避截止/频控窗口/上次行为），托盘勾选因此即时生效且不重置进度。
+# 键位以技术方案 §6 的 pester.* 为准，同时回退兼容 0.24.0–0.24.4 的顶层写法；
+# save_pester_enabled 只写这一个键（对齐 save_voice_enabled 的「只动传入键」）。
 # v0.25.7：番茄线文档归位（**无代码改动**）——README「版本沿革」的 v0.25.4/.5/.6
 # 三行归位到表内（0.25.4 起误追加到文件末尾「参与贡献」之后，导致表内只到
 # v0.25.3），并补本行；pet/focus.py 与各接线文件与 0.25.6 逐字节一致。

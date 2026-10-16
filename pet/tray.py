@@ -51,6 +51,10 @@ class TrayManager(QObject):
         # v0.26 语音播报总开关（托盘勾选项 ↔ config.voice.tts.enabled）
         self._voice_state = False
         self._on_voice = None
+        # v0.24.5 主动纠缠「安静模式」（勾选 = 安静 = config.attention.pester.enabled
+        # 为 false）。托盘侧只说「安静」不做取反，换算留给 app——避免两处语义打架。
+        self._quiet_state = False
+        self._on_quiet = None
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
         # v0.19.2 F9：tooltip = 基础行（热键提示）+ 状态行（养成数值）合成；
@@ -87,6 +91,12 @@ class TrayManager(QObject):
         act_voice.setCheckable(True)
         act_voice.setChecked(self._voice_state)
         act_voice.toggled.connect(self._emit_voice)
+        # v0.24.5 安静模式（默认不勾）：勾上 → 零纠缠行为（只留久坐/天气/喝水等
+        # 功能性提醒）；attention 数值照常演化，故取消勾选能接着算而非重置。
+        self._act_quiet = act_quiet = menu.addAction("安静模式")
+        act_quiet.setCheckable(True)
+        act_quiet.setChecked(self._quiet_state)
+        act_quiet.toggled.connect(self._emit_quiet)
         # v0.7 强制吐出：吃鼠标期间鼠标被抑制点不到菜单，故此菜单主要服务于
         # 非锁定态的残留释放 + 键盘可达用户（Tab/方向键导航菜单）。主逃生口
         # 仍是热键 Cmd+Option+T + 看门狗。
@@ -204,6 +214,26 @@ class TrayManager(QObject):
     def _emit_voice(self, checked: bool) -> None:
         if self._on_voice:
             self._on_voice(checked)
+
+    def set_quiet_state(self, quiet: bool) -> None:
+        """v0.24.5：同步「安静模式」勾选态（app 启动/配置变更时调）。
+
+        ``quiet=True`` 即 attention.pester.enabled=false。blockSignals 防
+        setChecked 触发 toggled 回环回调（同自启 M9 教训）。
+        """
+        self._quiet_state = bool(quiet)
+        act = getattr(self, "_act_quiet", None)
+        if act is not None:
+            act.blockSignals(True)
+            act.setChecked(bool(quiet))
+            act.blockSignals(False)
+
+    def set_quiet_callback(self, cb) -> None:
+        self._on_quiet = cb
+
+    def _emit_quiet(self, checked: bool) -> None:
+        if self._on_quiet:
+            self._on_quiet(checked)
 
     def set_chat_callback(self, cb) -> None:
         """v0.4：托盘'聊天'唤出聊天面板（v0.11 真全局热键占位）。"""

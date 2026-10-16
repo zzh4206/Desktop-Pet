@@ -88,6 +88,34 @@
     "break_enforce": false,
     "mood_gain": 3
   },
+  "attention": {
+    "enabled": true,
+    "pester": {
+      "enabled": true,
+      "hourly_limit": 2,
+      "behaviors": [
+        "run_to_cursor",
+        "bubble_whine"
+      ]
+    },
+    "decay_per_hour": {
+      "YOUNG": 4.0,
+      "ADULT": 2.5,
+      "FINAL": 1.5
+    },
+    "gain": {
+      "pet": 40.0,
+      "poke": 25.0,
+      "chat": 30.0
+    },
+    "pester_threshold": 35.0,
+    "daily_limit": 3,
+    "backoff_s": [
+      300.0,
+      1800.0,
+      7200.0
+    ]
+  },
   "proactive": {
     "quiet_hours": [
       23,

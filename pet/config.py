@@ -113,6 +113,22 @@ _SAFE_DEFAULTS: dict = {
         "enabled": True, "work_min": 25, "short_min": 5, "long_min": 15,
         "cycles": 4, "break_enforce": False, "mood_gain": 3,
     },
+    # v0.24 主动纠缠（pet/attention.py + pet/pester_lines.py）：总段 enabled +
+    # 数值（Stage 分档衰减 / 交互增益）+ 阈值/频控/退避/行为池；``pester.lines``
+    # 为可选的罐头池逐类覆写（不在默认里，缺省即用内置池）。新段不动既有键
+    # 语义 → **无需提 CONFIG_VERSION**（技术方案 §6）。
+    "attention": {
+        "enabled": True,
+        "pester": {
+            "enabled": True, "hourly_limit": 2,
+            "behaviors": ["run_to_cursor", "bubble_whine"],
+        },
+        "decay_per_hour": {"YOUNG": 4.0, "ADULT": 2.5, "FINAL": 1.5},
+        "gain": {"pet": 40.0, "poke": 25.0, "chat": 30.0},
+        "pester_threshold": 35.0,
+        "daily_limit": 3,
+        "backoff_s": [300.0, 1800.0, 7200.0],
+    },
     # v0.16 风通道：实时风力 → 立绘静止摆幅（Open-Meteo 免 key + 兜底）
     "wind": {
         "enabled": False, "poll_minutes": 20, "fallback_gain": 1.0,
@@ -439,6 +455,62 @@ _SECTION_SCHEMAS: dict[str, dict] = {
                      "cycles", "break_enforce", "mood_gain"],
         "additionalProperties": False,
     },
+    # v0.24 主动纠缠（技术方案 §6）：``pester.enabled`` 即托盘「安静模式」，
+    # False → should_pester 恒 None（attention 数值照常演化，只 gate 行为）；
+    # 上下限即 attention.py 二次钳制上界。**additionalProperties:False 陷阱**
+    # （调查报告缺口 3）：本段任何新键都必须三处同步，否则整段被回退+告警。
+    "attention": {
+        "type": "object",
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "pester_threshold": {"type": "number", "minimum": 0, "maximum": 100},
+            "daily_limit": {"type": "integer", "minimum": 0, "maximum": 50},
+            "backoff_s": {
+                "type": "array", "minItems": 1, "maxItems": 8,
+                "items": {"type": "number", "minimum": 0, "maximum": 86400},
+            },
+            "decay_per_hour": {
+                "type": "object",
+                "properties": {
+                    "YOUNG": {"type": "number", "minimum": 0, "maximum": 100},
+                    "ADULT": {"type": "number", "minimum": 0, "maximum": 100},
+                    "FINAL": {"type": "number", "minimum": 0, "maximum": 100},
+                },
+                "required": ["YOUNG", "ADULT", "FINAL"],
+                "additionalProperties": False,
+            },
+            "gain": {
+                "type": "object",
+                "properties": {
+                    "pet": {"type": "number", "minimum": 0, "maximum": 100},
+                    "poke": {"type": "number", "minimum": 0, "maximum": 100},
+                    "chat": {"type": "number", "minimum": 0, "maximum": 100},
+                },
+                "required": ["pet", "poke", "chat"],
+                "additionalProperties": False,
+            },
+            "pester": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "hourly_limit": {"type": "integer", "minimum": 0, "maximum": 20},
+                    # 行为池用 enum：写错的行为名在引擎里只会静默不触发，
+                    # 故在校验层挡下（代价是拼错 → 整段回退默认 + WARNING）
+                    "behaviors": {
+                        "type": "array", "minItems": 1, "maxItems": 4,
+                        "items": {"type": "string",
+                                  "enum": ["run_to_cursor", "bubble_whine"]},
+                    },
+                    "lines": {"type": "object"},   # 三级罐头池逐类覆写
+                },
+                "required": ["enabled", "hourly_limit", "behaviors"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["enabled", "pester", "decay_per_hour", "gain",
+                     "pester_threshold", "daily_limit", "backoff_s"],
+        "additionalProperties": False,
+    },
     "llm": {
         "type": "object",
         "properties": {
@@ -727,3 +799,45 @@ def save_voice_enabled(config_path: str, enabled: bool) -> dict:
         log.warning("[语音] 开关写入失败", exc_info=True)
         return {}
     return tts
+
+
+def save_pester_enabled(config_path: str, enabled: bool) -> dict:
+    """v0.24.5：把 ``attention.pester.enabled`` 写回用户 config（原子替换）。
+
+    托盘「安静模式」用。只动这一个键，attention 其余键（含 pester 子段内
+    其他键、罐头池 ``lines``）原样保留——对齐 ``save_voice_enabled`` /
+    ``save_weather_location`` 的「只动传入键」语义。返回写入后的 pester
+    子段；读/写失败返 {}（调用方只记日志，本次会话仍按内存开关生效）。
+    """
+    import json as _json
+
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+    except (OSError, ValueError):
+        log.warning("[纠缠] 用户 config 读取失败，安静模式未写入", exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    a = raw.get("attention")
+    if not isinstance(a, dict):
+        a = {}
+    pester = a.get("pester")
+    if not isinstance(pester, dict):
+        pester = {}
+    pester["enabled"] = bool(enabled)
+    a["pester"] = pester
+    raw["attention"] = a
+    tmp = config_path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(raw, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, config_path)
+    except (OSError, ValueError):
+        log.warning("[纠缠] 安静模式写入失败", exc_info=True)
+        return {}
+    return pester

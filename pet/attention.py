@@ -48,6 +48,9 @@ class AttentionConfig:
     daily_limit: int = 3             # 日频：最近 24 小时上限
     backoff_s: tuple = (300.0, 1800.0, 7200.0)  # 退避阶梯（秒）：连续被无视第 1/2/3+ 次
     behaviors: tuple = ("run_to_cursor", "bubble_whine")  # 纠缠行为池
+    pester_enabled: bool = True      # v0.24.5 托盘「安静模式」总闸（config
+    #   ``attention.pester.enabled``）：False → ``should_pester`` 恒 None，
+    #   但 decay/gain 照常演化（数值不被 gate，只 gate 行为——技术方案 §6 验收）
 
 
 @dataclass(frozen=True)
@@ -166,12 +169,33 @@ class AttentionEngine:
             return False
 
     # ---- 纠缠触发 ----
+    def set_pester_enabled(self, enabled: bool) -> None:
+        """v0.24.5：运行时切换「安静模式」（托盘勾选即时生效）。
+
+        用 ``dataclasses.replace`` 换掉 frozen cfg 的单个字段——**保留全部
+        运行时状态**（attention 数值 / 连续被无视计数 / 退避截止 / 频控窗口
+        / 上次行为），故关掉再打开是「接着算」而不是回到出厂值。这正是不
+        重建引擎的理由。
+        """
+        from dataclasses import replace
+
+        self._cfg = replace(self._cfg, pester_enabled=bool(enabled))
+
     def should_pester(
         self, now: float | None = None, ctx: PesterContext | None = None,
     ) -> PesterDecision | None:
-        """五重门判定；任一不过返回 None。命中则选行为并记录触发时间。"""
+        """五重门判定；任一不过返回 None。命中则选行为并记录触发时间。
+
+        v0.24.5：**门 0 总闸**（托盘「安静模式」）——``pester_enabled=False``
+        恒 None。注意此闸**只挡行为**：``apply_decay``/``on_interaction``
+        照常演化 attention 与关系记忆，故关掉后重开能接着算（不是回到
+        出厂值）。
+        """
         now = self._now(now)
         ctx = ctx or PesterContext()
+        # 0 总闸（安静模式）
+        if not self._cfg.pester_enabled:
+            return None
         # 1 静默门
         if ctx.fullscreen or ctx.dnd or ctx.focus or ctx.active_video:
             return None

@@ -410,6 +410,14 @@ class PetApp:
         from pet.attention import AttentionConfig, AttentionEngine
 
         _att = self.cfg.get("attention") or {}
+        _pester_cfg = _att.get("pester") if isinstance(_att.get("pester"), dict) else {}
+        # v0.24.5 两道闸（技术方案 §6）：
+        #   attention.enabled      = 整段陪伴系统总闸（False → 不演化也不纠缠）
+        #   attention.pester.enabled = 托盘「安静模式」（False → 只 gate 行为，
+        #                              attention 数值照常演化，取消后接着算）
+        # 键位以 §6 的 pester.* 为准，同时回退兼容 0.24.0–0.24.4 的顶层写法。
+        self._attention_master = bool(_att.get("enabled", True))
+        _pester_on = bool(_pester_cfg.get("enabled", True))
         self._attention_engine = AttentionEngine(
             cfg=AttentionConfig(
                 decay_per_hour=dict(_att.get("decay_per_hour") or {
@@ -419,11 +427,14 @@ class PetApp:
                     "pet": 40.0, "poke": 25.0, "chat": 30.0,
                 }),
                 pester_threshold=float(_att.get("pester_threshold", 35.0)),
-                hourly_limit=int(_att.get("hourly_limit", 2)),
+                hourly_limit=int(_pester_cfg.get(
+                    "hourly_limit", _att.get("hourly_limit", 2))),
                 daily_limit=int(_att.get("daily_limit", 3)),
                 backoff_s=tuple(_att.get("backoff_s") or (300.0, 1800.0, 7200.0)),
-                behaviors=tuple(_att.get("behaviors") or
-                                ("run_to_cursor", "bubble_whine")),
+                behaviors=tuple(_pester_cfg.get("behaviors")
+                                or _att.get("behaviors")
+                                or ("run_to_cursor", "bubble_whine")),
+                pester_enabled=(self._attention_master and _pester_on),
             ),
             attention=self.store.get().attention,
             focus_state_fn=self._focus_state,
@@ -436,8 +447,9 @@ class PetApp:
         from pet.pester_lines import PesterVoice
 
         self._pester_voice = PesterVoice(
-            (_att.get("pester") or {}).get("lines")
-            if isinstance(_att.get("pester"), dict) else None,
+            _pester_cfg.get("lines") if isinstance(_pester_cfg.get("lines"), dict)
+            else (_att.get("lines") if isinstance(_att.get("lines"), dict)
+                  else None),
             llm_fn=self._pester_llm_fetch)
 
         proactive_cfg = self.cfg.get("proactive", {})
@@ -518,6 +530,14 @@ class PetApp:
         # v0.11 托盘自启切换
         self.tray.set_autostart_callback(self._toggle_autostart)
         self.tray.set_autostart_state(self.adapter.is_autostart_enabled())
+        # v0.24.5 托盘「安静模式」↔ attention.pester.enabled。托盘侧只传「安静」
+        # 语义，取反与写盘收在 _on_quiet_toggled 一处（避免语义两处打架）。
+        try:
+            self.tray.set_quiet_callback(self._on_quiet_toggled)
+            self.tray.set_quiet_state(
+                not bool(getattr(self._attention_engine._cfg, "pester_enabled", True)))
+        except Exception:
+            self.logger.warning("安静模式托盘开关挂载失败", exc_info=True)
 
         # save：debounce（变更后 500ms）+ 定时 30s + shutdown
         self._save_timer = QTimer(self.app)
@@ -924,6 +944,30 @@ class PetApp:
         except Exception:
             self.logger.warning("语音开关写回 config 失败", exc_info=True)
         self.logger.info("语音播报%s", "已启用" if enabled else "已关闭")
+
+    def _on_quiet_toggled(self, quiet: bool) -> None:
+        """托盘「安静模式」勾选：即时 gate 纠缠行为 + 写回 config（v0.24.5）。
+
+        即时生效 = 换在跑引擎的 cfg 单字段（``dataclasses.replace``，运行时
+        状态全保留：attention 数值/退避/频控窗口都在，故取消勾选是「接着算」
+        而非重置出厂值）；写回失败只记日志（本次会话仍生效）。
+        注意本开关**只挡行为**——attention 数值与关系记忆照常演化，这正是
+        技术方案 §6 的验收口径。与 attention.enabled（整段总闸，连演化一起停）
+        是两个不同粒度的闸。
+        """
+        enabled = not bool(quiet)
+        try:
+            self._attention_engine.set_pester_enabled(enabled)
+        except Exception:
+            self.logger.warning("安静模式即时生效失败", exc_info=True)
+        try:
+            from pet.config import save_pester_enabled
+
+            save_pester_enabled(self._paths["config_path"], enabled)
+        except Exception:
+            self.logger.warning("安静模式写回 config 失败", exc_info=True)
+        self.logger.info("主动纠缠%s",
+                         "已恢复" if enabled else "已安静（只留功能性提醒）")
 
     def _on_state_for_tray(self, state) -> None:
         """F9：PetState → 托盘状态行 + 触线红点（永不外抛，坏了只丢状态行）。
@@ -2251,11 +2295,14 @@ class PetApp:
         # v0.24.2 attention 衰减（独立于 needs 三值：速率按 Stage 分档，表在
         # AttentionConfig.decay_per_hour）。0.24.0 起引擎持运行时值，此处回写
         # PetState（托盘状态行 + 持久化载体）。
-        try:
-            self._attention_engine.apply_decay(self.store.get().stage)
-            self._sync_attention(0.1)   # 0.1 粒度：防每秒 notify→存盘抖动（H1 同款）
-        except Exception:
-            self.logger.warning("attention 衰减回写失败", exc_info=True)
+        # v0.24.5：attention.enabled=false（整段陪伴系统总闸）→ 不演化也不回写
+        # （与「安静模式」区分：后者只 gate 行为，数值照常演化）。
+        if getattr(self, "_attention_master", True):
+            try:
+                self._attention_engine.apply_decay(self.store.get().stage)
+                self._sync_attention(0.1)   # 0.1 粒度：防每秒 notify→存盘抖动（H1 同款）
+            except Exception:
+                self.logger.warning("attention 衰减回写失败", exc_info=True)
         # 循环 check_evolve 补齐离线多阶进化（旧版只调一次漏多阶，A6）
         while True:
             event = self.store.check_evolve(
