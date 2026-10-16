@@ -121,7 +121,14 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.26.2"
+__version__ = "0.26.3"
+# v0.26.3：语音线接线（app.py/tray.py/bubble.py/ui/chat_bridge.py，config.py
+# 加 save_voice_enabled）——两路来源分流：气泡 on_show 回带 source
+# （proactive=自动路径 _auto_bubble / system=用户主动路径直调），聊天回复走
+# chat_bridge.on_reply_done（聊天面板不走气泡，调查 F1，故必须单独挂钩）；
+# VoiceService 装配（配置快照 + 平台注入位 get_asset_player/get_tts_engine）；
+# 托盘「语音播报」开关（即时生效 + 写回 config，blockSignals 防回环）；
+# 静态台词→罐头 key 精确映射表（动态 f-string/随机池刻意不映射，回落系统 TTS）。
 # v0.26.2：语音配置段——config 增 voice 段（proactive_speak/dedup_sec/
 # asset_root + tts 子段 enabled/provider/voice/rate/speak_chat/quiet_hours，
 # 全部默认关，对齐 sound 先例）+ _SECTION_SCHEMAS 增 voice 校验（provider

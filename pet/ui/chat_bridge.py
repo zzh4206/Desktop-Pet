@@ -164,6 +164,9 @@ class ChatBridge(QAbstractListModel):
         # v0.17.6 多 worker：列表化
         self._dying: list = []
         self.on_user_message = None  # v0.6 可选钩子：app 侧 follow-up 启发式
+        # v0.26 语音线：可选钩子 callable(text)——聊天回复整段完成时触发
+        # （TTS 订阅点）。None=未注入，零行为变化；降级回复（failed）同触发。
+        self.on_reply_done = None
         self._offline = False
         self._pet_avatar = ""  # 对方头像 file:// URL；空=未注入（QML 回退 🐱）
         # v0.21：swe 步骤信号 → 主线程追加终端块消息（跨线程 queued 派发）
@@ -584,8 +587,22 @@ class ChatBridge(QAbstractListModel):
             self.sessionListChanged.emit()
         self._clear_stream(sid)
         self._store.save()
+        # v0.26 语音线：整段回复完成 → 通知订阅方朗读（只增不改，None 时空转）
+        self._emit_reply_done(final_text)
         # H4 修：轮次完成后异步触发滚屏摘要（旧版在 send 前 同步做）
         self._maybe_summarize(session)
+
+    def _emit_reply_done(self, text: str) -> None:
+        """v0.26：把整段回复文本交给订阅方（语音播报）。
+
+        空文本不触发；回调故障只记日志——聊天主路径绝不因朗读层被拖垮。"""
+        cb = self.on_reply_done
+        if cb is None or not text:
+            return
+        try:
+            cb(text)
+        except Exception:
+            log.warning("[语音] 聊天回复朗读回调失败", exc_info=True)
 
     @Slot()
     def _on_dying_finished(self) -> None:

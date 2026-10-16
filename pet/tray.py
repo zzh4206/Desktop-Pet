@@ -24,6 +24,9 @@ class TrayManager(QObject):
         self._on_status = None
         self._autostart_state = False
         self._on_autostart = None  # v0.11 自启切换回调（L14 修：注释原误标"强制吐出"）
+        # v0.26 语音播报总开关（托盘勾选项 ↔ config.voice.tts.enabled）
+        self._voice_state = False
+        self._on_voice = None
         self._tray = QSystemTrayIcon(self._make_icon(), parent)
         self._tray.setToolTip("桌宠")
         # v0.19.2 F9：tooltip = 基础行（热键提示）+ 状态行（养成数值）合成；
@@ -54,6 +57,11 @@ class TrayManager(QObject):
         act_mem.triggered.connect(self._emit_mem)
         act_emotion.triggered.connect(self._emit_chat_emotion)
         act_status.triggered.connect(self._emit_status)
+        # v0.26 语音播报总开关（opt-in，默认关）：勾选即写回 config 并即时生效
+        self._act_voice = act_voice = menu.addAction("语音播报")
+        act_voice.setCheckable(True)
+        act_voice.setChecked(self._voice_state)
+        act_voice.toggled.connect(self._emit_voice)
         # v0.7 强制吐出：吃鼠标期间鼠标被抑制点不到菜单，故此菜单主要服务于
         # 非锁定态的残留释放 + 键盘可达用户（Tab/方向键导航菜单）。主逃生口
         # 仍是热键 Cmd+Option+T + 看门狗。
@@ -134,6 +142,25 @@ class TrayManager(QObject):
     def _emit_status(self) -> None:
         if self._on_status:
             self._on_status()
+
+    def set_voice_state(self, enabled: bool) -> None:
+        """v0.26：同步语音开关勾选态（app 启动/配置变更时调）。
+
+        blockSignals 防 setChecked 触发 toggled 回环回调（同自启 M9 教训）。
+        """
+        self._voice_state = bool(enabled)
+        act = getattr(self, "_act_voice", None)
+        if act is not None:
+            act.blockSignals(True)
+            act.setChecked(bool(enabled))
+            act.blockSignals(False)
+
+    def set_voice_callback(self, cb) -> None:
+        self._on_voice = cb
+
+    def _emit_voice(self, checked: bool) -> None:
+        if self._on_voice:
+            self._on_voice(checked)
 
     def set_chat_callback(self, cb) -> None:
         """v0.4：托盘'聊天'唤出聊天面板（v0.11 真全局热键占位）。"""

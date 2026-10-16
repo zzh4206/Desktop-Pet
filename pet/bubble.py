@@ -6,12 +6,15 @@ v0.1 骨架：能 ``show(text)`` 显示文字。v0.2 起接养成 / 主动关怀
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtCore import QPoint
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+log = logging.getLogger("pet")
 
 
 class BubbleType(Enum):
@@ -58,6 +61,9 @@ class BubbleWidget(QWidget):
         self._timer.timeout.connect(self.hide)
         self.resize(self._max_width, 56)
         self._anchor: tuple | None = None  # (cx, pet_bottom_y, pet_height)
+        # v0.26 语音线：气泡显示订阅点（TTS 挂此）。callable(text, kind,
+        # source)；None=未注入，零行为变化。
+        self.on_show = None
 
     def show(
         self,
@@ -65,12 +71,18 @@ class BubbleWidget(QWidget):
         kind: BubbleType = BubbleType.INFO,
         duration_ms: int = 5000,
         anchor: tuple | None = None,
+        *,
+        source: str = "system",
     ) -> None:
         """anchor=(cx, 宠物bottom_y, 宠物height)：气泡挂宠物头顶 20px，
         靠屏幕顶自动翻到宠物下方（§2.4）。None 时回退工作区顶部居中。
 
         到点自动隐藏；WARNING 用更长 duration（8s）但不永久停留——仍可点击
-        提前关闭。INFO/CHAT 用传入 duration（默认 5s）。"""
+        提前关闭。INFO/CHAT 用传入 duration（默认 5s）。
+
+        v0.26：source 标注调用来源——``"proactive"`` 为自动/主动路径
+        （app._auto_bubble 显式传入），``"system"`` 为用户主动路径（托盘/
+        设置反馈等直调）。语音播报据此分流（主动气泡走 proactive 开关）。"""
         self._kind = kind
         self._label.setText(text)
         # B4：WARNING 用黄底/边框样式区分，其余（INFO/CHAT）用默认深底样式
@@ -84,6 +96,21 @@ class BubbleWidget(QWidget):
         self.raise_()
         # WARNING 不再永久停留：8s 兜底自动隐藏（点击仍可提前关）。
         self._timer.start(8000 if kind == BubbleType.WARNING else duration_ms)
+        self._notify_shown(text, kind, source)
+
+    def _notify_shown(self, text: str, kind: BubbleType,
+                      source: str) -> None:
+        """v0.26：把「气泡已显示」通知订阅方（语音播报）。
+
+        气泡显示是主路径，回调故障绝不能拖垮它——异常只记日志后吞掉
+        （对齐 sound.py 的静默降级哲学）。"""
+        cb = self.on_show
+        if cb is None:
+            return
+        try:
+            cb(text, kind, source)
+        except Exception:
+            log.warning("[语音] 气泡显示回调失败", exc_info=True)
 
     def hide(self) -> None:
         super().hide()

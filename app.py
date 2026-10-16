@@ -369,6 +369,11 @@ class PetApp:
             self.logger.exception(
                 "聊天初始化失败（key/tool/QML），宠物本体继续运行")
 
+        # v0.26 语音线：装配语音服务（默认关，托盘可开）。必须在 _setup_chat
+        # 之后——要拿到 chat_bridge 才能挂「回复朗读」回调（气泡回调只覆盖
+        # 主动/系统气泡，聊天走面板不走气泡，调查 F1）。
+        self._setup_voice()
+
         # v0.18.19 3D 装配时序：必须在所有 2D QML singleton 注册与 engine
         # 创建（_setup_chat→_build_chat_panel）**之后**——3D 的 QQuickView 若
         # 成为进程首个活跃 engine，PySide6 6.10 下后续注册的类型/singleton
@@ -725,7 +730,130 @@ class PetApp:
             return
         self.bubble.show(text, kind=kind, duration_ms=duration_ms,
                          anchor=anchor if anchor is not None
-                         else self._pet_anchor())
+                         else self._pet_anchor(),
+                         source="proactive")
+
+    # ---- v0.26 语音线（共享层 pet/voice.py + 平台注入位 get_asset_player/
+    # get_tts_engine）----
+    # 接线取舍：气泡是「主动/系统提示」的唯一咽喉（bubble.show），聊天回复
+    # 不走气泡（调查 F1）——故两条来源各挂一处回调，互不覆盖:
+    #   • 气泡 on_show → source="proactive"（_auto_bubble 自动路径）或
+    #     "system"（用户主动路径：托盘/右键/设置反馈）
+    #   • chat_bridge.on_reply_done → source="chat"
+    # 门禁与静默降级全部收口在 voice.py（平台库-free），本层只做路由+持久化。
+    _VOICE_TEXT_KEYS = {
+        # 只映射**静态**台词；含 f-string/随机池的气泡（切换模型/进化/久坐
+        # 轮换话题）刻意不映射——按文本猜 key 会静默放错音，宁可回落动态 TTS
+        # （与 voice.py「只认显式 key」同一取舍）。
+        "我醒啦～": "pet_wake",
+        "还没设置 API key，聊天暂时不可用～（托盘“模型管理…”可接入模型）":
+            "llm_no_key",
+        "还没设置 API key，聊天暂不可用～": "llm_no_key",
+        "没管住鼠标（权限或系统拒绝），先气泡提醒～": "eat_mouse",
+        "早上好呀～新的一天元气满满！": "greet_morning",
+        "夜深了，早点休息哦～": "greet_night",
+        "生日快乐！🎂 今天你最大～": "greet_birthday",
+    }
+
+    def _setup_voice(self) -> None:
+        """v0.26 语音装配：配置快照 + 平台注入位 + 托盘开关（默认关）。
+
+        全程不抛：平台注入/构造失败一律 None → VoiceService 静默降级
+        （win 无实装时同一份代码照跑，只是不出声）。
+        """
+        try:
+            from pet.voice import VoiceSettings, VoiceService
+
+            root = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "assets", "voice")
+            settings = VoiceSettings.from_config(self.cfg, default_root=root)
+            self._voice = VoiceService(
+                settings,
+                asset_player=self.adapter.get_asset_player(),
+                tts_engine=self.adapter.get_tts_engine(
+                    voice=settings.voice, rate=settings.rate),
+                asset_root=settings.asset_root or root,
+            )
+        except Exception:
+            self.logger.warning("语音服务装配失败，静默降级", exc_info=True)
+            self._voice = None
+            return
+        self._attach_voice_hooks()
+        try:
+            self.tray.set_voice_callback(self._on_voice_toggled)
+            self.tray.set_voice_state(self._voice.settings.enabled)
+        except Exception:
+            self.logger.warning("语音托盘开关挂载失败", exc_info=True)
+        if self._voice.settings.enabled:
+            self.logger.info(
+                "语音播报已启用（provider=%s，主动朗读=%s，聊天朗读=%s）",
+                self._voice.settings.provider,
+                self._voice.settings.proactive_speak,
+                self._voice.settings.speak_chat)
+
+    def _attach_voice_hooks(self) -> None:
+        """把语音回调挂到当前气泡/聊天桥上（幂等）。
+
+        聊天面板重建（_build_chat_panel）会换新的 ChatBridge，故每次重建后
+        都要重挂；服务未装配时静默跳过。
+        """
+        if getattr(self, "_voice", None) is None:
+            return
+        try:
+            if getattr(self, "bubble", None) is not None:
+                self.bubble.on_show = self._on_bubble_shown
+            if getattr(self, "_chat_bridge", None) is not None:
+                self._chat_bridge.on_reply_done = self._on_reply_done
+        except Exception:
+            self.logger.warning("语音回调挂载失败", exc_info=True)
+
+    def _voice_key_for_text(self, text: str) -> str | None:
+        """静态台词 → 罐头 key；未命中返 None（回落动态 TTS）。"""
+        try:
+            from pet.voice import normalize_text
+
+            return self._VOICE_TEXT_KEYS.get(normalize_text(text or ""))
+        except Exception:
+            return None
+
+    def _on_bubble_shown(self, text: str, kind=None,
+                         source: str = "system") -> None:
+        """气泡显示 → 语音播报（v0.26）。"""
+        svc = getattr(self, "_voice", None)
+        if svc is None:
+            return
+        svc.speak(text, source="proactive" if source == "proactive"
+                  else "system", key=self._voice_key_for_text(text))
+
+    def _on_reply_done(self, text: str) -> None:
+        """聊天回复完成 → 朗读（v0.26；聊天不走气泡，故单独挂钩）。"""
+        svc = getattr(self, "_voice", None)
+        if svc is None:
+            return
+        svc.speak(text, source="chat")
+
+    def _on_voice_toggled(self, enabled: bool) -> None:
+        """托盘「语音播报」勾选：即时生效 + 写回 config（v0.26）。
+
+        即时生效 = 直接改在跑的 settings（无需重建服务）；写回失败只记日志
+        （本次会话仍生效，只是下次启动回默认）。
+        """
+        svc = getattr(self, "_voice", None)
+        if svc is None:
+            return
+        try:
+            svc.settings.enabled = bool(enabled)
+            if not enabled:
+                svc.stop()   # 关闭即打断在播语音，符合直觉
+        except Exception:
+            self.logger.warning("语音开关即时生效失败", exc_info=True)
+        try:
+            from pet.config import save_voice_enabled
+
+            save_voice_enabled(self._paths["config_path"], enabled)
+        except Exception:
+            self.logger.warning("语音开关写回 config 失败", exc_info=True)
+        self.logger.info("语音播报%s", "已启用" if enabled else "已关闭")
 
     def _on_state_for_tray(self, state) -> None:
         """F9：PetState → 托盘状态行 + 触线红点（永不外抛，坏了只丢状态行）。
@@ -1195,6 +1323,8 @@ class PetApp:
             self._chat_bridge.on_user_message = self._on_user_message
         # 聊天面板"对方"头像 = 当前宠物立绘（首帧同步；后续经 on_change 更新）
         self._sync_chat_avatar()
+        # v0.26 语音线：面板重建会换新的 ChatBridge，回复朗读回调需重挂（幂等）
+        self._attach_voice_hooks()
 
     def _make_tool_context(self) -> ToolContext:
         """按需取当前 state 作为工具上下文（v0.4 工具不真用 state）。"""

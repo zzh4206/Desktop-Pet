@@ -657,3 +657,44 @@ def load_config(config_path: str) -> dict:
             return _validate_sections(cfg, defaults)
     cfg = _migrate(cfg, defaults)
     return _validate_sections(cfg, defaults)
+
+
+def save_voice_enabled(config_path: str, enabled: bool) -> dict:
+    """把 ``voice.tts.enabled`` 写回用户 config（原子替换）。
+
+    只动这一个键，voice 其余键（含 tts 子段内其他键）原样保留（对齐
+    ``save_weather_location`` 的「只动传入键」语义）。返回写入后的 tts 子段；
+    读/写失败返 {}（调用方只记日志，本次会话仍按内存开关生效）。
+    """
+    import json as _json
+
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+    except (OSError, ValueError):
+        log.warning("[语音] 用户 config 读取失败，开关未写入", exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    v = raw.get("voice")
+    if not isinstance(v, dict):
+        v = {}
+    tts = v.get("tts")
+    if not isinstance(tts, dict):
+        tts = {}
+    tts["enabled"] = bool(enabled)
+    v["tts"] = tts
+    raw["voice"] = v
+    tmp = config_path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(raw, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, config_path)
+    except (OSError, ValueError):
+        log.warning("[语音] 开关写入失败", exc_info=True)
+        return {}
+    return tts
