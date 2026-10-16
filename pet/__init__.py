@@ -121,7 +121,7 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.3"
+__version__ = "0.27.4"
 # v0.27.3：番茄自由度扩展「模型层②（结构性）：暂停/继续」（wiki 设计-番茄自由度
 # 扩展技术方案 §5.1/§5.2）——本线**最高风险版**（结构性 + `focus_state.json`
 # schema v2）：

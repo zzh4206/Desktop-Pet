@@ -94,7 +94,8 @@
       {"name": "深度工作", "work_min": 50, "short_min": 10, "long_min": 20, "cycles": 3},
       {"name": "冲刺", "work_min": 15, "short_min": 3, "long_min": 10, "cycles": 6}
     ],
-    "last_work_min": 0
+    "last_work_min": 0,
+    "mode": "pomodoro"
   },
   "attention": {
     "enabled": true,

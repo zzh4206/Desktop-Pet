@@ -273,6 +273,7 @@ python app.py --verbose
 | `focus.cycles` | `4` | 1 – 12 | 几轮专注后进入长休息。 |
 | `focus.break_enforce` | `false` | 布尔 | 休息执法（**默认关 = 零输入抑制**）：休息开始 30s 内键鼠活动累计每 10s 记一次 `breaks_cut`，累计 ≥20s 才温和气泡一次；不接管鼠标、不做任何输入限制。 |
 | `focus.mood_gain` | `3` | 0 – 20 | 每完成一个专注段的心情增益（走养成状态机，托盘状态行自动刷新）。 |
+| `focus.mode` | `"pomodoro"` | `"pomodoro"` / `"stopwatch"` | 计时模式（v0.27.4）。`pomodoro` = 传统番茄（专注→休息节律，**默认，与旧版行为一致**）；`stopwatch` = **正计时 / 不限时**：专注段没有倒计时、只累计真实时长，结束靠「停止 / 提前完成 / 跳过」，**不进退休息**；此时托盘的时长类入口（⏱ / 🕘 / 📌 / ⭐）会**置灰**。 |
 | `focus.presets` | 见示例 | 数组 | 命名预设（v0.27.2）：每项 `{"name", "work_min"}` 必填，`short_min`/`long_min`/`cycles` 可省（**省了就用全局值**）。点击托盘对应项 = 以该预设启动**本轮**（时长/轮数只作用于这一轮，不改全局默认）。空数组 = 托盘不显示预设分组。 |
 | `focus.last_work_min` | `0` | ≥ 0 | 「上次使用的专注时长」（v0.27.2，**自动写**）：托盘选过时长即被记住，下次启动用「🕘 上次使用 N 分钟」一键复用。`0` = 还没有记忆（回落到 `focus.work_min`）。 |
 
@@ -299,6 +300,17 @@ python app.py --verbose
 还会如实回答「已处于暂停中」/「当前未暂停」）。可选热键 `hotkeys.focus_skip`
 （默认空 = 不注册）绑「⏭ 跳过当前段」，`hotkeys.focus_pause`（默认空 = 不注册）
 绑「⏸ 暂停 / ▶️ 继续」。
+
+**正计时 / 不限时（v0.27.4）**：把 `focus.mode` 设为 `"stopwatch"` 即切换——
+
+- 专注段**没有倒计时**（不设 deadline），只累计真实专注时长；托盘 toggle 文案变为
+  「🍅 开始正计时 / 🍅 停止正计时」，而「⏱ 25/45/60 分钟」「🕘 上次使用」
+  「📌 预设」「⭐ 设为默认」这些**时长类入口全部置灰**（正计时下时长无意义）。
+- 结束只有三条路：**停止**（不计完成）、**提前完成**（计入完成，`focus_sec` 按实耗）、
+  **跳过**（不计完成）。三者都**直接回到空闲，不进入短休 / 长休** —— 正计时不参与休息节律。
+- **暂停照样可用**：正计时没有"剩余时间"可冻结，所以暂停期间只是"不累计"；继续时把
+  专注段的起点往后挪同样的时长，因此**暂停时长不会被算进专注统计**。
+- **重启保持**：正计时会话会随 `focus_state.json` 一起恢复（档案里记了 `mode`）。
 
 **暂停语义（v0.27.3）**：暂停是"**时间冻结**"，不是"停止"——
 
@@ -484,6 +496,7 @@ python -m compileall app.py pet
 | v0.27.1 | 番茄自由度扩展·**入口层①（运行中控制）**：托盘子菜单「🍅 番茄钟」——开始/停止（toggle 语义逐字沿用）+「⏭ 跳过当前段」→`skip()` +「➕ 延长 5 分钟」→`extend(5)` +「✅ 提前完成」→`complete()`；可用性走纯函数 `focus_availability`/`apply_focus_menu`（**IDLE 时后三项一律置灰**、✅ 仅专注段可用，模型侧同名 no-op 双保险），状态提供者由 `set_focus_active(bool)` 升级为 `set_focus_phase(state)` 并保留旧调用兼容（`focus.enabled=false` 仍整菜单隐藏）。工具新增 `skip_pomodoro`/`extend_pomodoro`（可选 `minutes` 1–180 与 `start_pomodoro` **同钳制口径**；skip **不计**完成、extend **只延不缩**；IDLE 返回可读说明而非静默失败；与 start/stop 同为无危险级）。可选热键 **id=4** `hotkeys.focus_skip`（**默认空串 = 不注册**；`platform.start_hotkeys` 基类/mac/win 三处加 `skip_key`/`on_skip` 透传，冲突沿用 `on_conflict` 改键气泡；**id=5 留给 v0.27.3 暂停，本版不占**）+ README 配置表与运行期口径。本版**无** `pause()`；启动时长选择/预设归 v0.27.2。 |
 | v0.27.2 | 番茄自由度扩展·**入口层② + 配置面**：**启动时选时长 / 命名预设 / 记住上次 / 配置热重载**。托盘子菜单新增启动类入口——「⏱ 25/45/60 分钟」、「🕘 上次使用 N 分钟」、命名预设分组（`focus.presets`；**空数组时不建项、不加分隔符**）、「⭐ 把 N 分钟设为默认」、「🔄 重载番茄配置」；可用性经 `focus_availability(state, last_work_min)` 的 `start_items` 与 `skip/extend/complete` **分开表达**——**L1：IDLE 下启动类项可用**（点击 = 用户显式 start，不是副作用），而跳过/延长/提前完成 IDLE 仍**一律置灰**。模型层新增 `start_preset(preset)`（`_run` 本轮覆盖 work/short/long/cycles，缺省回落全局值，回 IDLE 即清除，**不改全局默认**）与 `reconfigure(cfg)`（与 `__init__` 共用 `_apply_cfg`；**绝不碰当前段 `_deadline`**，新值只在下一次 `_enter` 生效；触发＝托盘显式重载，不做全局 config watcher）；`FocusSession.last_work_min` 只读属性 + app 在 `_sync_focus_tray()` 里**检测到变化才**调 `pet.config.save_focus_work_min` 落 `focus.last_work_min`（托盘/热键/聊天工具三入口自动全覆盖，值未变零成本）。配置层同步：`focus.presets`（每项 required 只 `name`+`work_min`，short/long/cycles 可省）与 `focus.last_work_min`（`minimum: 0`、**不设上界**，消费端钳制）+ `config.example.json` 示例预设。本版**无** `pause()`；正计时/无休息/统计分归 v0.27.4–.6。 |
 | v0.27.3 | 番茄自由度扩展·**模型层②（结构性）：暂停/继续**（本线最高风险版：结构性 + `focus_state.json` **schema v2**）。**模型层**：新增剩余量语义 `_paused_at`/`_remaining_s`——`pause()` 把 `_deadline − now` 冻结进 `_remaining_s` 后置 `_deadline = None`（L2 是绝对 epoch，暂停不能靠"停表"），`resume()` 按 `now + _remaining_s` 重算并**回填已消耗部分** `_phase_started_at = now − (相位时长 − 剩余)`（§5.2 坑 3：不回填则 L3 实耗丢掉"暂停前已专注的那段"）；`tick()` **最前置早退**（紧跟 `_refresh_dnd()`、在 IDLE 判断之前）→ 暂停态**睡多久都不迁移、不补算**；`_focus_elapsed` 另补暂停态兜底分支（按"相位时长 − 冻结剩余"计已消耗量）。**Q1**：暂停期间 `active` **仍为 True**（严格 == state != IDLE，L1 不削弱；久坐/吃鼠标/纠缠门禁继续**静默**＝"我还在专注，只是暂时离开"），但 `pause()` 发 `focus_rest_off`（姿态回 idle 便于辨识）、`resume()` 在 FOCUS 段发 `focus_rest_on`（重新趴下）；**暂停时长不计入 `focus_sec`**。**Q2**：`complete()` 在暂停态**先隐式 `resume()`** 再 `_finish_focus()`（不 resume 则 `_deadline=None` 不封顶会把暂停时长算进专注），不额外计打断/完成；`skip()`/`stop()`/自然迁移**不特判**——`_enter()`/`_enter_idle()` 各自清暂停态即自动离开（关键简化）。**schema v2 三坑全解**：`_persist()` 写 `version: 2` + `paused` + `remaining_s` + `phase_started_at`；loader 不读 `version`（坑 1）→ **显式**加暂停分支，且在 `phase` 判定**之前**、**不做 deadline 三重校验**（暂停态 `_deadline=None` 必过不了 → 会静默落回 IDLE 让暂停的番茄消失，坑 2）→ 语义：**暂停跨重启仍然暂停、剩余时间不变**（app 关多久都算暂停）。非暂停路径**优先**用档案 `phase_started_at`（存在且合理时）否则回退旧反推公式，于是「**延长后重启**」实耗也保真（0.27.0 起挂在 `_focus_elapsed` docstring 的注记本版收口）；**v1 老档案仍能加载**（无 `paused` 字段 → 视为未暂停，走原路径，无需手工迁移）。**入口层（同版接线，非 UI 壳）**：托盘「⏸ 暂停 / ▶️ 继续」**单项**、文案随 `paused` 切换（`focus_availability` 的 `pause` = `active`、新增 `pause_label`；**IDLE 置灰**，符合 L1）→ `app._toggle_focus_pause()` 按 `paused` 分发 `resume()`/`pause()`；可选热键 **id=5** `hotkeys.focus_pause`（**默认空串 = 不注册**，schema 刻意不设 `minLength`；`platform.start_hotkeys` 基类/mac/win 三处加 `pause_key`/`on_pause` 透传，app `_on_hotkey_fired` hid==5 分发）；工具新增 `pause_pomodoro`/`resume_pomodoro`（IDLE／已暂停／未暂停各返回**可读文案**而非静默失败）。本版**不做**：正计时（.4）、无休息（.5）、统计历史（.6）。 |
+| v0.27.4 | 番茄自由度扩展·**模型层③（结构性）：正计时 / 不限时**：新增 `focus.mode`（`"pomodoro"` 默认 / `"stopwatch"`；**可选键、不进 `required`**，老配置不会整段回退）。`stopwatch` 下专注段**不设 deadline**（`_enter` 里按模式决定），只累计实耗；`tick()` 自 v0.25 起就容忍 `_deadline is None`，故**无需新分支**；结束靠 停止（不计完成）/ 提前完成（计入完成、按实耗）/ 跳过（不计完成），**一律回 IDLE、不进 SHORT/LONG**（无休息节律）。暂停在正计时下照样可用：无剩余量可冻结，改为 `resume()` 时**把 `_phase_started_at` 后移暂停时长**，故暂停时长不计入 `focus_sec`。持久化 `version: 2` 增记 `mode`，loader 新增 **stopwatch 分支**（正计时 `_deadline` 恒为 `None`，不分流则**会话重启后凭空消失**，与 v0.27.3 §5.2 坑 2 同型）。托盘在 `stopwatch` 下把时长类入口（⏱ / 🕘 / 📌 / ⭐）**置灰**并改 toggle 文案为「🍅 开始 / 停止正计时」；`app` 经 `set_focus_mode` 与相位、暂停态**三路正交同步**。 |
 
 ## 参与贡献
 

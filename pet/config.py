@@ -112,7 +112,7 @@ _SAFE_DEFAULTS: dict = {
     "focus": {
         "enabled": True, "work_min": 25, "short_min": 5, "long_min": 15,
         "cycles": 4, "break_enforce": False, "mood_gain": 3,
-        "presets": [], "last_work_min": 0,
+        "presets": [], "last_work_min": 0, "mode": "pomodoro",
     },
     # v0.24 主动纠缠（pet/attention.py + pet/pester_lines.py）：总段 enabled +
     # 数值（Stage 分档衰减 / 交互增益）+ 阈值/频控/退避/行为池；``pester.lines``
@@ -495,6 +495,12 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             # 只设下界、**不设上界**：消费端钳到 [1,180]。写死上界会让
             # 「用户手改成 300」这种输入把整段打回默认。
             "last_work_min": {"type": "number", "minimum": 0},
+            # v0.27.4 计时模式（§4.3 C）。**同样不进 required**——理由与上面两键
+            # 完全一致：老 config 没有此键，写进 required 会让整个 focus 段校验
+            # 失败并被整段回退默认。默认 ``"pomodoro"`` = **与旧行为逐值等价**
+            # （Q4 裁决：开关默认必须保持等价，不许改变既有用户口径）；
+            # ``"stopwatch"`` = 正计时/不限时，专注段**不设 deadline**、只累计实耗。
+            "mode": {"type": "string", "enum": ["pomodoro", "stopwatch"]},
         },
         "required": ["enabled", "work_min", "short_min", "long_min",
                      "cycles", "break_enforce", "mood_gain"],

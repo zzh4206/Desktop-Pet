@@ -14,6 +14,11 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 # v0.25.2 番茄入口文案（纯函数便于无 Qt 单测；运行态 → 下一动作语义）
 _FOCUS_START_LABEL = "🍅 开始番茄钟"
 _FOCUS_STOP_LABEL = "🍅 停止番茄钟"
+# v0.27.4 正计时模式（§4.3 C）：无 deadline，点击 = 开始/结束本次正计时。文案必须
+# 与 pomodoro 区分（同一个 toggle 项在两种模式下说的不是一回事），故单独一组常量
+# 而非复用「番茄钟」——用户一眼能看出"这次没有倒数"。
+_FOCUS_STOPWATCH_START_LABEL = "🍅 开始正计时"
+_FOCUS_STOPWATCH_STOP_LABEL = "🍅 停止正计时"
 
 # v0.27.1 番茄自由度扩展「入口层①：运行中控制」（wiki 设计-番茄自由度扩展技术
 # 方案 §4.2 B1/B2/B3）：单一 toggle 项升级为「🍅 番茄钟」子菜单（▸ 由 Qt 按
@@ -60,8 +65,25 @@ _PHASE_IDLE = "idle"
 _PHASES = ("idle", "focus", "short", "long")
 
 
-def focus_label(active: bool) -> str:
-    """番茄项文案：运行中显示「停止」（点击即 stop），否则显示「开始」。"""
+def _is_stopwatch_mode(mode) -> bool:
+    """``mode`` 归一化：只有明确是 ``"stopwatch"`` 才算正计时（其余 → pomodoro）。
+
+    与 ``pet.focus`` 侧 ``_apply_cfg`` 的判据逐字一致（strip + lower），但托盘
+    **刻意不 import pet.focus**（保持共享层解耦）；未知/None 一律按 pomodoro 处理
+    ——fail-safe 方向是"维持既有行为"，默认模式绝不可能被误判成正计时（Q4）。
+    """
+    return str(mode or "").strip().lower() == "stopwatch"
+
+
+def focus_label(active: bool, mode="pomodoro") -> str:
+    """番茄项文案：运行中显示「停止」（点击即 stop），否则显示「开始」。
+
+    v0.27.4：``mode="stopwatch"`` → 「🍅 开始正计时」/「🍅 停止正计时」；
+    缺省/未知模式 → 沿用 v0.25.2 的番茄钟文案（**向后兼容**，老调用点不破）。
+    """
+    if _is_stopwatch_mode(mode):
+        return (_FOCUS_STOPWATCH_STOP_LABEL if active
+                else _FOCUS_STOPWATCH_START_LABEL)
     return _FOCUS_STOP_LABEL if active else _FOCUS_START_LABEL
 
 
@@ -93,7 +115,8 @@ def _fmt_minutes(m) -> str:
     return str(int(f)) if f == int(f) else f"{f:g}"
 
 
-def focus_availability(state, last_work_min=None, paused=False) -> dict:
+def focus_availability(state, last_work_min=None, paused=False,
+                       mode="pomodoro") -> dict:
     """相位 → 子菜单各项的文案与可用性（纯函数，§4.1/§4.2/§4.4）。
 
     「运行中控制」项（v0.27.1 口径逐字不变）：
@@ -119,20 +142,31 @@ def focus_availability(state, last_work_min=None, paused=False) -> dict:
     - ``reload``：「🔄 重载番茄配置」恒可用（只重读 config，不动当前段）。
     - ``last_label`` / ``set_default_label``：带 ``last_work_min`` 的文案（未给
       或非法 → 用 ``_FOCUS_FALLBACK_MIN`` 兜底，故文案恒非空、无需调用方判空）。
+
+    v0.27.4 新增 ``mode``（默认 ``"pomodoro"``，**向后兼容**：老调用点不破）：
+
+    - ``toggle_label``：随模式切换——pomodoro「🍅 开始/停止番茄钟」；
+      stopwatch「🍅 开始正计时」/「🍅 停止正计时」。
+    - ``start_items``：**stopwatch 下恒 False**——正计时没有时长概念，⏱ 固定时长
+      /🕘 上次使用/📌 预设/⭐ 设为默认**全部置灰**（点了也无意义：`_enter` 在
+      stopwatch 下不设 deadline，时长参数被忽略）。IDLE 下 pomodoro 仍恒 True
+      （这正是 v0.27.2「启动时选时长」的入口）。
     """
     phase = focus_phase_name(state)
     active = phase != _PHASE_IDLE
+    stopwatch = _is_stopwatch_mode(mode)
     m = _fmt_minutes(last_work_min) or str(_FOCUS_FALLBACK_MIN)
     return {
         "phase": phase,
         "active": active,
-        "toggle_label": focus_label(active),
+        "mode": "stopwatch" if stopwatch else "pomodoro",
+        "toggle_label": focus_label(active, mode),
         "pause": active,
         "pause_label": focus_pause_label(paused),
         "skip": active,
         "extend": active,
         "complete": phase == "focus",
-        "start_items": True,
+        "start_items": not stopwatch,
         "reload": True,
         "last_label": _FOCUS_LAST_LABEL_FMT.format(m=m),
         "set_default_label": _FOCUS_SET_DEFAULT_LABEL_FMT.format(m=m),
@@ -140,16 +174,17 @@ def focus_availability(state, last_work_min=None, paused=False) -> dict:
 
 
 def apply_focus_menu(actions: dict, state, last_work_min=None,
-                     paused=False) -> dict:
+                     paused=False, mode="pomodoro") -> dict:
     """把 ``focus_availability`` 施加到动作集合，返回该可用性字典。
 
     ``actions`` 的值只需实现 ``setText(str)`` / ``setEnabled(bool)``（真实
     QAction 或测试替身皆可），故本函数是纯逻辑，可脱离 QApplication 单测。
     唯一例外是 ``"presets"``：值为**动作列表**（命名预设分组，逐项 setEnabled；
     预设项文案由 ``TrayManager.set_focus_presets`` 建项时写死，与相位无关）。
-    缺项（缺键/None）静默跳过，便于兼容旧调用方。
+    缺项（缺键/None）静默跳过，便于兼容旧调用方。``mode`` 缺省 ``"pomodoro"``
+    （v0.27.4 追加在参数表末尾，老调用点逐字不变）。
     """
-    avail = focus_availability(state, last_work_min, paused)
+    avail = focus_availability(state, last_work_min, paused, mode)
     actions = actions or {}
     toggle = actions.get("toggle")
     if toggle is not None:
@@ -286,6 +321,9 @@ class TrayManager(QObject):
         self._focus_last_work_min = 0.0    # 0 → 文案用 _FOCUS_FALLBACK_MIN 兜底
         self._focus_phase = _PHASE_IDLE
         self._focus_paused = False         # v0.27.3 暂停态（暂停项文案/可用性）
+        # v0.27.4 计时模式（§4.3 C）：只影响 toggle 文案与启动型项可用性，
+        # 缺省 pomodoro 保证未接线的调用点/旧测试逐字不变
+        self._focus_mode = "pomodoro"
         # 子菜单标题不带「▸」——mac/Qt 会按子菜单自动绘制箭头字符
         self._focus_menu = focus_menu = menu.addMenu(_FOCUS_MENU_LABEL)
         self._act_focus = act_focus = focus_menu.addAction(_FOCUS_START_LABEL)
@@ -673,7 +711,7 @@ class TrayManager(QObject):
         self._apply_focus_menu()
 
     def _apply_focus_menu(self) -> None:
-        """按当前相位 + 上次时长 + 暂停态刷新子菜单文案/可用性（幂等）。"""
+        """按当前相位 + 上次时长 + 暂停态 + 计时模式刷新子菜单文案/可用性（幂等）。"""
         actions = {
             "toggle": getattr(self, "_act_focus", None),
             "pause": getattr(self, "_act_focus_pause", None),
@@ -690,7 +728,8 @@ class TrayManager(QObject):
         apply_focus_menu(
             actions, getattr(self, "_focus_phase", _PHASE_IDLE),
             getattr(self, "_focus_last_work_min", 0.0),
-            getattr(self, "_focus_paused", False))
+            getattr(self, "_focus_paused", False),
+            getattr(self, "_focus_mode", "pomodoro"))
 
     def set_focus_visible(self, visible: bool) -> None:
         """focus.enabled=false → 彻底隐藏整个「🍅 番茄钟」子菜单（§1 两段式）。
@@ -729,6 +768,21 @@ class TrayManager(QObject):
         if p == getattr(self, "_focus_paused", None):
             return
         self._focus_paused = p
+        self._apply_focus_menu()
+
+    def set_focus_mode(self, mode) -> None:
+        """同步**计时模式**（v0.27.4，app 在 ``_sync_focus_tray`` 每拍调用）。
+
+        与相位/暂停态一样是**正交**维度：pomodoro → toggle 文案「🍅 开始/停止
+        番茄钟」、启动型项（⏱/🕘/📌/⭐）恒可用；stopwatch → 「🍅 开始正计时」/
+        「🍅 停止正计时」、启动型项**全部置灰**（无时长概念）。模式变化才重刷，
+        值未变不碰 QAction（幂等零成本，tick 每拍调用无妨）；``None``/未知值
+        归一化回 ``"pomodoro"``（fail-safe = 维持既有行为）。
+        """
+        m = "stopwatch" if _is_stopwatch_mode(mode) else "pomodoro"
+        if m == getattr(self, "_focus_mode", None):
+            return
+        self._focus_mode = m
         self._apply_focus_menu()
 
     def set_focus_active(self, active: bool) -> None:

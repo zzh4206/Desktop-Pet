@@ -311,6 +311,10 @@ class FocusSession:
         self._fullscreen_fn = fullscreen_fn  # callable() -> bool（全屏只气泡不切姿态，0.25.3）
         self._dnd_fn = dnd_fn
 
+        # v0.27.4：计时模式（配置派生，见 _apply_cfg）。此处先落默认值，使
+        # ``_apply_cfg`` 内部读 ``self._mode`` 之类的派生逻辑不依赖调用顺序。
+        self._mode = "pomodoro"
+
         c = cfg or {}
         self._apply_cfg(c)
 
@@ -347,6 +351,11 @@ class FocusSession:
         非 dict 入参按"空配置"处理（全默认），不抛。
         """
         c = cfg if isinstance(cfg, dict) else {}
+        # v0.27.4 计时模式（§4.3 C）：只认 "stopwatch"（大小写/空白宽容），其余
+        # 一律 "pomodoro"。这是**默认零漂移**的守护——老配置无该键、值非法、
+        # 大小写怪写法都落在 pomodoro，与 v0.27.3 行为逐值等价（Q4）。
+        self._mode = ("stopwatch" if str(c.get("mode", "")).strip().lower()
+                      == "stopwatch" else "pomodoro")
         self._work_min = _num(c.get("work_min", _DEFAULT_WORK_MIN), 1.0, 180.0)
         self._short_min = _num(c.get("short_min", _DEFAULT_SHORT_MIN), 1.0, 60.0)
         self._long_min = _num(c.get("long_min", _DEFAULT_LONG_MIN), 1.0, 120.0)
@@ -406,6 +415,15 @@ class FocusSession:
         两个属性表达正交的两件事（跑没跑 / 冻没冻）。
         """
         return self._paused_at is not None
+
+    @property
+    def mode(self) -> str:
+        """计时模式：``"pomodoro"``（默认，与旧行为逐值等价）或 ``"stopwatch"``。
+
+        v0.27.4（§4.3 C）。配置派生（``_apply_cfg`` 解析 ``config.focus.mode``，
+        ``reconfigure`` 热重载后即刻生效），供托盘文案/可用性与工具回执分流。
+        """
+        return self._mode
 
     @property
     def last_work_min(self) -> float:
@@ -534,14 +552,20 @@ class FocusSession:
         Q1：``active`` **保持 True**（门禁继续静默），但发 ``focus_rest_off`` 让
         陪伴姿态回 idle——"我还在专注，只是暂时离开"，视觉上一眼可辨。非 IDLE 段
         （专注/短休/长休）都可暂停。立即落盘：不落盘则重启后暂停态丢失。
+
+        v0.27.4：**正计时段没有 ``_deadline``**，旧代码在此 ``return`` 会让正计时
+        用户按暂停毫无反应。现改为：有 deadline（pomodoro）冻结剩余量；无 deadline
+        （stopwatch）把 ``_remaining_s`` 置 None 表示"无剩余量可冻结"，暂停靠
+        ``_paused_at`` 表达（``tick()`` 最前置早退仍然生效，暂停期间不推进）。
         """
         if self._state == FocusPhase.IDLE or self._paused_at is not None:
             return
-        if self._deadline is None:
-            return
         now = self._now()
-        self._remaining_s = max(0.0, self._deadline - now)
-        self._deadline = None
+        if self._deadline is not None:            # pomodoro：冻结剩余量
+            self._remaining_s = max(0.0, self._deadline - now)
+            self._deadline = None
+        else:                                     # stopwatch：无剩余量可冻结
+            self._remaining_s = None
         self._paused_at = now
         self._fsm_event("focus_rest_off")     # Q1：姿态回 idle，一眼可辨"已暂停"
         self._persist()
@@ -555,14 +579,22 @@ class FocusSession:
         ``now - (相位时长 − 剩余)``，于是收口
         ``min(now, _deadline) - _phase_started_at`` 仍正确，**暂停时长不计入**。
         FOCUS 段恢复时发 ``focus_rest_on``（重新趴下）；休息段不发。
+
+        v0.27.4：正计时段 ``_remaining_s is None``（无剩余量可重算）→ 走
+        **把相位起点整体后移暂停时长**这一支，于是
+        ``now - _phase_started_at``（实耗）自动扣掉暂停段，而"暂停时长不计入
+        正计时累计"这一口径与 pomodoro 逐字一致。
         """
-        if self._paused_at is None or self._remaining_s is None:
+        if self._paused_at is None:
             return
         now = self._now()
-        rem = self._remaining_s
-        self._deadline = now + rem
-        self._phase_started_at = now - (
-            self._phase_minutes(self._state) * 60.0 - rem)
+        if self._remaining_s is not None:         # pomodoro：重算 + 回填起点
+            rem = self._remaining_s
+            self._deadline = now + rem
+            self._phase_started_at = now - (
+                self._phase_minutes(self._state) * 60.0 - rem)
+        elif self._phase_started_at is not None:  # stopwatch：起点后移暂停时长
+            self._phase_started_at += (now - self._paused_at)
         self._remaining_s = None
         self._paused_at = None
         if self._state == FocusPhase.FOCUS:
@@ -598,11 +630,19 @@ class FocusSession:
         ``focus_sec``**——实耗记账只发生在 ``_finish_focus``（自然到期 /
         ``complete()``）这一处收口，skip 不经过它（诚实口径：跳过的那段不算
         专注）。
+
+        v0.27.4（§4.3 C）：正计时模式**没有休息节律**，故 skip 等价于"结束本次
+        正计时"——直接回 IDLE（不计完成、不进 SHORT/LONG），收尾与 ``stop()``
+        一致；仍发专注段跳过文案（用户点了跳过，须有反馈，不静默）。
         """
         if self._state == FocusPhase.IDLE:
             return
         now = self._now()
         phase = self._state
+        if self._mode == "stopwatch":
+            self._emit(_SKIP_FOCUS)
+            self._enter_idle(now)
+            return
         if phase == FocusPhase.FOCUS:
             self._emit(_SKIP_FOCUS)
             self._enter(FocusPhase.SHORT, self._short_minutes(), now)
@@ -625,7 +665,14 @@ class FocusSession:
         if self._state == FocusPhase.IDLE:
             return
         now = self._now()
-        if self._deadline is None or now < self._deadline:
+        if self._deadline is None:
+            # v0.27.4（§4.3 C / §5.2）：正计时专注段**无 deadline** → tick 必须
+            # 什么都不做（不迁移、不记账、不进休息执法）。早退在这里是**显式
+            # 契约**而非"顺手"：绝不能靠"deadline is None 恰好小于 now"这类巧合，
+            # 否则正计时专注段会被误判到期。pomodoro 下非 IDLE 且未暂停时不可能
+            # 走到这（`_enter` 必设 deadline），故对旧行为逐值无影响。
+            return
+        if now < self._deadline:
             self._tick_break_enforce(now)
             return
         self._advance(now)
@@ -651,9 +698,18 @@ class FocusSession:
 
     def _finish_focus(self, now: float) -> None:
         """专注段收口——自然到期（``_advance``）与 ``complete()`` 提前完成
-        共用这一条路径，保证两条入口的记账/气泡/cycle 推进逐字一致。"""
+        共用这一条路径，保证两条入口的记账/气泡/cycle 推进逐字一致。
+
+        v0.27.4（§4.3 C）：正计时模式**不参与 SHORT/LONG 节律**——记账
+        （``completed``/``streak``/``focus_sec`` 实耗，走 ``_on_focus_complete``）
+        与完成后气泡照旧，但随后**直接回 IDLE**，不推进 ``_completed_in_cycle``
+        （``_enter_idle`` 本就会归零），也不进短休/长休。
+        """
         self._on_focus_complete(now)
         self._emit(_FOCUS_DONE)
+        if self._mode == "stopwatch":
+            self._enter_idle(now)
+            return
         self._completed_in_cycle += 1
         if self._completed_in_cycle >= self._cycle_target():
             self._enter(FocusPhase.LONG, self._long_minutes(), now)
@@ -662,7 +718,12 @@ class FocusSession:
 
     def _enter(self, phase: FocusPhase, minutes: float, now: float) -> None:
         self._state = phase
-        self._deadline = now + float(minutes) * 60.0
+        # v0.27.4（§4.3 C）：正计时专注段**不设 deadline**（只累计实耗，结束靠
+        # stop()/complete()/skip()）——故 start()/start_preset() 传进来的时长在
+        # stopwatch 下自然被忽略，无需各自特判。休息段永不进（无休息节律）。
+        self._deadline = (None if (phase == FocusPhase.FOCUS
+                                   and self._mode == "stopwatch")
+                          else now + float(minutes) * 60.0)
         self._phase_started_at = now      # L3：实耗记账的相位起点
         # v0.27.3：进入新相位 = 离开暂停态。放在这里，`skip()` 与自然迁移
         # **无需各自特判**（§5.1「_enter/_enter_idle 都清」的关键简化）。
@@ -865,6 +926,11 @@ class FocusSession:
                 "phase": phase,
                 "deadline": self._deadline if phase else None,
                 "completed_in_cycle": self._completed_in_cycle if phase else 0,
+                # v0.27.4（§4.3 C / §5.2）：档案必须自带**计时模式**——正计时
+                # 专注段 `deadline` 恒为 None，loader 只能靠这个键分流，否则
+                # 正计时会话重启后会被 deadline 三重校验判为"已过期"而凭空消失
+                # （与 v0.27.3 坑 2 同型）。v1/v2 老档案无该键 → 走原路径。
+                "mode": self._mode,
                 # v2：暂停态 `deadline` 恒为 None，剩余量只能靠 remaining_s 携带
                 # （不写则重启后暂停的番茄消失，§5.2 坑 2）
                 "paused": self._paused_at is not None if phase else False,
@@ -909,17 +975,35 @@ class FocusSession:
             # 静默落回 IDLE，**暂停的番茄凭空消失**。语义（§5.1 拍板）：暂停跨
             # 重启仍然暂停、剩余时间不变（app 关多久都算暂停，故 `_paused_at`
             # 取 now、相位起点按同式回填）。v1 档案无 `paused` 键 → 自然走 else。
+            #
+            # v0.27.4（§4.3 C / §5.2）：新增 `mode` 键分流**正计时**档案。正计时
+            # 专注段 `deadline` 恒为 None → 必过不了下面那三重校验 → 不分流则
+            # **正计时会话重启后凭空消失**（与坑 2 同型）。故：(a) 暂停分支放宽，
+            # 兼容"正计时暂停态没有 remaining_s"；(b) 其后新增正计时分支；(c) 其余
+            # （pomodoro 的 deadline 校验）**逐字不变**——v1/v2 老档案原路径。
             rem = raw.get("remaining_s")
+            is_stopwatch = str(raw.get("mode") or "") == "stopwatch"
             if (raw.get("paused") and phase in ("focus", "short", "long")
-                    and isinstance(rem, (int, float))
-                    and not isinstance(rem, bool) and rem > 0):
+                    and ((isinstance(rem, (int, float))
+                          and not isinstance(rem, bool) and rem > 0)
+                         or (is_stopwatch and phase == "focus"))):
                 self._state = FocusPhase(phase)
                 self._deadline = None
                 self._paused_at = now
-                self._remaining_s = float(rem)
-                # 与 resume() 同式回填：`now - (相位时长 − 剩余)`（坑 3）
-                self._phase_started_at = now - (
-                    self._phase_minutes(self._state) * 60.0 - self._remaining_s)
+                self._remaining_s = (
+                    float(rem) if isinstance(rem, (int, float))
+                    and not isinstance(rem, bool) and rem > 0 else None)
+                if self._remaining_s is not None:
+                    # 与 resume() 同式回填：`now - (相位时长 − 剩余)`（坑 3）
+                    self._phase_started_at = now - (
+                        self._phase_minutes(self._state) * 60.0
+                        - self._remaining_s)
+                else:
+                    # 正计时暂停态：无剩余量可回填，直接用档案里的相位起点
+                    # （app 关多久都算暂停，故 `_paused_at` 取 now）
+                    st = raw.get("phase_started_at")
+                    self._phase_started_at = (
+                        float(st) if isinstance(st, (int, float)) else now)
                 self._completed_in_cycle = _int(
                     raw.get("completed_in_cycle"), 0, self._cycles)
                 _log.info("[番茄] 恢复**暂停中**的节律（%s，剩余 %.0fs）",
@@ -927,7 +1011,26 @@ class FocusSession:
                 # Q1：暂停态姿态＝起身回 idle（不发 focus_rest_on）
                 if self._state is FocusPhase.FOCUS:
                     self._fsm_event("focus_rest_off")
-            elif (phase in ("focus", "short", "long")
+                return
+            if is_stopwatch and phase == "focus":
+                # 正计时进行中（无 deadline）：起点合理即恢复 FOCUS；起点缺失/
+                # 离谱（未来 / 超一天前，对齐 deadline 校验的界线）→ 落到 else
+                # 的 IDLE 兜底，绝不凭空造一个正在跑的会话。
+                st = raw.get("phase_started_at")
+                if (isinstance(st, (int, float))
+                        and not isinstance(st, bool)
+                        and float(st) <= now + _RESUME_MAX_FORWARD_S):
+                    self._state = FocusPhase.FOCUS
+                    self._deadline = None
+                    self._phase_started_at = float(st)
+                    self._completed_in_cycle = _int(
+                        raw.get("completed_in_cycle"), 0, self._cycles)
+                    _log.info("[番茄] 恢复进行中的**正计时**（起点 %.0f）",
+                              self._phase_started_at)
+                    # 重启续算：正计时专注中 → 补发陪伴姿态（同 0.25.5 口径）
+                    self._fsm_event("focus_rest_on")
+                    return
+            if (phase in ("focus", "short", "long")
                     and isinstance(deadline, (int, float))
                     and deadline > now - _RESUME_GRACE_S
                     and deadline < now + _RESUME_MAX_FORWARD_S
@@ -985,6 +1088,15 @@ class _StartPomodoroHandler:
             return ToolResult(False, "番茄功能未启用（config focus.enabled）", {})
         minutes = args.get("minutes")
         self._session.start(minutes)
+        # v0.27.4（§4.3 C）：正计时下 `minutes` 被忽略（无 deadline），回执必须
+        # **如实**说"已开始正计时"而非"已开始番茄钟"——否则 LLM 会照着回一句
+        # "25 分钟后提醒你"，而正计时根本没有到点这回事。
+        if getattr(self._session, "mode", "pomodoro") == "stopwatch":
+            return ToolResult(True, "已开始正计时（不限时；结束请用停止 / 提前"
+                                    "完成 / 跳过，不进退休息）",
+                              {"state": self._session.state.value,
+                               "active": self._session.active,
+                               "mode": "stopwatch"})
         return ToolResult(True, "已开始番茄钟",
                           {"state": self._session.state.value,
                            "active": self._session.active})

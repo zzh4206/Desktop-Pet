@@ -1956,6 +1956,16 @@ class PetApp:
                 bool(sess.paused) if sess is not None else False)
         except Exception:
             self.logger.warning("[番茄] 托盘暂停态同步失败", exc_info=True)
+        # v0.27.4：计时模式同样与相位/暂停态**正交**（配置派生），单独一路同步
+        # ——stopwatch 下 toggle 文案改「🍅 开始/停止正计时」且启动型时长项
+        # （⏱/🕘/📌/⭐）全部置灰（set_focus_mode 自身按值变幂等早返回）。此处
+        # 每拍读 sess.mode，故「🔄 重载番茄配置」热重载（sess.reconfigure）后
+        # 模式随之生效，无需额外接线。
+        try:
+            self.tray.set_focus_mode(
+                sess.mode if sess is not None else "pomodoro")
+        except Exception:
+            self.logger.warning("[番茄] 托盘计时模式同步失败", exc_info=True)
         # v0.25.6 今日完成数「🍅×N」进 tooltip（set_focus_count 自身按值变
         # 幂等早返回——tick 每拍调用零成本）
         try:
