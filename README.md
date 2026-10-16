@@ -12,6 +12,7 @@
 - **主动关怀**：早晚问候、久坐提醒、节日祝福和聊天后的回访；支持安静时段配置。
 - **系统集成**：系统托盘菜单、文件拖放打开、开机自启与全局快捷键（Windows）。部分系统操作会要求二次确认。
 - **休息提醒**：在满足空闲、非勿扰、非视频播放等条件时，宠物可短暂“吃鼠标”提醒休息；可随时通过“强制吐出”或快捷键解除。
+- **天气感知**：配置城市后可获取实时天气（Open-Meteo，免 key），今日首次刷新按阈值提醒带伞/降温/高温/寒潮（每类每天一次）；聊天中可问天气。
 
 ## 支持的平台
 
@@ -213,7 +214,7 @@ python app.py --verbose
 | `event_confidence_threshold` | `0.5` | 0 – 1 | 事件级情绪触发置信度。 |
 | `mood_delta.*` | happy `4` / neutral `0` / sad `-3` / sleepy `-1` / hungry `-2` | −20 – 20 | 检出对应情绪时对养成心情的修正。 |
 
-**本地数据说明**：AI 长期记忆与聊天情绪上下文都只存本机（明文 JSON）——`memory.json` 存模型归纳的事实，`chat_emotion.json` 存最近 48 小时的用户消息文本（随开关即时生效，档案可随时删除）。
+**本地数据说明**：AI 长期记忆与聊天情绪上下文都只存本机（明文 JSON）——`memory.json` 存模型归纳的事实，`chat_emotion.json` 存最近 48 小时的用户消息文本（随开关即时生效，档案可随时删除）。天气缓存 `weather_cache.json`（最近快照 + 城市坐标，明文可删；删除后下次刷新自动重建）。天气数据由 [Open-Meteo](https://open-meteo.com/) 提供（CC BY 4.0，非商用免费）。
 
 ### 环境通道（`wind` / `sun`）
 
@@ -227,6 +228,20 @@ python app.py --verbose
 | `sun.latitude` / `sun.longitude` | `0.0` | ±90 / ±180 | 定位坐标。 |
 | `sun.timezone_offset` | `null` | −14 – 14 或 `null` | 时区偏移；`null` 自动取系统本地时区。 |
 | `sun.shadow_alpha` | `0.4` | 0 – 1 | 阴影不透明度。 |
+
+### 天气感知与提醒（`weather`）
+
+| 键 | 默认值 | 范围 | 说明 |
+| --- | --- | --- | --- |
+| `weather.enabled` | `false` | 布尔 | 天气感知总开关（关闭或 `city` 为空时功能静默，不发任何请求）。 |
+| `weather.city` | `""` | 城市名 | 手动填写（如 `"Shanghai"` / `"上海"`），经 geocoding 转坐标并缓存；隐私最优，不上传其他信息。 |
+| `weather.refresh_min` | `30` | 5 – 720 | 刷新间隔（分钟）。断网时用最后一次快照并标注「数据可能过期」，不触发提醒。 |
+| `weather.alerts.precip_prob` | `50` | 0 – 100 | 今日最大降水概率超过该值 → 提醒带伞（措辞不保证性：「看起来要下雨」）。 |
+| `weather.alerts.drop_c` | `5` | 0 – 40 | 较昨日最高温降温超过该值（℃）→ 提醒添衣。 |
+| `weather.alerts.hot_c` | `35` | 0 – 60 | 今日最高温达到该值（℃）→ 高温提醒。 |
+| `weather.alerts.cold_c` | `0` | −60 – 20 | 今日最低温达到该值（℃）→ 寒潮提醒。 |
+
+每类提醒每天最多一次（重启不重复发）；安静时段与勿扰模式静默。聊天中宠物可回答「今天穿什么/要下雨吗」（`get_weather` 工具，读本地缓存）。天气数据 **Powered by [Open-Meteo](https://open-meteo.com/)**（CC BY 4.0，非商用免费；准确性不做保证）。
 
 ### 热键与日志
 
@@ -330,6 +345,7 @@ python -m compileall app.py pet
 | v0.21 | mini-swe 集成（桌宠具备操纵 CLI 的能力）：聊天侧新增 `swe_task` 委托工具，把「操作终端 / 命令行」的请求交给软件工程助手——`pet/swe_env.py` 沙箱命令执行器 + `pet/swe_agent.py` 线性历史 agent 循环 + `pet/swe_tools.py` bash/submit 工具（只复用 mini-swe-agent 约百行核心，不加 litellm/pydantic 依赖，走现有 `OpenAICompatibleClient`）；安全三件套（沙箱工作区 + 白名单 + 危险确认，fail-closed）；`config.swe` 段默认关；执行步骤经 `bridge.sweStep` 流式回显进聊天面板（`role="swe"` 等宽终端块，不进 DS 历史）。 |
 | v0.22 | mini-swe 上下文管理（`pet/swe_context.py`）：线性历史 token 治理两层手段——T1 观测瘦身（`keep_recent` 外老步骤 tool 消息头尾摘录，确定性零成本）+ T2 轨迹滚屏摘要（估算 token 超 `budget_tokens` → 最老一半可压步骤 LLM 压成单条 `[此前步骤摘要]`，单条滚动不累积；失败/关闭回退 T1，fail-open 不杀任务）；压缩只影响喂 LLM 的 messages、UI 步骤回显全量（同 v0.17.1 摘要解耦哲学）；压缩单位为步骤对（assistant `tool_calls` 与 tool 消息按 `tool_call_id` 配对整对替换，杜绝孤儿 tool_call 400）；`SweAgent(context_policy=)` 注入，`config.swe.context` 段（`budget_tokens` 默认 24000 可按模型窗口调整，`summarize=false` 即 T1-only）。 |
 | v0.22.1 | mini-swe 本地任务记忆（`pet/swe_memory.py`）：跨任务「本地上下文」三件套——M1 任务档案（任务结束把 instruction/exit_status/submission 追加进工作区 `.swe/history.jsonl`，上限可配、坏行容错、本地明文可删）+ M2 相似召回注入（新任务起跑按 instruction 相似度取 top-k 历史记录拼进任务前缀；分词复用 `pet.memory._tokenize` 单一实现，平滑 IDF 加权 + 重合度 <0.2 视为零相关不注入 + 30 天近期加分）+ M3 NOTES.md 发现级记忆（system prompt 新增规则：旧记忆需命令验证后采信、值得跨任务保留的发现写入工作区 `NOTES.md`，任务起跑注入其头部）；归档只存原始 instruction（防记忆自噬膨胀）；`config.swe.memory` 段（`recall_k=5`/`recall_chars=200`/`history_cap=200`/`notes` 开关）。 |
+| v0.23 | 天气感知与提醒（`pet/weather.py`）：Open-Meteo 免 key 数据源（**Powered by Open-Meteo**，CC BY 4.0 非商用免费；调研报告核实并修正初稿「商用免费」表述）；手动城市默认 + geocoding 坐标随缓存落盘（`city` 留空=功能静默）；daemon 线程拉新 + 内存/磁盘双缓存（`weather_cache.json` 原子写、明文可删）+ 离线回读 stale 标注 + 429/5xx 指数退避（连续 5 次失败本日放弃）；主动提醒挂 ProactiveScheduler——今日首次新快照评估带伞/降温/高温/寒潮（阈值 `weather.alerts.*` 可配，每类每日一次落 proactive_state 去重、stale/缺数据/跨日快照不触发、DND/深夜静默、不保证性措辞）；LLM 工具 `get_weather`（只读缓存不拉网，stale 透传）；`Sensors.weather` 字段位留给 0.24 纠缠线行为调制；纯共享层 mac/win 同代码（系统级天气源 adapter `get_weather_source()` 坑位预留，本线不实装）。 |
 
 ## 参与贡献
 
