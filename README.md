@@ -348,6 +348,7 @@ python -m compileall app.py pet
 | v0.23 | 天气感知与提醒（`pet/weather.py`）：Open-Meteo 免 key 数据源（**Powered by Open-Meteo**，CC BY 4.0 非商用免费；调研报告核实并修正初稿「商用免费」表述）；手动城市默认 + geocoding 坐标随缓存落盘（`city` 留空=功能静默）；daemon 线程拉新 + 内存/磁盘双缓存（`weather_cache.json` 原子写、明文可删）+ 离线回读 stale 标注 + 429/5xx 指数退避（连续 5 次失败本日放弃）；主动提醒挂 ProactiveScheduler——今日首次新快照评估带伞/降温/高温/寒潮（阈值 `weather.alerts.*` 可配，每类每日一次落 proactive_state 去重、stale/缺数据/跨日快照不触发、DND/深夜静默、不保证性措辞）；LLM 工具 `get_weather`（只读缓存不拉网，stale 透传）；`Sensors.weather` 字段位留给 0.24 纠缠线行为调制；纯共享层 mac/win 同代码（系统级天气源 adapter `get_weather_source()` 坑位预留，本线不实装）。 |
 | v0.25.0 | 番茄专注核心（`pet/focus.py`）：可选节律器 `FocusSession`（`IDLE→FOCUS→SHORT→LONG` 迁移链、`start/stop/skip/tick/on_dnd_active`、`active` 门禁、虚拟时钟 `now_fn` 注入、`focus_state.json` 原子写重水化、当日统计 + streak）；**IDLE 惰性接管不变量**——不 start 即零影响。 |
 | v0.25.1 | 番茄专注配置：`config.focus` 段（`enabled` 默认 true=入口可见但绝不自动运行、`work_min`/`short_min`/`long_min`/`cycles`/`break_enforce` 默认关/`mood_gain`）+ `hotkeys.focus`（mac ⌘⌥F / win Ctrl+Alt+F，id=3）；测试口径纠正为本地不入库，`focus.py` docstring 的「CI 单测」表述更正为「平台库-free + 本地单测」（本仓无 CI）。 |
+| v0.25.2 | 番茄专注入口：托盘「🍅 开始/停止番茄钟」动态项 + 全局热键 id=3（双平台 shim 注册、冲突沿用 `on_conflict` 改键气泡）+ `platform.start_hotkeys` 透传 `focus_key`/`on_focus` + app 装配 `FocusSession`（气泡/FSM 事件/DND/全屏注入 + 每拍 tick + 三入口收敛 toggle）+ ToolRegistry `start_pomodoro`/`stop_pomodoro`（无危险级）；`focus.enabled=false` 时托盘项与热键同步隐藏。 |
 
 ## 参与贡献
 

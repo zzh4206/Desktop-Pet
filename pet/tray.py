@@ -11,6 +11,15 @@ from PySide6.QtCore import Qt, QObject
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+# v0.25.2 番茄入口文案（纯函数便于无 Qt 单测；运行态 → 下一动作语义）
+_FOCUS_START_LABEL = "🍅 开始番茄钟"
+_FOCUS_STOP_LABEL = "🍅 停止番茄钟"
+
+
+def focus_label(active: bool) -> str:
+    """番茄项文案：运行中显示「停止」（点击即 stop），否则显示「开始」。"""
+    return _FOCUS_STOP_LABEL if active else _FOCUS_START_LABEL
+
 
 class TrayManager(QObject):
     def __init__(self, on_quit, parent=None):
@@ -67,6 +76,12 @@ class TrayManager(QObject):
         # 仍是热键 Cmd+Option+T + 看门狗。
         act_spit = menu.addAction("强制吐出")
         act_spit.triggered.connect(self._emit_spit)
+        # v0.25.2 番茄专注入口（opt-in）：未运行/运行态文案切换；focus.enabled
+        # =false 时 app 调 set_focus_visible(False) 彻底隐藏（§1 两段式开关）
+        self._on_focus = None
+        self._focus_active_state = False
+        self._act_focus = act_focus = menu.addAction(_FOCUS_START_LABEL)
+        act_focus.triggered.connect(self._emit_focus)
         menu.addSeparator()
         act_quit = menu.addAction("退出")
         act_quit.triggered.connect(self._on_quit)
@@ -228,6 +243,29 @@ class TrayManager(QObject):
     def _emit_spit(self) -> None:
         if self._on_spit is not None:
             self._on_spit()
+
+    # ---- v0.25.2 番茄专注入口 ----
+
+    def set_focus_callback(self, cb) -> None:
+        """托盘'🍅 开始/停止番茄钟'→ app._toggle_focus（toggle 语义单点）。"""
+        self._on_focus = cb
+
+    def _emit_focus(self) -> None:
+        if self._on_focus is not None:
+            self._on_focus()
+
+    def set_focus_visible(self, visible: bool) -> None:
+        """focus.enabled=false → 彻底隐藏番茄入口（§1 两段式开关）。"""
+        act = getattr(self, "_act_focus", None)
+        if act is not None:
+            act.setVisible(bool(visible))
+
+    def set_focus_active(self, active: bool) -> None:
+        """app 在 start/stop 后与 tick 变化时调：同步运行态文案（幂等）。"""
+        self._focus_active_state = bool(active)
+        act = getattr(self, "_act_focus", None)
+        if act is not None:
+            act.setText(focus_label(active))
 
     @staticmethod
     def _make_icon(alert: bool = False) -> QIcon:

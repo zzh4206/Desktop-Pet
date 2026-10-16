@@ -70,8 +70,12 @@ class PlatformAdapter:
         return False
 
     def start_hotkeys(self, cfg: dict, on_chat, on_spit,
+                      focus_key: str = "", on_focus=None,
                       on_conflict=None, bridge=None) -> bool:
-        """v0.11 全局热键注册。基类返 False（无实现）。"""
+        """v0.11 全局热键注册。基类返 False（无实现）。
+
+        v0.25 番茄线：``focus_key``/``on_focus`` 为新增透传位（id=3）；
+        focus_key 空串 = 番茄入口未挂载，shim 侧不注册。"""
         return False
 
     def stop_hotkeys(self) -> None:
@@ -525,11 +529,13 @@ if sys.platform == "darwin":
         # ---- v0.11 全局热键 + 开机自启（hotkey_mac Carbon RegisterEventHotKey
         # + LaunchAgents plist；与 WinPlatformAdapter 接口对齐） ----
         def start_hotkeys(self, cfg: dict, on_chat, on_spit,
+                          focus_key: str = "", on_focus=None,
                           on_conflict=None, bridge=None) -> bool:
             """v0.11：HotkeyManager 注册 Cmd+Option+P/T + 冲突检测。
 
-            默认 "cmd+option+p"/"cmd+option+t"；config ``hotkeys.chat/spit``
-            可自定义（字符串，修饰键 cmd/option/shift/ctrl + 单键）。
+            默认 "cmd+option+p"/"cmd+option+t"；config ``hotkeys.chat/spit/
+            focus`` 可自定义（字符串，修饰键 cmd/option/shift/ctrl + 单键）。
+            v0.25 番茄线：focus_key/on_focus 透传（id=3，空串=不注册）。
             """
             from . import hotkey_mac
 
@@ -538,7 +544,7 @@ if sys.platform == "darwin":
             return self._hotkey_mgr.start(
                 hk_cfg.get("chat", "cmd+option+p"),
                 hk_cfg.get("spit", "cmd+option+t"),
-                on_chat, on_spit, on_conflict,
+                on_chat, on_spit, focus_key, on_focus, on_conflict,
                 bridge=bridge,
             )
 
@@ -774,8 +780,14 @@ elif sys.platform == "win32":
             pass
 
         def start_hotkeys(self, cfg: dict, on_chat, on_spit,
+                          focus_key: str = "", on_focus=None,
                           on_conflict=None, bridge=None) -> bool:
-            """v0.11：HotkeyManager 注册 Ctrl+Alt+P/T + 冲突检测。"""
+            """v0.11：HotkeyManager 注册 Ctrl+Alt+P/T + 冲突检测。
+
+            v0.25 番茄线：focus_key/on_focus 透传（id=3，Ctrl+Alt+F；空串=
+            不注册）。win 的 RegisterHotKey 必须在热键线程的消息循环内注册，
+            故 focus 键同样只经本方法透传给 hotkey_win.HotkeyManager。
+            """
             from . import hotkey_win
 
             self._hotkey_mgr = hotkey_win.HotkeyManager()
@@ -783,7 +795,7 @@ elif sys.platform == "win32":
             return self._hotkey_mgr.start(
                 hk_cfg.get("chat", "ctrl+alt+p"),
                 hk_cfg.get("spit", "ctrl+alt+t"),
-                on_chat, on_spit, on_conflict,
+                on_chat, on_spit, focus_key, on_focus, on_conflict,
                 bridge=bridge,
             )
 

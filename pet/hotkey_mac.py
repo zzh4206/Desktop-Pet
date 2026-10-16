@@ -7,6 +7,8 @@ Carbon 子包不保证安装，故不依赖）：
 - **Cmd+Option+P** → 唤出/隐藏聊天面板（``on_chat``）
 - **Cmd+Option+T** → 强制吐出吃鼠标（``on_spit``，未吃时 ``force_spit``
   幂等 no-op）
+- **Cmd+Option+F** → 开始/停止番茄钟（``on_focus``，v0.25 番茄线 id=3；
+  ``focus_key`` 空串/``on_focus=None`` = 该入口未挂载，不注册不告警）
 - 注册失败（已被其他 app 占用）→ ``on_conflict(name, key)`` 冲突回调
 
 线程模型：与 win 的专用热键线程不同——``RegisterEventHotKey`` 事件由系统
@@ -57,8 +59,9 @@ eventAttributeNone = 0
 # 应用级 EventHotKeyID 签名（4 字符任意，仅本进程内唯一即可）
 _HOTKEY_SIG = _four("dpet")
 
-_ID_CHAT = 1   # 与 win 对齐：1=聊天 / 2=吐出（app._on_hotkey_fired 按此分发）
+_ID_CHAT = 1   # 与 win 对齐：1=聊天 / 2=吐出 / 3=番茄（app._on_hotkey_fired 分发）
 _ID_SPIT = 2
+_ID_FOCUS = 3
 
 
 # ---- kVK_ANSI_* 虚拟键码（HIToolbox/Events.h）----
@@ -195,10 +198,12 @@ class _HotkeySignalBridge:
 
 
 class HotkeyManager:
-    """Carbon 全局热键（chat/spit）；注册失败检测+回调通知。
+    """Carbon 全局热键（chat/spit/focus）；注册失败检测+回调通知。
 
     生命周期：
-    - ``start(chat_key, spit_key, ...)`` → 装事件处理器 + 注册两键；返
+    - ``start(chat_key, spit_key, on_chat, on_spit, focus_key="",
+      on_focus=None, ...)`` → 装事件处理器 + 注册键（focus 键仅在
+      ``focus_key`` 非空且 ``on_focus`` 非 None 时注册）；返
       True=至少一个注册成功。
     - ``stop()`` → 注销 + 移除处理器（shutdown 用；幂等）。
     """
@@ -220,10 +225,13 @@ class HotkeyManager:
         return self._active
 
     def start(self, chat_key: str, spit_key: str,
-              on_chat, on_spit, on_conflict=None, bridge=None) -> bool:
+              on_chat, on_spit, focus_key: str = "", on_focus=None,
+              on_conflict=None, bridge=None) -> bool:
         """注册热键并装事件处理器。
 
-        chat_key/spit_key 形如 "cmd+option+p"。返 True=至少一个注册成功。
+        chat_key/spit_key/focus_key 形如 "cmd+option+p"。focus_key 空串或
+        on_focus=None（focus.enabled=false）→ 番茄键不注册（入口隐藏）。
+        返 True=至少一个注册成功。
         """
         if not _HAS_CARBON:
             _log.warning("[热键] Carbon 不可用，跳过")
@@ -233,10 +241,13 @@ class HotkeyManager:
             # 事件线程直调（假设=主线程）——明示兜底路径，防静默 UB
             _log.warning("[热键] 无 signal bridge，回调将在线程内直调"
                          "（生产路径应注入 bridge 转主线程）")
+        _want_focus = bool(focus_key) and on_focus is not None
         with self._lock:
             if self._active:
                 return True  # 幂等
             self._callbacks = {_ID_CHAT: on_chat, _ID_SPIT: on_spit}
+            if _want_focus:
+                self._callbacks[_ID_FOCUS] = on_focus
             self._on_conflict = on_conflict
             self._bridge = bridge
             keys = {
@@ -245,6 +256,10 @@ class HotkeyManager:
             }
             names = {_ID_CHAT: "唤聊天", _ID_SPIT: "吐出"}
             keystrs = {_ID_CHAT: chat_key, _ID_SPIT: spit_key}
+            if _want_focus:
+                keys[_ID_FOCUS] = parse_hotkey(focus_key)
+                names[_ID_FOCUS] = "番茄钟"
+                keystrs[_ID_FOCUS] = focus_key
 
             if not self._install_handler():
                 return False

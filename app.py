@@ -363,6 +363,18 @@ class PetApp:
         self._weather_service = build_weather_service(
             self.cfg, cache_path=os.path.join(
                 self._paths["data_dir"], "weather_cache.json"))
+        # v0.25 番茄专注（共享层 pet/focus.py，可选 opt-in）：focus.enabled
+        # 只决定入口是否挂载（托盘/热键/工具可见即点即用），**绝不自动运行**
+        # ——不 start 即 IDLE，对吃鼠标/久坐/纠缠/主动关怀零影响（§1 惰性
+        # 接管不变量）。须在 _setup_chat 之前建实例：registry 的
+        # start_pomodoro/stop_pomodoro 工具要拿到会话（同天气服务先建先例）。
+        self._focus_session = self._build_focus_session()
+        self._focus_tray_active = None
+        self.tray.set_focus_callback(self._toggle_focus)
+        self.tray.set_focus_visible(self._focus_session is not None)
+        self.tray.set_focus_active(
+            bool(self._focus_session is not None
+                 and self._focus_session.active))
         try:
             self._setup_chat()
         except Exception:
@@ -941,6 +953,13 @@ class PetApp:
         from pet.weather import build_weather_tool
         for schema, handler in build_weather_tool(
                 getattr(self, "_weather_service", None)):
+            registry.register(schema, handler)
+        # v0.25.2 start_pomodoro/stop_pomodoro：FocusSession 薄转发（无危险级
+        # 不打扰）；focus.enabled=false 时 session=None 也注册，handler 返回
+        # 失败说明（同 get_weather 先例）
+        from pet.focus import build_focus_tools
+        for schema, handler in build_focus_tools(
+                getattr(self, "_focus_session", None)):
             registry.register(schema, handler)
 
         # v0.9/v0.8 面板 singleton 预注册：必须在 _build_chat_panel 创建首个
@@ -1591,6 +1610,78 @@ class PetApp:
             return AIArtProvider(idle_fn=idle_fn, sleepy_idle_s=sleepy_s)
         return EmojiProvider(idle_fn=idle_fn, sleepy_idle_s=sleepy_s)
 
+    # ---- v0.25 番茄专注（可选 opt-in；§1 两段式开关 + §4.2 三入口同源）----
+
+    def _build_focus_session(self):
+        """构建番茄节律器：``focus.enabled=false`` → None（入口全隐藏、零接管）。
+
+        注入位全部平台库-free（focus.py 无平台 import）：now_fn 取 wall-clock
+        （epoch deadline 比较，睡眠过期即迁移不补算）；气泡走 ``_auto_bubble``
+        自动路径（全屏丢弃/来源标记沿用既有链）；FSM 事件走 fsm.handle_event
+        （0.25.3 起有 focus_rest_on/off 分支）；DND 读 config.proactive.dnd
+        （只静默提醒、节律照走，与吃鼠标「DND 立即吐出」相反，§9）。
+        0.25.4 起再注入 idle_fn（break_enforce 计量），0.25.5 起注入
+        store/state_path（养成 + 重水化）。
+        """
+        cfg = self.cfg.get("focus") or {}
+        if not cfg.get("enabled", True):
+            self.logger.info("[番茄] focus.enabled=false，功能未挂载")
+            return None
+        import time as _time
+
+        from pet.focus import FocusSession
+
+        _pro = self.cfg.get("proactive") or {}
+        try:
+            return FocusSession(
+                now_fn=_time.time,
+                bubble_fn=self._auto_bubble,
+                fsm_event_fn=lambda ev: self.fsm.handle_event(ev),
+                sound_fn=lambda: self.sfx.play("focus"),
+                dnd_fn=lambda: bool(_pro.get("dnd", False)),
+                # 全屏中到点：只气泡不切 FSM 姿态（focus.py 内判，§4.1）
+                fullscreen_fn=self.adapter.is_fullscreen_active,
+                cfg=cfg,
+            )
+        except Exception:
+            self.logger.warning("[番茄] 装配失败，功能静默", exc_info=True)
+            return None
+
+    def _toggle_focus(self) -> None:
+        """托盘/热键/工具三入口共用的 toggle：非 IDLE → stop，IDLE → start。
+
+        §4.3 反向互斥：吃鼠标中开番茄 → 先 force_spit（幂等，未吃时 no-op）
+        再 start——用户显式意图优先。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            self.bubble.show("番茄钟未启用（config focus.enabled=false）",
+                             kind=BubbleType.WARNING,
+                             anchor=self._pet_anchor())
+            return
+        if not sess.active:
+            try:
+                self._proactive.force_spit()
+            except Exception:
+                self.logger.warning("[番茄] 启动前吐出吃鼠标失败", exc_info=True)
+        if sess.active:
+            sess.stop()
+        else:
+            sess.start()
+        self._sync_focus_tray()
+
+    def _sync_focus_tray(self) -> None:
+        """托盘番茄项文案 ↔ 运行态同步（幂等；仅在状态变化时写 QAction）。"""
+        sess = getattr(self, "_focus_session", None)
+        active = bool(sess is not None and sess.active)
+        if active == self._focus_tray_active:
+            return
+        self._focus_tray_active = active
+        try:
+            self.tray.set_focus_active(active)
+        except Exception:
+            self.logger.warning("[番茄] 托盘状态同步失败", exc_info=True)
+
     def _setup_hotkeys(self) -> None:
         """v0.11 全局热键注册 + 冲突气泡提示。"""
         def on_conflict(name, key):
@@ -1607,6 +1698,15 @@ class PetApp:
         # start_hotkeys 成功会在下方 bubble 引用 NameError；except 也只抓
         # ImportError，抓不到模块级 WinDLL 加载失败的真实形态（OSError）
         _hk_hint = ""
+        # v0.25.2 番茄热键 id=3：focus.enabled=false（session=None）→ 空键
+        # 透传，shim 侧不注册（入口与热键同步隐藏）
+        _focus_key = (
+            (self.cfg.get("hotkeys") or {}).get("focus", "cmd+option+f")
+            if getattr(self, "_focus_session", None) is not None else "")
+        _focus_hint = ""
+        if _focus_key:
+            _focus_hint = (" / Cmd+Option+F 番茄" if sys.platform == "darwin"
+                           else " / Ctrl+Alt+F 番茄")
         try:
             if sys.platform == "darwin":
                 from pet.hotkey_mac import _HotkeySignalBridge
@@ -1629,22 +1729,28 @@ class PetApp:
             self.cfg,
             on_chat=self._toggle_chat_panel,     # bridge 为 None 时直调
             on_spit=lambda: self._proactive.force_spit(),
+            focus_key=_focus_key,
+            on_focus=self._toggle_focus,
             on_conflict=on_conflict,
             bridge=hotkey_bridge,
         )
         if not ok:
             self.logger.warning("[热键] 全部注册失败")
         else:
-            self.logger.info("[热键] 就绪（%s）", _hk_hint)
+            self.logger.info("[热键] 就绪（%s）", _hk_hint + _focus_hint)
             # v0.17.0：热键提示进托盘 tooltip（悬停可见，缓解热键太隐蔽）
-            self.tray.set_tooltip(f"桌宠 · {_hk_hint}")
+            self.tray.set_tooltip(f"桌宠 · {_hk_hint}{_focus_hint}")
+        # v0.25.2：托盘番茄项按当前运行态对齐（重水化后可能是运行中）
+        self._sync_focus_tray()
 
     def _on_hotkey_fired(self, hid: int) -> None:
-        """M7：热键信号主线程分发（hid=1 聊天 / hid=2 吐出）。"""
+        """M7：热键信号主线程分发（hid=1 聊天 / hid=2 吐出 / hid=3 番茄）。"""
         if hid == 1:
             self._toggle_chat_panel()
         elif hid == 2:
             self._proactive.force_spit()
+        elif hid == 3:
+            self._toggle_focus()
 
     def _toggle_chat_panel(self) -> None:
         """Ctrl+Alt+P 唤出/隐藏聊天面板（v0.11 Must）。"""
@@ -2452,6 +2558,15 @@ class PetApp:
         self._last_facing_x = self.fsm.pos[0]
         # v0.18.12 三维呈现喂入（内部守卫 mode!=3d 即返回，零成本）
         self._render3d_tick()
+        # v0.25.2 番茄节律 tick：IDLE 态零副作用（§1 惰性接管不变量）；到期
+        # 迁移/提醒/休息执法计量都在 FocusSession 内，异常不外抛污染 FSM 拍
+        _fs = getattr(self, "_focus_session", None)
+        if _fs is not None:
+            try:
+                _fs.tick()
+            except Exception:
+                self.logger.warning("[番茄] tick 异常", exc_info=True)
+            self._sync_focus_tray()
 
     # ---- v0.3 动画 ----
     # H1 修（REVIEW-2026-08-25）：随机小动作 key 集——_frame_tick 的兜底停

@@ -121,7 +121,16 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.26.4"
+__version__ = "0.25.2"
+# v0.25.2：番茄专注入口三件套——托盘「🍅 开始/停止番茄钟」动态项
+# （TrayManager.set_focus_callback/set_focus_visible/set_focus_active，
+# focus_label 纯函数）+ 全局热键 id=3（hotkey_mac/hotkey_win 的 start 增
+# focus_key/on_focus，空键=入口未挂载不注册；冲突沿用 on_conflict 改键
+# 气泡）+ platform 三处 start_hotkeys 透传（win RegisterHotKey 仍只在热键
+# 线程消息循环内注册）；app 装配 FocusSession（now_fn/bubble_fn/fsm_event_fn/
+# sound_fn/dnd_fn/fullscreen_fn/cfg 注入，每拍 _tick 调 tick）、_toggle_focus
+# 收敛托盘/热键/工具三入口、ToolRegistry 注册 start_pomodoro/stop_pomodoro；
+# focus.enabled=false → session=None + 托盘项隐藏 + 空热键，零接管（§1）。
 # v0.26.4：语音来源分类修正 + 降级回复朗读——app._auto_bubble 增 keyword-only
 # ``source``（默认 "proactive"：它是 pet/proactive.py 注入的 bubble_fn(text)
 # 落点，即主动关怀的归属），而「用户动作触发的即时反馈」——聊天情绪

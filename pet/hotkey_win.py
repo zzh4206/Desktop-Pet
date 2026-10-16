@@ -3,8 +3,10 @@
 持久热键线程（独立于吃鼠标钩子线程）：
 - **Ctrl+Alt+P** → 唤出/隐藏聊天面板
 - **Ctrl+Alt+T** → 强制吐出（吃鼠标时释放；平时 no-op 幂等）
+- **Ctrl+Alt+F** → 开始/停止番茄钟（v0.25 番茄线 id=3；``focus_key`` 空串
+  或 ``on_focus=None`` = 该入口未挂载，不注册不告警）
 - 注册失败（被占用）→ 冲突检测，日志 warning + 回调通知上层气泡提示改键
-- config `hotkeys.chat/spit` 可自定义（v0.11 版本规划 Must）
+- config `hotkeys.chat/spit/focus` 可自定义（v0.11 版本规划 Must）
 
 热键字符串解析："ctrl+alt+p" → (MOD_CONTROL|MOD_ALT, VK_P)。
 支持修饰 ctrl/alt/shift/win + 字母数字键。
@@ -32,6 +34,8 @@ WM_QUIT = 0x0012
 
 _ID_CHAT = 1
 _ID_SPIT = 2
+_ID_FOCUS = 3   # v0.25 番茄线：与 mac 侧对齐（app._on_hotkey_fired 分发）
+_HOTKEY_NAMES = {_ID_CHAT: "聊天", _ID_SPIT: "吐出", _ID_FOCUS: "番茄钟"}
 
 _MOD_MAP = {
     "ctrl": MOD_CONTROL, "control": MOD_CONTROL,
@@ -132,12 +136,15 @@ class HotkeyManager:
         return self._active
 
     def start(self, chat_key: str, spit_key: str,
-              on_chat, on_spit, on_conflict=None, bridge=None) -> bool:
+              on_chat, on_spit, focus_key: str = "", on_focus=None,
+              on_conflict=None, bridge=None) -> bool:
         """注册热键并启动消息循环。
 
-        chat_key/spit_key 形如 "ctrl+alt+p"；on_conflict(name, key) 在
-        注册失败时回调（气泡提示改键）。返 True 至少一个注册成功。
+        chat_key/spit_key/focus_key 形如 "ctrl+alt+p"；on_conflict(name, key)
+        在注册失败时回调（气泡提示改键）。focus_key 空串或 on_focus=None
+        （focus.enabled=false）→ 番茄键不注册。返 True 至少一个注册成功。
         """
+        _want_focus = bool(focus_key) and on_focus is not None
         with self._lock:
             if self._active:
                 return True  # 幂等（已在跑）
@@ -152,6 +159,10 @@ class HotkeyManager:
             # 原始键串（日志/冲突提示用——旧版硬编码 "ctrl+alt+p/t"，
             # 用户改键或 cmd 别名解析后提示与实际不符）
             self._key_strs = {_ID_CHAT: chat_key, _ID_SPIT: spit_key}
+            if _want_focus:
+                self._callbacks[_ID_FOCUS] = on_focus
+                self._keys[_ID_FOCUS] = parse_hotkey(focus_key)
+                self._key_strs[_ID_FOCUS] = focus_key
             self._on_conflict = on_conflict
             self._bridge = bridge
             # M11 修（REVIEW-2026-08-25）：_ready/_reg_ok 必须在 start() 前
@@ -228,7 +239,7 @@ class HotkeyManager:
                 _log.warning("[热键] %s 注册失败(被占用?) err=%s",
                              key_str, ctypes.get_last_error())
                 if on_conflict:
-                    name = "聊天" if hid == _ID_CHAT else "吐出"
+                    name = _HOTKEY_NAMES.get(hid, "热键")
                     # M12 修：经 bridge 信号转主线程（旧版热键线程直调
                     # on_conflict → bubble.show 跨线程 GUI 未定义行为）
                     if bridge is not None:
@@ -240,7 +251,7 @@ class HotkeyManager:
                             pass
             else:
                 _log.info("[热键] %s 注册成功 (%s)",
-                          "聊天" if hid == _ID_CHAT else "吐出", key_str)
+                          _HOTKEY_NAMES.get(hid, "热键"), key_str)
 
         self._ready.set()
 
