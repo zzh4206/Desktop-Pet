@@ -121,7 +121,11 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.25.5"
+__version__ = "0.25.6"
+# v0.25.6：番茄收尾——托盘 tooltip「🍅×今日完成数」（TrayManager.
+# set_focus_count + 纯函数 tooltip_text；0 不显示、与 v0.19.2 状态行互不
+# 覆盖，app._sync_focus_tray 每拍幂等推送）+ README 补 focus.* /
+# hotkeys.focus 配置表与运行期口径（含「默认关 = 零输入抑制」安全红线）。
 # v0.25.5：番茄统计与养成——app 注入 store（完成番茄 store.update(mood=
 # +mood_gain) 走 observer，托盘状态行自动刷新）+ state_path=data_dir/
 # focus_state.json（当日完成数/累计专注秒/打断数/连续天数，跨日归零、

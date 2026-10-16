@@ -249,7 +249,29 @@ python app.py --verbose
 | --- | --- | --- | --- |
 | `hotkeys.chat` | `cmd+option+p` | 热键串 | 显示/隐藏聊天面板；Windows 上 `cmd`/`option` 自动解释为 `Ctrl`/`Alt`。 |
 | `hotkeys.spit` | `cmd+option+t` | 热键串 | 强制解除“吃鼠标”状态。 |
+| `hotkeys.focus` | `cmd+option+f` | 热键串 | 开始/停止番茄钟（v0.25.2，mac `Cmd+Option+F` / Windows `Ctrl+Alt+F`）；被占用时气泡提示改键，功能不降级（托盘/聊天指令入口不受影响）。 |
 | `log_level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | 日志级别；命令行 `--verbose` 等效于 `DEBUG`。 |
+
+### 番茄专注（可选）
+
+默认**入口可见但绝不自动运行**（不点不 start 即 IDLE，对吃鼠标/久坐/纠缠/主动关怀
+零影响）。开始方式三选一：托盘「🍅 开始番茄钟」、热键 `hotkeys.focus`、聊天说
+「开始番茄钟」。
+
+| 键 | 默认值 | 范围 | 说明 |
+| --- | --- | --- | --- |
+| `focus.enabled` | `true` | 布尔 | 总开关。`false` = 托盘入口与热键全部隐藏、不加载节律器（彻底不用）。 |
+| `focus.work_min` | `25` | 1 – 180 | 专注段时长（分钟）。 |
+| `focus.short_min` | `5` | 1 – 60 | 短休息时长（分钟）。 |
+| `focus.long_min` | `15` | 1 – 120 | 长休息时长（分钟，每 `cycles` 个专注段后）。 |
+| `focus.cycles` | `4` | 1 – 12 | 几轮专注后进入长休息。 |
+| `focus.break_enforce` | `false` | 布尔 | 休息执法（**默认关 = 零输入抑制**）：休息开始 30s 内键鼠活动累计每 10s 记一次 `breaks_cut`，累计 ≥20s 才温和气泡一次；不接管鼠标、不做任何输入限制。 |
+| `focus.mood_gain` | `3` | 0 – 20 | 每完成一个专注段的心情增益（走养成状态机，托盘状态行自动刷新）。 |
+
+运行期行为：专注段宠物趴下陪伴（停止游走，拖拽仍可挪动）；运行中静默久坐提醒与
+吃鼠标、链式唤醒顺延 10min（只挡新发起，不打断已在进行的抑制）；DND 只静默提醒、
+节律照走。当日完成数/累计时长/打断数/连续天数落 `focus_state.json`（数据目录，
+可删），重启在 5 分钟宽限内恢复进行中的节律；托盘悬停可见「🍅×今日完成数」。
 
 ## 启用 AI 聊天（可选）
 
@@ -356,6 +378,7 @@ python -m compileall app.py pet
 欢迎通过 Issue 或 Pull Request 参与改进。提交前请尽量保持 macOS 与 Windows 的适配层一致，并运行与改动模块相关的 `spikes/` 验证脚本。
 | v0.25.4 | 番茄休息执法（可选，`focus.break_enforce` **默认 false = 零输入抑制红线**）：app 注入 `idle_fn`（系统空闲 <2s 视为有键鼠活动），休息段开始 30s 窗口内活动累计每 10s 记一次 `breaks_cut`、累计 ≥20s 才温和气泡一次（单次误触不提醒，§9 拍板阈值）；**不接 mouse_lock、不做任何输入抑制**。同版修：`FocusSession._emit` 文案池元组 → 随机取一条 `str`（旧版把整池交给 `bubble_fn`，与 `_auto_bubble/BubbleManager.show` 的 `text: str` 契约不符）。 |
 | v0.25.5 | 番茄统计与养成：app 注入 `store`（完成番茄 `store.update(mood=+mood_gain)` 走 observer，托盘状态行自动刷新）+ `state_path=data_dir/focus_state.json`（当日完成数/累计专注秒/打断数/连续天数，跨日归零、`streak_days` 按当日有完成维护）；**重启续算**——进行中节律按 deadline 恢复（5min 宽限内且同日），恢复到 FOCUS 段时补发 `focus_rest_on` 陪伴姿态（全屏静默守卫照旧），IDLE/休息段不补发。 |
+| v0.25.6 | 番茄收尾：托盘 tooltip「🍅×今日完成数」（`TrayManager.set_focus_count` + 纯函数 `tooltip_text`，0 不显示、与状态行互不覆盖）；README 补 `focus.*` / `hotkeys.focus` 配置表与运行期口径（含「默认关 = 零输入抑制」红线）+ 版本沿革。 |
 
 ## 许可证
 

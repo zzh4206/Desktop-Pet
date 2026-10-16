@@ -21,6 +21,21 @@ def focus_label(active: bool) -> str:
     return _FOCUS_STOP_LABEL if active else _FOCUS_START_LABEL
 
 
+def tooltip_text(base: str, focus_count: int = 0,
+                 status: str | None = None) -> str:
+    """托盘 tooltip 合成（纯函数，便于无 Qt 单测）。
+
+    顺序：基础行（v0.17 热键提示）→ v0.25.6 今日番茄「🍅×N」（0 不显示）
+    → v0.19.2 状态行；三段互不覆盖（各自 setter 只改自己那段）。
+    """
+    parts = [base]
+    if focus_count:
+        parts.append(f"🍅×{int(focus_count)}")
+    if status:
+        parts.append(status)
+    return "\n".join(parts)
+
+
 class TrayManager(QObject):
     def __init__(self, on_quit, parent=None):
         super().__init__(parent)
@@ -42,6 +57,7 @@ class TrayManager(QObject):
         # 触线警示时图标角落加红点（_make_icon(alert=True)）
         self._base_tooltip = "桌宠"
         self._status_line: str | None = None
+        self._focus_count = 0            # v0.25.6 今日完成番茄数（tooltip 🍅×N）
 
         menu = QMenu()
         act_chat = menu.addAction("聊天")
@@ -116,10 +132,22 @@ class TrayManager(QObject):
         self._tray.setIcon(self._make_icon(alert=self._alert))
 
     def _apply_tooltip(self) -> None:
-        parts = [self._base_tooltip]
-        if self._status_line:
-            parts.append(self._status_line)
-        self._tray.setToolTip("\n".join(parts))
+        # v0.25.6 番茄线：今日完成数「🍅×N」（0 不显示——没开番茄的托盘与
+        # 旧版逐字一致）；合成逻辑在模块级纯函数 tooltip_text
+        self._tray.setToolTip(tooltip_text(
+            self._base_tooltip, getattr(self, "_focus_count", 0),
+            self._status_line))
+
+    def set_focus_count(self, count: int) -> None:
+        """v0.25.6：今日完成番茄数进 tooltip（app 完成/跨日/启动时调）。
+
+        仅当数值变化才写 QSystemTrayIcon（幂等，tick 每拍调用零成本）。
+        """
+        count = max(0, int(count))
+        if count == getattr(self, "_focus_count", 0):
+            return
+        self._focus_count = count
+        self._apply_tooltip()
 
     def set_autostart_state(self, enabled: bool) -> None:
         """v0.11：同步自启菜单勾选态（app 启动时调）。

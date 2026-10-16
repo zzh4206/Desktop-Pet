@@ -1687,16 +1687,22 @@ class PetApp:
         self._sync_focus_tray()
 
     def _sync_focus_tray(self) -> None:
-        """托盘番茄项文案 ↔ 运行态同步（幂等；仅在状态变化时写 QAction）。"""
+        """托盘番茄项文案/计数 ↔ 运行态与当日统计同步（幂等，每拍可调）。"""
         sess = getattr(self, "_focus_session", None)
         active = bool(sess is not None and sess.active)
-        if active == self._focus_tray_active:
-            return
-        self._focus_tray_active = active
+        if active != self._focus_tray_active:
+            self._focus_tray_active = active
+            try:
+                self.tray.set_focus_active(active)
+            except Exception:
+                self.logger.warning("[番茄] 托盘状态同步失败", exc_info=True)
+        # v0.25.6 今日完成数「🍅×N」进 tooltip（set_focus_count 自身按值变
+        # 幂等早返回——tick 每拍调用零成本）
         try:
-            self.tray.set_focus_active(active)
+            self.tray.set_focus_count(
+                int(sess.stats.completed) if sess is not None else 0)
         except Exception:
-            self.logger.warning("[番茄] 托盘状态同步失败", exc_info=True)
+            self.logger.warning("[番茄] tooltip 计数同步失败", exc_info=True)
 
     def _setup_hotkeys(self) -> None:
         """v0.11 全局热键注册 + 冲突气泡提示。"""
