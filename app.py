@@ -1625,9 +1625,9 @@ class PetApp:
         （epoch deadline 比较，睡眠过期即迁移不补算）；气泡走 ``_auto_bubble``
         自动路径（全屏丢弃/来源标记沿用既有链）；FSM 事件走 fsm.handle_event
         （0.25.3 起有 focus_rest_on/off 分支）；DND 读 config.proactive.dnd
-        （只静默提醒、节律照走，与吃鼠标「DND 立即吐出」相反，§9）。
-        0.25.4 起再注入 idle_fn（break_enforce 计量），0.25.5 起注入
-        store/state_path（养成 + 重水化）。
+        （只静默提醒、节律照走，与吃鼠标「DND 立即吐出」相反，§9）；
+        idle_fn 供 break_enforce 计量（默认关，零输入抑制红线）、0.25.5 起再
+        注入 store/state_path（养成 + 重启重水化）。
         """
         cfg = self.cfg.get("focus") or {}
         if not cfg.get("enabled", True):
@@ -1646,6 +1646,10 @@ class PetApp:
                 sound_fn=lambda: self.sfx.play("focus"),
                 dnd_fn=lambda: bool(_pro.get("dnd", False)),
                 # 全屏中到点：只气泡不切 FSM 姿态（focus.py 内判，§4.1）
+                # 0.25.4 休息执法计量（仅 break_enforce=true 生效；默认关 =
+                # 零输入抑制红线，绝不碰 mouse_lock）：系统空闲 <2s 视为
+                # 「有键鼠活动」，累计 >10s 记一次打断（§9 拍板阈值）
+                idle_fn=lambda: self.sensors.idle_time,
                 fullscreen_fn=self.adapter.is_fullscreen_active,
                 cfg=cfg,
             )

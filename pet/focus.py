@@ -322,9 +322,18 @@ class FocusSession:
         except Exception:
             _log.warning("[番茄] fsm 事件 %s 派发异常", event, exc_info=True)
 
-    def _emit(self, msg: str) -> None:
+    def _emit(self, msg) -> None:
+        """气泡 + 音效；DND 只静默提醒（气泡+音效），节律照走。
+
+        ``msg`` 可为文案池元组（_FOCUS_START/_FOCUS_DONE/_REST_DONE/_
+        BREAK_CUT 均为纯数据元组）——0.25.4 修：旧版把整个元组直接交给
+        ``bubble_fn``，而 app ``_auto_bubble``/``BubbleManager.show`` 契约是
+        ``str``，实际会显示成 repr 或抛异常；此处按池随机取一条保证恒 str。
+        """
         if self._dnd:
-            return   # DND 只静默提醒（气泡+音效），节律照走
+            return
+        if isinstance(msg, (tuple, list)):
+            msg = random.choice(tuple(msg)) if msg else ""
         if self._bubble is not None:
             try:
                 self._bubble(msg)
