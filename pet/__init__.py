@@ -121,7 +121,13 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.26.1"
+__version__ = "0.26.2"
+# v0.26.2：语音配置段——config 增 voice 段（proactive_speak/dedup_sec/
+# asset_root + tts 子段 enabled/provider/voice/rate/speak_chat/quiet_hours，
+# 全部默认关，对齐 sound 先例）+ _SECTION_SCHEMAS 增 voice 校验（provider
+# 枚举限死 asset/system、quiet_hours 在 voice 与 voice.tts 两处都收、
+# additionalProperties 严校验）；非法值回退默认，坏配置不致启动失败；
+# config.example.json 模板同步。
 # v0.26.1：语音平台层与注入位——pet/voice_mac.py（MacAssetPlayer 走 AppKit
 # NSSound 播放 wav/aiff/m4a/mp3/caf 系统 codec，持强引用防 GC 静音、play 前
 # 先 stop 防叠音；MacTtsEngine 走系统 `say` 子进程，list 传参不开 shell、

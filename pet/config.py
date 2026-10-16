@@ -41,6 +41,18 @@ _SAFE_DEFAULTS: dict = {
                     "fatigue_times": 5, "fatigue_window_min": 10},
     # v0.19.0 F4：交互音效管线（默认关；资产 assets/sounds/ 后补不阻塞）
     "sound": {"enabled": False, "volume": 0.6},
+    # v0.26 语音线（pet/voice.py）：全部默认关（对齐 sound 先例）。
+    # tts.provider="asset"=罐头音包直放（资产 assets/voice/<key>.<ext>，占位
+    # 音频程序生成、正式音包由用户后续录制替换）；"system"=mac `say` 动态合成。
+    # proactive_speak 独立开关（主动关怀气泡默认不朗读，防深夜出声）；
+    # quiet_hours 深夜静默窗口（跨午夜写法 [23, 8]）；dedup_sec 连发去重窗。
+    "voice": {
+        "proactive_speak": False, "dedup_sec": 3.0, "asset_root": "",
+        "tts": {
+            "enabled": False, "provider": "asset", "voice": "", "rate": 0,
+            "speak_chat": True, "quiet_hours": [23, 8],
+        },
+    },
     "score": {
         "mood_weight": 0.4,
         "fullness_weight": 0.4,
@@ -205,6 +217,42 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "volume": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         },
         "required": ["enabled", "volume"],
+        "additionalProperties": False,
+    },
+    # v0.26 语音线：全部默认关；provider 枚举限死（asset=罐头直放 /
+    # system=动态合成，后续扩 cloud/edge 时同步加枚举）。quiet_hours 允许写在
+    # voice 段或 voice.tts 段（voice.VoiceSettings.from_config 两处都读，
+    # 故 schema 两处都收）。
+    "voice": {
+        "type": "object",
+        "properties": {
+            "proactive_speak": {"type": "boolean"},
+            "dedup_sec": {"type": "number", "minimum": 0.0, "maximum": 60.0},
+            "asset_root": {"type": "string", "maxLength": 512},
+            "quiet_hours": {
+                "type": "array", "minItems": 2, "maxItems": 2,
+                "items": {"type": "integer", "minimum": 0, "maximum": 23},
+            },
+            "tts": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "provider": {"type": "string",
+                                 "enum": ["asset", "system"]},
+                    "voice": {"type": "string", "maxLength": 64},
+                    "rate": {"type": "integer", "minimum": 0,
+                             "maximum": 400},
+                    "speak_chat": {"type": "boolean"},
+                    "quiet_hours": {
+                        "type": "array", "minItems": 2, "maxItems": 2,
+                        "items": {"type": "integer", "minimum": 0,
+                                  "maximum": 23},
+                    },
+                },
+                "required": ["enabled"],
+                "additionalProperties": False,
+            },
+        },
         "additionalProperties": False,
     },
     # v0.23 天气线：城市名经 geocoding 缓存坐标；refresh_min 下限 5

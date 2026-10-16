@@ -52,6 +52,19 @@
     "enabled": false,
     "volume": 0.6
   },
+  "voice": {
+    "proactive_speak": false,
+    "dedup_sec": 3,
+    "asset_root": "",
+    "tts": {
+      "enabled": false,
+      "provider": "asset",
+      "voice": "",
+      "rate": 0,
+      "speak_chat": true,
+      "quiet_hours": [23, 8]
+    }
+  },
   "behavior": {
     "walk_speed": 80,
     "follow_speed": 600,
