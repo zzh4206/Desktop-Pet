@@ -175,5 +175,16 @@
       "notes": true,
       "notes_max_chars": 1000
     }
+  },
+  "weather": {
+    "enabled": false,
+    "city": "",
+    "refresh_min": 30,
+    "alerts": {
+      "precip_prob": 50,
+      "drop_c": 5,
+      "hot_c": 35,
+      "cold_c": 0
+    }
   }
 }

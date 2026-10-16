@@ -137,6 +137,13 @@ _SAFE_DEFAULTS: dict = {
             "history_cap": 200, "notes": True, "notes_max_chars": 1000,
         },
     },
+    # v0.23 天气线（pet/weather.py）：Open-Meteo 免 key；city 留空=功能
+    # 静默（2026-10-08 拍板）；alerts 阈值（降水概率%/降温℃/高温/寒潮）。
+    "weather": {
+        "enabled": False, "city": "", "refresh_min": 30,
+        "alerts": {"precip_prob": 50, "drop_c": 5,
+                   "hot_c": 35, "cold_c": 0},
+    },
 }
 
 # 需校验的数值子段 schema（其余键 v0.2 不强校验）
@@ -198,6 +205,32 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "volume": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         },
         "required": ["enabled", "volume"],
+        "additionalProperties": False,
+    },
+    # v0.23 天气线：城市名经 geocoding 缓存坐标；refresh_min 下限 5
+    # （weather.WeatherService 内再钳制，schema 放宽到 0 便于报错回退）
+    "weather": {
+        "type": "object",
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "city": {"type": "string", "maxLength": 64},
+            "refresh_min": {"type": "number", "minimum": 5, "maximum": 720},
+            "alerts": {
+                "type": "object",
+                "properties": {
+                    "precip_prob": {"type": "number", "minimum": 0,
+                                    "maximum": 100},
+                    "drop_c": {"type": "number", "minimum": 0,
+                               "maximum": 40},
+                    "hot_c": {"type": "number", "minimum": 0,
+                              "maximum": 60},
+                    "cold_c": {"type": "number", "minimum": -60,
+                               "maximum": 20},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "required": ["enabled", "city", "refresh_min", "alerts"],
         "additionalProperties": False,
     },
     "score": {
