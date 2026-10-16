@@ -272,6 +272,8 @@ python app.py --verbose
 | `focus.cycles` | `4` | 1 – 12 | 几轮专注后进入长休息。 |
 | `focus.break_enforce` | `false` | 布尔 | 休息执法（**默认关 = 零输入抑制**）：休息开始 30s 内键鼠活动累计每 10s 记一次 `breaks_cut`，累计 ≥20s 才温和气泡一次；不接管鼠标、不做任何输入限制。 |
 | `focus.mood_gain` | `3` | 0 – 20 | 每完成一个专注段的心情增益（走养成状态机，托盘状态行自动刷新）。 |
+| `focus.presets` | 见示例 | 数组 | 命名预设（v0.27.2）：每项 `{"name", "work_min"}` 必填，`short_min`/`long_min`/`cycles` 可省（**省了就用全局值**）。点击托盘对应项 = 以该预设启动**本轮**（时长/轮数只作用于这一轮，不改全局默认）。空数组 = 托盘不显示预设分组。 |
+| `focus.last_work_min` | `0` | ≥ 0 | 「上次使用的专注时长」（v0.27.2，**自动写**）：托盘选过时长即被记住，下次启动用「🕘 上次使用 N 分钟」一键复用。`0` = 还没有记忆（回落到 `focus.work_min`）。 |
 
 运行期行为：专注段宠物趴下陪伴（停止游走，拖拽仍可挪动）；运行中静默久坐提醒与
 吃鼠标、链式唤醒顺延 10min（只挡新发起，不打断已在进行的抑制）；DND 只静默提醒、
@@ -292,7 +294,23 @@ python app.py --verbose
 聊天里同样可以说「跳过这一轮」「再延长 5 分钟」（工具 `skip_pomodoro` /
 `extend_pomodoro`）；未在番茄中时这两个工具会**如实回一句**「当前未在番茄中」
 而不是静默失败。可选热键 `hotkeys.focus_skip`（默认空 = 不注册）绑的就是「⏭ 跳过
-当前段」。**暂停/继续、启动时选时长/预设仍不在本版**（分别排在 v0.27.3 / v0.27.2）。
+当前段」。**暂停/继续仍不在本版**（排在 v0.27.3）。
+
+**启动时选时长 / 预设 / 热重载（v0.27.2）**：同一个子菜单里，上方是「启动类」
+入口，下方才是运行中控制：
+
+| 子菜单项 | 作用 | 何时可用 |
+| --- | --- | --- |
+| ⏱ 25 / 45 / 60 分钟 | 用该时长启动一轮（**只这一次**，不改默认） | 恒可用（**空闲时才是主用途**） |
+| 🕘 上次使用 N 分钟 | 用上次用过的时长启动（`focus.last_work_min`，跨重启记住） | 恒可用 |
+| 📌 预设名（N 分钟） | 用 `focus.presets` 里的预设启动：work/short/long/cycles **只作用于本轮** | 恒可用（无预设时不显示） |
+| ⭐ 把 N 分钟设为默认 | **改默认**并立刻用 N 启动（默认值自动写回 `focus.last_work_min`） | 恒可用 |
+| 🔄 重载番茄配置 | 重读 config 的 `focus` 段：**进行中的段不被打断**，新时长/预设从下一段生效 | 恒可用 |
+
+「启动类」项在**空闲（IDLE）下就是可用的**——点击本身就是「开始专注」这个显式
+动作，不是后台副作用；而「⏭ 跳过 / ➕ 延长 / ✅ 提前完成」在空闲时**一律置灰**
+（那三项才有"误点"风险）。预设里的 `short_min`/`long_min`/`cycles` 省略时回落
+全局 `focus.*` 值；预设**只作用于本轮**，回空闲即清除。
 
 ### 主动纠缠（可选）
 
@@ -443,6 +461,7 @@ python -m compileall app.py pet
 | v0.25.7 | 番茄线文档归位（无代码改动）：`README.md`「版本沿革」的 v0.25.4/.5/.6 三行归位到表内（0.25.4 起误追加到文件末尾「参与贡献」之后，导致表内只到 v0.25.3），并补本行。 |
 | v0.27.0 | 番茄自由度扩展·模型层①（`pet/focus.py`）：**L3 记账缺陷修复**——`focus_sec` 由「按配置 `work_min` 记账」改为**按实耗**（`_enter` 记 `_phase_started_at`，收口 `min(now, _deadline) − 起点`），pomodoro 未延长时与旧口径**逐值相等**、睡眠大跳仍不补算（L2），是「延长/正计时」不失真的前置；`start(minutes, *, as_default=False)` 拆「一次性 vs 设为默认」（修 L4：旧版 `start(minutes)` 永久改写默认，Q6）；新增 `extend(minutes=5)`（只推移绝对时刻 `_deadline`，延长部分按实耗自动计入，Q3）与 `complete()`（提前完成**计入** completed/streak，与 `stop()` 不计形成明确对照）；`skip()` 逻辑零改动、只补测。入口接线/预设热更新/暂停继续/正计时/统计历史分别归 0.27.1–.7，本版 `pause()` **不存在**。 |
 | v0.27.1 | 番茄自由度扩展·**入口层①（运行中控制）**：托盘子菜单「🍅 番茄钟」——开始/停止（toggle 语义逐字沿用）+「⏭ 跳过当前段」→`skip()` +「➕ 延长 5 分钟」→`extend(5)` +「✅ 提前完成」→`complete()`；可用性走纯函数 `focus_availability`/`apply_focus_menu`（**IDLE 时后三项一律置灰**、✅ 仅专注段可用，模型侧同名 no-op 双保险），状态提供者由 `set_focus_active(bool)` 升级为 `set_focus_phase(state)` 并保留旧调用兼容（`focus.enabled=false` 仍整菜单隐藏）。工具新增 `skip_pomodoro`/`extend_pomodoro`（可选 `minutes` 1–180 与 `start_pomodoro` **同钳制口径**；skip **不计**完成、extend **只延不缩**；IDLE 返回可读说明而非静默失败；与 start/stop 同为无危险级）。可选热键 **id=4** `hotkeys.focus_skip`（**默认空串 = 不注册**；`platform.start_hotkeys` 基类/mac/win 三处加 `skip_key`/`on_skip` 透传，冲突沿用 `on_conflict` 改键气泡；**id=5 留给 v0.27.3 暂停，本版不占**）+ README 配置表与运行期口径。本版**无** `pause()`；启动时长选择/预设归 v0.27.2。 |
+| v0.27.2 | 番茄自由度扩展·**入口层② + 配置面**：**启动时选时长 / 命名预设 / 记住上次 / 配置热重载**。托盘子菜单新增启动类入口——「⏱ 25/45/60 分钟」、「🕘 上次使用 N 分钟」、命名预设分组（`focus.presets`；**空数组时不建项、不加分隔符**）、「⭐ 把 N 分钟设为默认」、「🔄 重载番茄配置」；可用性经 `focus_availability(state, last_work_min)` 的 `start_items` 与 `skip/extend/complete` **分开表达**——**L1：IDLE 下启动类项可用**（点击 = 用户显式 start，不是副作用），而跳过/延长/提前完成 IDLE 仍**一律置灰**。模型层新增 `start_preset(preset)`（`_run` 本轮覆盖 work/short/long/cycles，缺省回落全局值，回 IDLE 即清除，**不改全局默认**）与 `reconfigure(cfg)`（与 `__init__` 共用 `_apply_cfg`；**绝不碰当前段 `_deadline`**，新值只在下一次 `_enter` 生效；触发＝托盘显式重载，不做全局 config watcher）；`FocusSession.last_work_min` 只读属性 + app 在 `_sync_focus_tray()` 里**检测到变化才**调 `pet.config.save_focus_work_min` 落 `focus.last_work_min`（托盘/热键/聊天工具三入口自动全覆盖，值未变零成本）。配置层同步：`focus.presets`（每项 required 只 `name`+`work_min`，short/long/cycles 可省）与 `focus.last_work_min`（`minimum: 0`、**不设上界**，消费端钳制）+ `config.example.json` 示例预设。本版**无** `pause()`；正计时/无休息/统计分归 v0.27.4–.6。 |
 
 ## 参与贡献
 

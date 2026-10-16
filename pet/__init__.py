@@ -121,7 +121,38 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.1"
+__version__ = "0.27.2"
+# v0.27.2：番茄自由度扩展「入口层② + 配置面」（wiki 设计-番茄自由度扩展技术方案
+# §4.1 A / §4.4 D1/D3）——**启动时选时长 + 命名预设 + 配置热重载**：
+# ① 托盘子菜单加「启动类」入口（pet/tray.py）——⏱ 25/45/60 分钟三档 +
+#    「🕘 上次使用 N 分钟」+ 命名预设分组（`focus.presets`；**空数组时不建项、
+#    不加分隔符**）+「⭐ 把 N 分钟设为默认」+「🔄 重载番茄配置」。**L1 要点**：
+#    IDLE 下这些启动项**必须可用**（点击 = 用户显式 start，不是后台副作用），
+#    与「跳过/延长/提前完成」（IDLE 必须置灰）是两类语义，可用性经
+#    `focus_availability(state, last_work_min)` 的 `start_items` 与
+#    `skip/extend/complete` 分开表达；预设分组走 `set_focus_presets` 动态重建
+#    （插在「设为默认」之前），`apply_focus_menu` 对 `"presets"` 键接受**动作
+#    列表**逐项施加。
+# ② `FocusSession.start_preset(preset)`（pet/focus.py，D1）——**本轮覆盖**：
+#    `_run` 只收录预设里显式给出的 work/short/long/cycles（缺省回落全局值，
+#    schema 只 required name+work_min），`_enter_idle()` 时清除；`_work_min`/
+#    `_short_min`/`_long_min`/`_cycles` 这些全局默认**一动不动**（四个有效值读口
+#    `_work_minutes`/`_short_minutes`/`_long_minutes`/`_cycle_target` 统一收口）。
+#    显式 `start()` 清 `_run`（= 新一轮）；`start(minutes, as_default=)` 语义零改动。
+# ③ `reconfigure(cfg)` 热重载（D3）——把 `__init__` 的 `_num/_int` 解析抽成
+#    `_apply_cfg(cfg)` 两处共用；只改配置派生字段，**绝不碰当前段 `_deadline`/
+#    `_phase_started_at`/`_state`/`_completed_in_cycle`/`_stats`**（进行中的段不
+#    被打断，新值在下一次 `_enter` 生效）。触发＝托盘「🔄 重载番茄配置」显式
+#    触发（**不做**全局 config watcher）；热重载时"内存里刚记住的时长"优先于
+#    文件里的 0，避免把刚记住的值冲掉。
+# ④ `last_work_min`「记住上次」（§4.1）——`FocusSession.last_work_min` 只读属性
+#    （0 = 无历史 → 回落当前默认，故恒 > 0）；app 在 `_sync_focus_tray()` 里
+#    **检测到变化**才调 `pet.config.save_focus_work_min`（值未变零成本早返回），
+#    故托盘/热键/聊天工具三入口**自动全覆盖**（工具 handler 直调 session，不经
+#    app 回调，靠下一拍 tick 兜住）；检测基准在会话建立时以会话当前值初始化 →
+#    IDLE 静置零写盘副作用。配置层（`focus.presets`/`focus.last_work_min` schema +
+#    `save_focus_work_min` + config.example.json）同版落地。
+# **本版仍无 `pause()`**（归 v0.27.3）、无正计时（.4）、无休息（.5）、无统计（.6）。
 # v0.27.1：番茄自由度扩展「入口层①：运行中控制」（wiki 设计-番茄自由度扩展技术
 # 方案 §4.2 B1/B2/B3 + §6）——**本版只为 v0.27.0 已存在的模型能力接线，不改模型**：
 # ① 托盘子菜单「🍅 番茄钟」（pet/tray.py）——单一 toggle 项升级为四项：开始/停止

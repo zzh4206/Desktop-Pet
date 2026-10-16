@@ -377,10 +377,27 @@ class PetApp:
         self.tray.set_focus_skip_callback(self._skip_focus)
         self.tray.set_focus_extend_callback(self._extend_focus)
         self.tray.set_focus_complete_callback(self._complete_focus)
+        # v0.27.2 启动类四个入口（§4.1 A 时长 / §4.4 D1 预设 / 设为默认 / D3 重载）
+        self.tray.set_focus_minutes_callback(self._start_focus_minutes)
+        self.tray.set_focus_preset_callback(self._start_focus_preset)
+        self.tray.set_focus_default_callback(self._set_focus_default)
+        self.tray.set_focus_reload_callback(self._reload_focus_config)
         self.tray.set_focus_visible(self._focus_session is not None)
         self.tray.set_focus_phase(
             self._focus_session.state if self._focus_session is not None
             else None)
+        # v0.27.2「记住上次时长」：预设分组与文案初值，以及**落盘检测基准**——
+        # 以会话当前值为基准，故 IDLE 静置/启动本身不产生写盘（L1 零副作用），
+        # 只有用户在托盘/热键/工具里真的换了时长才会落 config。
+        self.tray.set_focus_presets(
+            self._focus_session.presets if self._focus_session is not None
+            else [])
+        self.tray.set_focus_last_work_min(
+            self._focus_session.last_work_min if self._focus_session is not None
+            else 0.0)
+        self._focus_last_work_min_saved = (
+            self._focus_session.last_work_min if self._focus_session is not None
+            else 0.0)
         try:
             self._setup_chat()
         except Exception:
@@ -1754,16 +1771,23 @@ class PetApp:
                              kind=BubbleType.WARNING,
                              anchor=self._pet_anchor())
             return
-        if not sess.active:
-            try:
-                self._proactive.force_spit()
-            except Exception:
-                self.logger.warning("[番茄] 启动前吐出吃鼠标失败", exc_info=True)
         if sess.active:
             sess.stop()
         else:
+            self._pre_focus_start()
             sess.start()
         self._sync_focus_tray()
+
+    def _pre_focus_start(self) -> None:
+        """任一「开始番茄段」入口的前置（§4.3 反向互斥）：吃鼠标中先吐出。
+
+        幂等（未吃鼠标时 ``force_spit`` 本就 no-op），异常只记日志——绝不因为
+        吐出失败就开不了番茄。
+        """
+        try:
+            self._proactive.force_spit()
+        except Exception:
+            self.logger.warning("[番茄] 启动前吐出吃鼠标失败", exc_info=True)
 
     # ---- v0.27.1 运行中控制（托盘子菜单三项 + 热键 id=4 的唯一落点） ----
     # 三个方法都是 FocusSession 的**薄转发**，不自行判相位：模型侧对 IDLE/
@@ -1797,6 +1821,104 @@ class PetApp:
         sess.complete()
         self._sync_focus_tray()
 
+    # ---- v0.27.2 启动类四入口（§4.1 A 时长 / §4.4 D1 预设 / 设为默认 / D3 重载）----
+
+    def _start_focus_minutes(self, minutes) -> None:
+        """「⏱ N 分钟」/「🕘 上次使用 N 分钟」：**一次性**时长启动（§9 Q6）。
+
+        不改默认 ``_work_min``——想改默认走「⭐ 把 N 分钟设为默认」（显式路径）。
+        已运行时按 ``start()`` 既有语义改期重启（显式 start = 新一轮）。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        self._pre_focus_start()
+        sess.start(minutes)
+        self._sync_focus_tray()
+
+    def _start_focus_preset(self, preset) -> None:
+        """命名预设启动（§4.4 D1）：work/short/long/cycles **只作用于本轮**。
+
+        模型侧 ``start_preset`` 装本轮覆盖 ``_run``，回 IDLE 自动清除；全局
+        默认一动不动（预设非法时模型侧 no-op）。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        self._pre_focus_start()
+        sess.start_preset(preset)
+        self._sync_focus_tray()
+
+    def _set_focus_default(self) -> None:
+        """「⭐ 把 N 分钟设为默认」：显式 ``start(N, as_default=True)``（§4.1）。
+
+        同时**启动这一轮**（点击 = 显式 start，不是静默改配置）——N 取会话当前
+        的 ``last_work_min``；``_work_min`` 随之写回内存，变化由
+        ``_sync_focus_tray`` 检测后落 config ``focus.last_work_min``。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        self._pre_focus_start()
+        sess.start(sess.last_work_min, as_default=True)
+        self._sync_focus_tray()
+
+    def _reload_focus_config(self) -> None:
+        """「🔄 重载番茄配置」（§4.4 D3）：重读用户 config 的 focus 段 → reconfigure。
+
+        只改节律参数（时长/轮数/执法/心情增益/预设/上次时长）；**当前段的
+        ``_deadline`` 不动**（进行中的段不被打断），新值在下一次 ``_enter`` 生效。
+        刻意**不做** ``focus.enabled`` 的运行期开关：建/拆会话超出本版范围，
+        改总开关仍需重启（如实气泡告知）。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        try:
+            from pet.config import load_config
+
+            fresh = (load_config(self._paths["config_path"]).get("focus") or {})
+        except Exception:
+            self.logger.warning("[番茄] 配置重载失败", exc_info=True)
+            return
+        self.cfg["focus"] = fresh
+        sess.reconfigure(fresh)
+        try:
+            self.tray.set_focus_presets(sess.presets)
+            self.tray.set_focus_last_work_min(sess.last_work_min)
+        except Exception:
+            self.logger.warning("[番茄] 托盘预设重建失败", exc_info=True)
+        self._sync_focus_tray()
+        self.bubble.show("番茄配置已重载（下一段生效）",
+                         kind=BubbleType.INFO, anchor=self._pet_anchor())
+
+    def _persist_focus_last_work_min(self, sess) -> None:
+        """「记住上次时长」落盘（§4.1）：检测到变化才写 ``focus.last_work_min``。
+
+        基准 ``_focus_last_work_min_saved`` 在会话建立时以会话当前值初始化 →
+        **IDLE 静置不产生写盘**（L1 零副作用）。托盘/热键/聊天工具三入口最终都
+        汇到 ``FocusSession.last_work_min``（工具 handler 直接调 ``session.start``，
+        不经过 app 回调），故在这一处（每拍 ``_sync_focus_tray``）检测即全覆盖；
+        只在真变化时调 ``save_focus_work_min``（fsync 不便宜，且避免无谓磨损
+        config 文件）。写失败也只记日志：本次会话按内存值照常工作。
+        """
+        if sess is None:
+            return
+        try:
+            cur = float(getattr(sess, "last_work_min", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return
+        if not (cur > 0) or cur == getattr(
+                self, "_focus_last_work_min_saved", None):
+            return
+        self._focus_last_work_min_saved = cur   # 先记基准：写失败不每拍重试
+        try:
+            from pet.config import save_focus_work_min
+
+            save_focus_work_min(self._paths["config_path"], cur)
+        except Exception:
+            self.logger.warning("[番茄] 上次时长写回 config 失败", exc_info=True)
+
     def _sync_focus_tray(self) -> None:
         """托盘番茄子菜单 ↔ 相位与当日统计同步（幂等，每拍可调）。"""
         sess = getattr(self, "_focus_session", None)
@@ -1816,6 +1938,12 @@ class PetApp:
                 int(sess.stats.completed) if sess is not None else 0)
         except Exception:
             self.logger.warning("[番茄] tooltip 计数同步失败", exc_info=True)
+        # v0.27.2「记住上次时长」：三入口（托盘/热键/工具）汇到 session 的
+        # last_work_min，故此处一处检测即全覆盖；值未变零成本早返回
+        try:
+            self._persist_focus_last_work_min(sess)
+        except Exception:
+            self.logger.warning("[番茄] 上次时长落盘异常", exc_info=True)
 
     def _setup_hotkeys(self) -> None:
         """v0.11 全局热键注册 + 冲突气泡提示。"""

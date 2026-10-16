@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import Qt, QObject
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 # v0.25.2 番茄入口文案（纯函数便于无 Qt 单测；运行态 → 下一动作语义）
@@ -26,6 +26,31 @@ _FOCUS_MENU_LABEL = "🍅 番茄钟"
 _FOCUS_SKIP_LABEL = "⏭ 跳过当前段"
 _FOCUS_EXTEND_LABEL = "➕ 延长 5 分钟"
 _FOCUS_COMPLETE_LABEL = "✅ 提前完成"
+
+# v0.27.2 番茄自由度扩展「入口层② + 配置面」（wiki 设计-番茄自由度扩展技术方案
+# §4.1 A / §4.4 D1/D3）：子菜单再加四类启动项——固定时长（25/45/60）+「🕘 上次
+# 使用 N 分钟」+ 命名预设分组（D1，空数组时**不建项、不加分隔符**）+「⭐ 把 N
+# 分钟设为默认」（as_default=True 走 §4.1 的"设为默认"路）+「🔄 重载番茄配置」
+# （D3 热重载，用户显式触发）。
+# **L1 要点**：这些启动项在 IDLE 下**必须可用**——点击 = 用户显式 start（不是
+# 后台副作用），与「跳过/延长/提前完成」（IDLE 必须置灰，模型侧 no-op）是两类
+# 语义；可用性在 ``focus_availability`` 里用不同键分开表达（start_items vs
+# skip/extend/complete），不混为一谈。
+_FOCUS_MINUTE_CHOICES = (25, 45, 60)
+_FOCUS_MINUTE_LABEL_FMT = "⏱ {m} 分钟"
+_FOCUS_LAST_LABEL_FMT = "🕘 上次使用 {m} 分钟"
+_FOCUS_SET_DEFAULT_LABEL_FMT = "⭐ 把 {m} 分钟设为默认"
+_FOCUS_PRESET_LABEL_FMT = "📌 {name}（{m} 分钟）"
+_FOCUS_RELOAD_LABEL = "🔄 重载番茄配置"
+# 托盘**只做显示**，不 import pet.focus（保持共享层解耦）；无 last_work_min
+# 信息时文案兜底用库默认 25（app 建立会话后立刻用真实值覆盖，见
+# TrayManager.set_focus_last_work_min）。
+_FOCUS_FALLBACK_MIN = 25
+
+# 「启动型」动作键（恒可用：点击=显式 start/重载，§4.1 A）——分钟项按
+# _FOCUS_MINUTE_CHOICES 生成，改档位只需改上面那一处。
+_FOCUS_START_ACTION_KEYS = tuple(
+    [f"minute_{m}" for m in _FOCUS_MINUTE_CHOICES] + ["last", "set_default"])
 
 _PHASE_IDLE = "idle"
 _PHASES = ("idle", "focus", "short", "long")
@@ -48,17 +73,40 @@ def focus_phase_name(state) -> str:
     return v if v in _PHASES else _PHASE_IDLE
 
 
-def focus_availability(state) -> dict:
-    """相位 → 子菜单四项的文案与可用性（纯函数，§4.2 口径）。
+def _fmt_minutes(m) -> str:
+    """分钟数值 → 文案（25 → "25"、7.5 → "7.5"）；非法/≤0 → ""。"""
+    try:
+        f = float(m)
+    except (TypeError, ValueError):
+        return ""
+    if not (f > 0):        # NaN 走此分支
+        return ""
+    return str(int(f)) if f == int(f) else f"{f:g}"
+
+
+def focus_availability(state, last_work_min=None) -> dict:
+    """相位 → 子菜单各项的文案与可用性（纯函数，§4.1/§4.2/§4.4）。
+
+    「运行中控制」四项（v0.27.1 口径逐字不变）：
 
     - ``toggle``：**恒可用**（文案沿用 ``focus_label``：「开始」↔「停止」）
     - ``skip``：非 IDLE 可用（专注/短休/长休；模型侧 IDLE 本就 no-op）
     - ``extend``：非 IDLE 可用（专注段与休息段均可延长，模型侧 IDLE no-op）
     - ``complete``：**仅 FOCUS 可用**——休息段没有「提前完成」语义，若可点会
       凭空 +1 番茄（模型侧已 no-op，此处是入口层双保险）
+
+    v0.27.2 新增（L1 要点）：
+
+    - ``start_items``：时长项（25/45/60）／``last``／``set_default`` **恒可用**
+      ——IDLE 下正是它们的用武之地（A 维度：启动时选时长）；点击是**用户显式
+      start**，不是自动副作用，故不受 L1 的"IDLE 置灰"约束。
+    - ``reload``：「🔄 重载番茄配置」恒可用（只重读 config，不动当前段）。
+    - ``last_label`` / ``set_default_label``：带 ``last_work_min`` 的文案（未给
+      或非法 → 用 ``_FOCUS_FALLBACK_MIN`` 兜底，故文案恒非空、无需调用方判空）。
     """
     phase = focus_phase_name(state)
     active = phase != _PHASE_IDLE
+    m = _fmt_minutes(last_work_min) or str(_FOCUS_FALLBACK_MIN)
     return {
         "phase": phase,
         "active": active,
@@ -66,17 +114,23 @@ def focus_availability(state) -> dict:
         "skip": active,
         "extend": active,
         "complete": phase == "focus",
+        "start_items": True,
+        "reload": True,
+        "last_label": _FOCUS_LAST_LABEL_FMT.format(m=m),
+        "set_default_label": _FOCUS_SET_DEFAULT_LABEL_FMT.format(m=m),
     }
 
 
-def apply_focus_menu(actions: dict, state) -> dict:
+def apply_focus_menu(actions: dict, state, last_work_min=None) -> dict:
     """把 ``focus_availability`` 施加到动作集合，返回该可用性字典。
 
     ``actions`` 的值只需实现 ``setText(str)`` / ``setEnabled(bool)``（真实
     QAction 或测试替身皆可），故本函数是纯逻辑，可脱离 QApplication 单测。
+    唯一例外是 ``"presets"``：值为**动作列表**（命名预设分组，逐项 setEnabled；
+    预设项文案由 ``TrayManager.set_focus_presets`` 建项时写死，与相位无关）。
     缺项（缺键/None）静默跳过，便于兼容旧调用方。
     """
-    avail = focus_availability(state)
+    avail = focus_availability(state, last_work_min)
     actions = actions or {}
     toggle = actions.get("toggle")
     if toggle is not None:
@@ -86,6 +140,23 @@ def apply_focus_menu(actions: dict, state) -> dict:
         obj = actions.get(key)
         if obj is not None:
             obj.setEnabled(avail[key])
+    # v0.27.2 启动型项：恒可用（点击 = 显式 start，§4.1 A 的入口）
+    for key in _FOCUS_START_ACTION_KEYS:
+        obj = actions.get(key)
+        if obj is not None:
+            obj.setEnabled(avail["start_items"])
+    last = actions.get("last")
+    if last is not None:
+        last.setText(avail["last_label"])
+    default = actions.get("set_default")
+    if default is not None:
+        default.setText(avail["set_default_label"])
+    for obj in (actions.get("presets") or []):
+        if obj is not None:
+            obj.setEnabled(avail["start_items"])
+    reload_act = actions.get("reload")
+    if reload_act is not None:
+        reload_act.setEnabled(avail["reload"])
     return avail
 
 
@@ -179,11 +250,38 @@ class TrayManager(QObject):
         self._on_focus_skip = None
         self._on_focus_extend = None
         self._on_focus_complete = None
+        # v0.27.2 启动类四个入口 + 命名预设分组状态（§4.1 A / §4.4 D1/D3）
+        self._on_focus_minutes = None      # cb(minutes)：「⏱ N 分钟」/「🕘 上次使用」
+        self._on_focus_preset = None       # cb(preset dict)：命名预设
+        self._on_focus_default = None      # cb()：「⭐ 设为默认」
+        self._on_focus_reload = None       # cb()：「🔄 重载番茄配置」
+        self._focus_presets: list = []
+        self._focus_preset_actions: list = []
+        self._focus_preset_sep = None
+        self._focus_last_work_min = 0.0    # 0 → 文案用 _FOCUS_FALLBACK_MIN 兜底
         self._focus_phase = _PHASE_IDLE
         # 子菜单标题不带「▸」——mac/Qt 会按子菜单自动绘制箭头字符
         self._focus_menu = focus_menu = menu.addMenu(_FOCUS_MENU_LABEL)
         self._act_focus = act_focus = focus_menu.addAction(_FOCUS_START_LABEL)
         act_focus.triggered.connect(self._emit_focus)
+        # v0.27.2 启动时长选择（A 维度）：25/45/60 三档 + 「上次使用」——
+        # 一次性时长（不改默认，§9 Q6）；「上次使用」与固定档位共用同一回调。
+        focus_menu.addSeparator()
+        self._focus_minute_actions: dict = {}
+        for _m in _FOCUS_MINUTE_CHOICES:
+            _act = focus_menu.addAction(_FOCUS_MINUTE_LABEL_FMT.format(m=_m))
+            _act.triggered.connect(
+                (lambda *_a, _mm=_m: self._emit_focus_minutes(_mm)))
+            self._focus_minute_actions[_m] = _act
+        self._act_focus_last = act_last = focus_menu.addAction(
+            _FOCUS_LAST_LABEL_FMT.format(m=_FOCUS_FALLBACK_MIN))
+        act_last.triggered.connect(self._emit_focus_last)
+        # 命名预设分组由 set_focus_presets 动态重建（插在「设为默认」之前）；
+        # **presets 为空时不建项、不加分隔符**（空菜单里留一条分隔线无意义）
+        self._act_focus_default = act_default = focus_menu.addAction(
+            _FOCUS_SET_DEFAULT_LABEL_FMT.format(m=_FOCUS_FALLBACK_MIN))
+        act_default.triggered.connect(self._emit_focus_default)
+        focus_menu.addSeparator()
         self._act_focus_skip = act_skip = focus_menu.addAction(
             _FOCUS_SKIP_LABEL)
         act_skip.triggered.connect(self._emit_focus_skip)
@@ -193,6 +291,10 @@ class TrayManager(QObject):
         self._act_focus_complete = act_cmp = focus_menu.addAction(
             _FOCUS_COMPLETE_LABEL)
         act_cmp.triggered.connect(self._emit_focus_complete)
+        focus_menu.addSeparator()
+        self._act_focus_reload = act_reload = focus_menu.addAction(
+            _FOCUS_RELOAD_LABEL)
+        act_reload.triggered.connect(self._emit_focus_reload)
         self._apply_focus_menu()     # 初始 IDLE → 后三项不可用（L1）
         menu.addSeparator()
         act_quit = menu.addAction("退出")
@@ -388,7 +490,7 @@ class TrayManager(QObject):
         if self._on_spit is not None:
             self._on_spit()
 
-    # ---- v0.25.2 番茄专注入口（v0.27.1 升级为子菜单） ----
+    # ---- v0.25.2 番茄专注入口（v0.27.1 升级为子菜单；v0.27.2 加启动类入口） ----
 
     def set_focus_callback(self, cb) -> None:
         """托盘'🍅 开始/停止番茄钟'→ app._toggle_focus（toggle 语义单点）。"""
@@ -410,6 +512,25 @@ class TrayManager(QObject):
         """子菜单「✅ 提前完成」→ app._complete_focus（complete() 薄转发，计入完成）。"""
         self._on_focus_complete = cb
 
+    def set_focus_minutes_callback(self, cb) -> None:
+        """子菜单「⏱ N 分钟」/「🕘 上次使用 N 分钟」→ app._start_focus_minutes(minutes)。
+
+        两者共用同一回调：都是**一次性**时长启动（不改默认，§9 Q6）。
+        """
+        self._on_focus_minutes = cb
+
+    def set_focus_preset_callback(self, cb) -> None:
+        """命名预设项 → app._start_focus_preset(preset)（本轮覆盖，§4.4 D1）。"""
+        self._on_focus_preset = cb
+
+    def set_focus_default_callback(self, cb) -> None:
+        """「⭐ 把 N 分钟设为默认」→ app._set_focus_default()（as_default=True，§4.1）。"""
+        self._on_focus_default = cb
+
+    def set_focus_reload_callback(self, cb) -> None:
+        """「🔄 重载番茄配置」→ app._reload_focus_config()（§4.4 D3 热重载）。"""
+        self._on_focus_reload = cb
+
     def _emit_focus_skip(self) -> None:
         if self._on_focus_skip is not None:
             self._on_focus_skip()
@@ -422,14 +543,110 @@ class TrayManager(QObject):
         if self._on_focus_complete is not None:
             self._on_focus_complete()
 
+    def _emit_focus_minutes(self, minutes) -> None:
+        if self._on_focus_minutes is not None:
+            self._on_focus_minutes(minutes)
+
+    def _emit_focus_last(self) -> None:
+        """「🕘 上次使用 N 分钟」：把当前记着的 N 当一次性时长启动。"""
+        self._emit_focus_minutes(
+            getattr(self, "_focus_last_work_min", 0.0) or _FOCUS_FALLBACK_MIN)
+
+    def _emit_focus_preset(self, preset) -> None:
+        if self._on_focus_preset is not None:
+            self._on_focus_preset(preset)
+
+    def _emit_focus_default(self) -> None:
+        if self._on_focus_default is not None:
+            self._on_focus_default()
+
+    def _emit_focus_reload(self) -> None:
+        if self._on_focus_reload is not None:
+            self._on_focus_reload()
+
+    def set_focus_presets(self, presets) -> None:
+        """重建「命名预设」分组（v0.27.2 §4.4 D1；app 装载/重载 config 后调）。
+
+        ``presets`` 为空 → **不建项、不加分隔符**（空分组留在菜单里只会多一条
+        无意义的分隔线）；非空 → 在「⭐ 把 N 分钟设为默认」之前插入「分隔符 +
+        每个预设一项」，点击即以该预设启动**本轮**（``FocusSession.start_preset``
+        的本轮覆盖，不改全局默认）。幂等：重复调用先撤掉旧项再重建。
+        """
+        menu = getattr(self, "_focus_menu", None)
+        if menu is None:
+            return
+        for act in list(getattr(self, "_focus_preset_actions", [])):
+            menu.removeAction(act)
+            act.deleteLater()
+        self._focus_preset_actions = []
+        old_sep = getattr(self, "_focus_preset_sep", None)
+        if old_sep is not None:
+            menu.removeAction(old_sep)
+            old_sep.deleteLater()
+            self._focus_preset_sep = None
+        items = [dict(p) for p in (presets or []) if isinstance(p, dict)
+                 and str(p.get("name") or "").strip()]
+        self._focus_presets = items
+        if not items:
+            self._apply_focus_menu()
+            return
+        anchor = getattr(self, "_act_focus_default", None)
+        sep = QAction(menu)
+        sep.setSeparator(True)
+        if anchor is not None:
+            menu.insertAction(anchor, sep)
+        else:
+            menu.addAction(sep)
+        self._focus_preset_sep = sep
+        for p in items:
+            name = str(p.get("name") or "").strip()
+            m = _fmt_minutes(p.get("work_min"))
+            text = (_FOCUS_PRESET_LABEL_FMT.format(name=name, m=m)
+                    if m else f"📌 {name}")
+            act = QAction(text, menu)
+            act.triggered.connect(
+                (lambda *_a, _p=dict(p): self._emit_focus_preset(_p)))
+            if anchor is not None:
+                menu.insertAction(anchor, act)
+            else:
+                menu.addAction(act)
+            self._focus_preset_actions.append(act)
+        self._apply_focus_menu()
+
+    def set_focus_last_work_min(self, minutes) -> None:
+        """「🕘 上次使用 N 分钟」/「⭐ 把 N 分钟设为默认」文案（v0.27.2，幂等）。
+
+        app 在会话建立后与每次时长变化后调（值未变即早返回，tick 每拍调用零
+        成本）。非法/≤0 一律忽略（保留旧值）——托盘只显示，判定归模型层。
+        """
+        try:
+            val = float(minutes)
+        except (TypeError, ValueError):
+            return
+        if not (val > 0):        # NaN 走此分支
+            return
+        if val == getattr(self, "_focus_last_work_min", None):
+            return
+        self._focus_last_work_min = val
+        self._apply_focus_menu()
+
     def _apply_focus_menu(self) -> None:
-        """按当前相位刷新子菜单文案/可用性（幂等；相位未变时上层不会调用）。"""
-        apply_focus_menu({
+        """按当前相位 + 上次时长刷新子菜单文案/可用性（幂等）。"""
+        actions = {
             "toggle": getattr(self, "_act_focus", None),
             "skip": getattr(self, "_act_focus_skip", None),
             "extend": getattr(self, "_act_focus_extend", None),
             "complete": getattr(self, "_act_focus_complete", None),
-        }, getattr(self, "_focus_phase", _PHASE_IDLE))
+            "last": getattr(self, "_act_focus_last", None),
+            "set_default": getattr(self, "_act_focus_default", None),
+            "reload": getattr(self, "_act_focus_reload", None),
+            "presets": list(getattr(self, "_focus_preset_actions", []) or []),
+        }
+        for m, act in (getattr(self, "_focus_minute_actions", {}) or {}).items():
+            actions[f"minute_{m}"] = act
+        apply_focus_menu(
+            actions, getattr(self, "_focus_phase", _PHASE_IDLE),
+            getattr(self, "_focus_last_work_min", 0.0))
 
     def set_focus_visible(self, visible: bool) -> None:
         """focus.enabled=false → 彻底隐藏整个「🍅 番茄钟」子菜单（§1 两段式）。

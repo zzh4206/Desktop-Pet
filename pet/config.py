@@ -112,6 +112,7 @@ _SAFE_DEFAULTS: dict = {
     "focus": {
         "enabled": True, "work_min": 25, "short_min": 5, "long_min": 15,
         "cycles": 4, "break_enforce": False, "mood_gain": 3,
+        "presets": [], "last_work_min": 0,
     },
     # v0.24 主动纠缠（pet/attention.py + pet/pester_lines.py）：总段 enabled +
     # 数值（Stage 分档衰减 / 交互增益）+ 阈值/频控/退避/行为池；``pester.lines``
@@ -461,6 +462,34 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "cycles": {"type": "integer", "minimum": 1, "maximum": 12},
             "break_enforce": {"type": "boolean"},
             "mood_gain": {"type": "number", "minimum": 0, "maximum": 20},
+            # v0.27.2 新增两键。**故意都不写进 required**：老用户的 config
+            # 没有这两个键，若写进 required 会让整段校验失败、被
+            # ``_validate_section`` 整段回退默认（连带丢掉 enabled/work_min
+            # ——这正是 v0.27.1 ``hotkeys.focus_skip`` 踩过的坑）。
+            # ``presets`` 每项只要求 name+work_min，short/long/cycles 可缺省，
+            # 消费端回退全局值。
+            "presets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "work_min": {"type": "number", "minimum": 1,
+                                     "maximum": 180},
+                        "short_min": {"type": "number", "minimum": 1,
+                                      "maximum": 60},
+                        "long_min": {"type": "number", "minimum": 1,
+                                     "maximum": 120},
+                        "cycles": {"type": "integer", "minimum": 1,
+                                   "maximum": 12},
+                    },
+                    "required": ["name", "work_min"],
+                    "additionalProperties": False,
+                },
+            },
+            # 只设下界、**不设上界**：消费端钳到 [1,180]。写死上界会让
+            # 「用户手改成 300」这种输入把整段打回默认。
+            "last_work_min": {"type": "number", "minimum": 0},
         },
         "required": ["enabled", "work_min", "short_min", "long_min",
                      "cycles", "break_enforce", "mood_gain"],
@@ -848,6 +877,56 @@ def save_voice_enabled(config_path: str, enabled: bool) -> dict:
         log.warning("[语音] 开关写入失败", exc_info=True)
         return {}
     return tts
+
+
+def save_focus_work_min(config_path: str, minutes: float) -> dict:
+    """把「上次使用的番茄时长」写回 ``focus.last_work_min``（原子替换）。
+
+    v0.27.2：托盘的「🕘 上次使用 N 分钟」需要一个跨重启的记忆位。只动这一个
+    键，``focus`` 其余键原样保留（对齐 ``save_voice_enabled`` 的「只动传入键」
+    语义）。返回写入后的 focus 段；读/写失败或入参非法返 {}（调用方只记日志，
+    本次会话仍按内存值生效）。
+
+    入参按消费端口径钳到 ``[1, 180]``（与 ``_num(..., 1.0, 180.0)`` 一致）；
+    ``NaN``/非数值/``<1`` 一律不写——宁可不记，也不要把 0 或 NaN 落盘让下次
+    启动读出一个无意义的「上次使用 0 分钟」。
+    """
+    import json as _json
+    import math as _math
+
+    try:
+        m = float(minutes)
+    except (TypeError, ValueError):
+        return {}
+    if _math.isnan(m) or m < 1.0:
+        return {}
+    m = min(m, 180.0)
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+    except (OSError, ValueError):
+        log.warning("[番茄] 用户 config 读取失败，上次时长未写入", exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    sec = raw.get("focus")
+    if not isinstance(sec, dict):
+        sec = {}
+    sec["last_work_min"] = m
+    raw["focus"] = sec
+    tmp = config_path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(raw, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, config_path)
+    except (OSError, ValueError):
+        log.warning("[番茄] 上次时长写入失败", exc_info=True)
+        return {}
+    return sec
 
 
 def save_pester_enabled(config_path: str, enabled: bool) -> dict:

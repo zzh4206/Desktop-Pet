@@ -34,9 +34,23 @@ v0.27.0「番茄自由度扩展」模型层①（wiki 设计-番茄自由度扩�
 * ``complete()``：提前完成——走 ``_on_focus_complete()`` 进休息且**计入**
   ``completed``/``streak``，与 ``stop()``（不计）明确对照；IDLE/休息段 no-op。
 
-未实装（按 §3 分期留后续）：托盘/热键/工具入口（v0.27.1）、预设与配置热更新
-（v0.27.2）、暂停继续（v0.27.3，故本版**无 pause()**）、正计时模式
-（v0.27.4）、统计历史（v0.27.6）。
+未实装（按 §3 分期留后续）：暂停继续（v0.27.3，故本文件**无 pause()**）、
+正计时模式（v0.27.4）、无休息（v0.27.5）、统计历史（v0.27.6）。
+
+v0.27.2「入口层② + 配置面」（wiki 设计-番茄自由度扩展技术方案 §4.1 A /
+§4.4 D1/D3）——三件配置面能力（入口接线在 pet/tray.py + app.py）：
+
+* ``_apply_cfg(cfg)``：把 ``__init__`` 里的 ``_num/_int`` 解析抽成一个方法，
+  ``__init__`` 与 ``reconfigure(cfg)`` 共用（单一来源，杜绝两处漂移）。
+* ``reconfigure(cfg)``（D3 热更新）：只改配置派生字段（时长/轮数/执法/心情
+  增益/预设/上次时长），**绝不碰当前段**（``_deadline``/``_phase_started_at``/
+  ``_state``/``_completed_in_cycle``/``_stats`` 原样）——进行中的段不被打断、
+  剩余时间不变，新值只在下一次 ``_enter`` 生效。
+* ``start_preset(preset)``（D1 命名预设）：``_run`` 本轮覆盖（work/short/long/
+  cycles **只作用于本轮**，``_enter_idle()`` 时清除），**不改** ``_work_min``
+  等全局默认；``start(minutes, as_default=)`` 语义零改动。
+* ``last_work_min``：只读属性（上次使用的专注时长；无历史 = 当前默认），
+  app 侧检测到变化时落 config ``focus.last_work_min``（"记住上次"）。
 """
 
 from __future__ import annotations
@@ -166,6 +180,85 @@ def _parse_minutes(minutes) -> float | None:
     return min(180.0, m)
 
 
+def _opt_min(v, lo: float, hi: float) -> float | None:
+    """**可选**分钟值 → [lo,hi] 的 float；缺省/非法/越下界一律 ``None``。
+
+    与 ``_parse_minutes`` 的区别：``None`` 是"这个键没给 / 给了也不可用"的
+    显式信号（调用方回落全局值），而不是"当作没传 → 用默认值"。预设的
+    short/long_min 可缺省（§4.4 D1），必须能与"给了 1.0"区分开。
+    """
+    if v is None:
+        return None
+    try:
+        m = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not (m >= lo):         # NaN 走此分支
+        return None
+    return min(hi, m)
+
+
+def _opt_int(v, lo: int, hi: int) -> int | None:
+    """**可选**整数值 → [lo,hi] 的 int；缺省/非法/越下界一律 ``None``。
+
+    ``bool`` 显式排除（``True`` 会被 ``int()`` 收成 1，但配置里 ``true`` 显然
+    不是"1 轮"的意思，按缺省处理更诚实）。
+    """
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        i = int(v)
+    except (TypeError, ValueError):
+        return None
+    if i < lo:
+        return None
+    return min(hi, i)
+
+
+def _preset_overrides(preset: dict) -> dict:
+    """预设 dict → 本轮覆盖字典（只收录**合法且显式给出**的键）。
+
+    单一来源：``start_preset`` 与 ``_parse_presets`` 共用，杜绝两处钳制口径
+    漂移。缺失/非法/越界的键不进字典 → 消费端回落全局值（§4.4 D1 的宽容口径）。
+    """
+    out: dict = {}
+    w = _opt_min(preset.get("work_min"), 1.0, 180.0)
+    if w is not None:
+        out["work_min"] = w
+    s = _opt_min(preset.get("short_min"), 1.0, 60.0)
+    if s is not None:
+        out["short_min"] = s
+    lo = _opt_min(preset.get("long_min"), 1.0, 120.0)
+    if lo is not None:
+        out["long_min"] = lo
+    cyc = _opt_int(preset.get("cycles"), 1, 12)
+    if cyc is not None:
+        out["cycles"] = cyc
+    return out
+
+
+def _parse_presets(v) -> list:
+    """``config.focus.presets`` → 归一化预设清单（宽容口径，坏项跳过不抛）。
+
+    schema 只 required ``name``+``work_min``（short/long/cycles 可缺省，消费端
+    回落全局值）；此处再防御一次：非 list/非 dict 项/空名一律丢弃，数值越界按
+    ``_preset_overrides`` 钳制——**绝不因一个坏预设让整个功能抛异常或不可用**。
+    """
+    if not isinstance(v, (list, tuple)):
+        return []
+    out = []
+    for item in v:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        p = {"name": name}
+        p.update(_preset_overrides(item))
+        out.append(p)
+    return out
+
+
 class FocusSession:
     """可选番茄节律器（对标 EatMouseSession 接口风格，proactive.py:96）。
 
@@ -190,17 +283,13 @@ class FocusSession:
         self._dnd_fn = dnd_fn
 
         c = cfg or {}
-        self._work_min = _num(c.get("work_min", _DEFAULT_WORK_MIN), 1.0, 180.0)
-        self._short_min = _num(c.get("short_min", _DEFAULT_SHORT_MIN), 1.0, 60.0)
-        self._long_min = _num(c.get("long_min", _DEFAULT_LONG_MIN), 1.0, 120.0)
-        self._cycles = _int(c.get("cycles", _DEFAULT_CYCLES), 1, 12)
-        self._break_enforce = bool(c.get("break_enforce", False))
-        self._mood_gain = _num(c.get("mood_gain", _DEFAULT_MOOD_GAIN), 0.0, 20.0)
+        self._apply_cfg(c)
 
         self._state = FocusPhase.IDLE
         self._deadline: float | None = None
         self._phase_started_at: float | None = None   # 本相位起点（L3 实耗记账）
         self._completed_in_cycle = 0     # 本轮已完成番茄数（决定 SHORT/LONG）
+        self._run: dict | None = None    # v0.27.2 本轮预设覆盖（IDLE 时清除）
         self._stats = FocusStats()
         self._state_path = state_path
         self._dnd = False
@@ -213,6 +302,49 @@ class FocusSession:
         self._break_bubbled = False
 
         self._load_persisted()
+
+    # ---- 配置：解析 / 热重载（v0.27.2 §4.4 D3） ----
+
+    def _apply_cfg(self, cfg) -> None:
+        """``config.focus`` 段 → 节律参数（``__init__`` 与 ``reconfigure`` 共用）。
+
+        只写**配置派生**字段（时长/轮数/执法开关/心情增益/预设/上次时长），
+        **不碰任何运行时状态**（``_state``/``_deadline``/``_phase_started_at``/
+        ``_completed_in_cycle``/``_stats``/``_run``）——正因如此，``reconfigure``
+        天然满足 §4.4 D3「只影响下一次 ``_enter``，绝不动当前段 ``_deadline``」。
+        非 dict 入参按"空配置"处理（全默认），不抛。
+        """
+        c = cfg if isinstance(cfg, dict) else {}
+        self._work_min = _num(c.get("work_min", _DEFAULT_WORK_MIN), 1.0, 180.0)
+        self._short_min = _num(c.get("short_min", _DEFAULT_SHORT_MIN), 1.0, 60.0)
+        self._long_min = _num(c.get("long_min", _DEFAULT_LONG_MIN), 1.0, 120.0)
+        self._cycles = _int(c.get("cycles", _DEFAULT_CYCLES), 1, 12)
+        self._break_enforce = bool(c.get("break_enforce", False))
+        self._mood_gain = _num(c.get("mood_gain", _DEFAULT_MOOD_GAIN), 0.0, 20.0)
+        self._presets = _parse_presets(c.get("presets"))
+        # last_work_min：0 = 无历史 → 回落当前默认时长（故属性恒 > 0，托盘文案
+        # 总有意义）。本次会话已用过某时长（prev > 0）时以内存值为准：热重载
+        # 不该把刚"记住"的时长冲回文件里的 0（D3 重载不丢运行时状态）。
+        prev = getattr(self, "_last_work_min", 0.0)
+        disk = _num(c.get("last_work_min", 0.0), 0.0, 180.0)
+        self._last_work_min = disk if disk > 0 else (
+            prev if prev > 0 else self._work_min)
+
+    def reconfigure(self, cfg) -> None:
+        """热重载 ``config.focus``（v0.27.2 §4.4 D3）——只影响**下一次** ``_enter``。
+
+        与 ``__init__`` 共用 ``_apply_cfg``：改 ``_work_min``/``_short_min``/
+        ``_long_min``/``_cycles``/``_break_enforce``/``_mood_gain``/预设/上次时长。
+        **绝不碰当前段**：``_deadline``/``_phase_started_at``/``_state``/
+        ``_completed_in_cycle``/``_stats`` 全部原样，进行中的段不被打断、剩余时间
+        逐值不变；新值在下一段 ``_enter`` 时自然生效（本轮预设覆盖 ``_run`` 也不清）。
+
+        触发路径＝托盘「🔄 重载番茄配置」（用户显式触发），**不做**全局 config
+        watcher（§4.4 D3）。非 dict 入参 no-op（不把整段配置"改成空"）。
+        """
+        if not isinstance(cfg, dict):
+            return
+        self._apply_cfg(cfg)
 
     # ---- 状态读口（0.24 纠缠线 duck-typing 探测 getattr(focus,"state")） ----
 
@@ -229,6 +361,42 @@ class FocusSession:
         """== (state != IDLE)。上层互斥门禁统一用此（§1 不变量）。"""
         return self._state != FocusPhase.IDLE
 
+    @property
+    def last_work_min(self) -> float:
+        """上次使用的专注时长（分钟，只读；无历史 = 当前默认，见 ``_apply_cfg``）。
+
+        app 侧据此检测变化并落 config ``focus.last_work_min``（"记住上次"），
+        托盘「🕘 上次使用 N 分钟」/「⭐ 把 N 分钟设为默认」也读它。
+        """
+        return self._last_work_min
+
+    @property
+    def presets(self) -> list:
+        """命名预设清单（只读副本；config ``focus.presets`` 归一化后）。"""
+        return [dict(p) for p in self._presets]
+
+    # ---- 本轮有效时长（预设覆盖优先，否则全局默认） ----
+
+    def _work_minutes(self) -> float:
+        if self._run is not None and "work_min" in self._run:
+            return float(self._run["work_min"])
+        return self._work_min
+
+    def _short_minutes(self) -> float:
+        if self._run is not None and "short_min" in self._run:
+            return float(self._run["short_min"])
+        return self._short_min
+
+    def _long_minutes(self) -> float:
+        if self._run is not None and "long_min" in self._run:
+            return float(self._run["long_min"])
+        return self._long_min
+
+    def _cycle_target(self) -> int:
+        if self._run is not None and "cycles" in self._run:
+            return int(self._run["cycles"])
+        return self._cycles
+
     # ---- 用户操作 ----
 
     def start(self, minutes: float | int | None = None, *,
@@ -244,15 +412,46 @@ class FocusSession:
 
         本次实际时长只用于 ``_enter`` 的 deadline；下一个专注段回到
         ``_work_min``（除非 ``as_default=True`` 改了它）。
+
+        v0.27.2：显式 ``start`` = **新一轮**，故一并清掉本轮预设覆盖 ``_run``
+        （``start_preset`` 装的那种）；同时把本次有效时长记进 ``last_work_min``
+        （"记住上次"，app 检测到变化即落 config）。
         """
         now = self._now()
         self._rollover(now)
         one_shot = _parse_minutes(minutes)
+        self._run = None
         if as_default and one_shot is not None:
             self._work_min = one_shot
         self._completed_in_cycle = 0
-        self._enter(FocusPhase.FOCUS,
-                    one_shot if one_shot is not None else self._work_min, now)
+        effective = one_shot if one_shot is not None else self._work_min
+        self._last_work_min = effective
+        self._enter(FocusPhase.FOCUS, effective, now)
+
+    def start_preset(self, preset) -> None:
+        """以**命名预设**启动本轮（v0.27.2 §4.4 D1）：本轮覆盖，不动全局默认。
+
+        与 ``start()`` 的分工：``start()`` 清掉本轮覆盖、回到全局默认（或用
+        一次性 ``minutes``）；``start_preset()`` 装上一组**本轮**覆盖
+        （``self._run``，仅收录预设里显式给出的键，缺省者回落全局值），到
+        ``_enter_idle()``（``stop()`` / 长休自然收尾 / 提前完成进休息后本轮结束）
+        自动清除。**绝不改** ``_work_min``/``_short_min``/``_long_min``/
+        ``_cycles`` 这些全局默认——这正是"预设只作用于本轮"的口径。
+
+        非法预设（非 dict / ``name`` 为空）→ no-op（不启动：点了没反应好过乱开
+        一轮）；合法但 ``work_min`` 缺省/非法 → 本轮按全局默认时长启动。
+        """
+        if not isinstance(preset, dict):
+            return
+        if not str(preset.get("name") or "").strip():
+            return
+        now = self._now()
+        self._rollover(now)
+        self._run = _preset_overrides(preset)
+        self._completed_in_cycle = 0
+        effective = self._work_minutes()
+        self._last_work_min = effective
+        self._enter(FocusPhase.FOCUS, effective, now)
 
     def stop(self) -> None:
         """任意态→IDLE，释放全部接管（当前番茄不计完成）。幂等。"""
@@ -308,14 +507,14 @@ class FocusSession:
         phase = self._state
         if phase == FocusPhase.FOCUS:
             self._emit(_SKIP_FOCUS)
-            self._enter(FocusPhase.SHORT, self._short_min, now)
+            self._enter(FocusPhase.SHORT, self._short_minutes(), now)
         elif phase == FocusPhase.SHORT:
             self._emit(_SKIP_REST)
-            self._enter(FocusPhase.FOCUS, self._work_min, now)
+            self._enter(FocusPhase.FOCUS, self._work_minutes(), now)
         else:  # LONG
             self._emit(_SKIP_REST)
             self._completed_in_cycle = 0
-            self._enter(FocusPhase.FOCUS, self._work_min, now)
+            self._enter(FocusPhase.FOCUS, self._work_minutes(), now)
 
     def tick(self) -> None:
         """非 IDLE 才有效：deadline 比较 + 迁移 + 提醒（幂等）。IDLE 直接返
@@ -343,7 +542,7 @@ class FocusSession:
             self._finish_focus(now)
         elif phase == FocusPhase.SHORT:
             self._emit(_REST_DONE)
-            self._enter(FocusPhase.FOCUS, self._work_min, now)
+            self._enter(FocusPhase.FOCUS, self._work_minutes(), now)
         else:  # LONG 自然收尾 → 本轮结束回 IDLE（§3 FOCUS/IDLE 两分支之 IDLE）
             self._emit(_REST_DONE)
             self._enter_idle(now)
@@ -354,10 +553,10 @@ class FocusSession:
         self._on_focus_complete(now)
         self._emit(_FOCUS_DONE)
         self._completed_in_cycle += 1
-        if self._completed_in_cycle >= self._cycles:
-            self._enter(FocusPhase.LONG, self._long_min, now)
+        if self._completed_in_cycle >= self._cycle_target():
+            self._enter(FocusPhase.LONG, self._long_minutes(), now)
         else:
-            self._enter(FocusPhase.SHORT, self._short_min, now)
+            self._enter(FocusPhase.SHORT, self._short_minutes(), now)
 
     def _enter(self, phase: FocusPhase, minutes: float, now: float) -> None:
         self._state = phase
@@ -376,6 +575,7 @@ class FocusSession:
         self._deadline = None
         self._phase_started_at = None
         self._completed_in_cycle = 0
+        self._run = None          # v0.27.2：本轮预设覆盖到 IDLE 即清除（D1）
         self._reset_break_window()
         self._fsm_event("focus_rest_off")
         self._persist()
@@ -415,19 +615,23 @@ class FocusSession:
         started = self._phase_started_at
         if started is None:
             # 兜底（正常路径不会到这）：沿用旧口径，绝不因缺起点而丢记账
-            return max(0.0, self._work_min * 60.0)
+            return max(0.0, self._work_minutes() * 60.0)
         elapsed = now - started
         if self._deadline is not None:
             elapsed = min(elapsed, self._deadline - started)
         return max(0.0, elapsed)
 
     def _phase_minutes(self, phase: FocusPhase) -> float:
-        """该相位的配置时长（分钟）——仅供重启反推相位起点用。"""
+        """该相位的**本轮有效**时长（分钟）——仅供重启反推相位起点用。
+
+        v0.27.2：走 ``_work_minutes/_short_minutes/_long_minutes``，预设本轮
+        覆盖同样生效（重启后 ``_run`` 不恢复，见 ``_load_persisted`` 注释）。
+        """
         if phase == FocusPhase.SHORT:
-            return self._short_min
+            return self._short_minutes()
         if phase == FocusPhase.LONG:
-            return self._long_min
-        return self._work_min
+            return self._long_minutes()
+        return self._work_minutes()
 
     def _refresh_dnd(self) -> None:
         if self._dnd_fn is not None:

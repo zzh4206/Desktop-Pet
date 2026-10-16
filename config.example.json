@@ -87,7 +87,13 @@
     "long_min": 15,
     "cycles": 4,
     "break_enforce": false,
-    "mood_gain": 3
+    "mood_gain": 3,
+    "presets": [
+      {"name": "标准", "work_min": 25, "short_min": 5, "long_min": 15, "cycles": 4},
+      {"name": "深度工作", "work_min": 50, "short_min": 10, "long_min": 20, "cycles": 3},
+      {"name": "冲刺", "work_min": 15, "short_min": 3, "long_min": 10, "cycles": 6}
+    ],
+    "last_work_min": 0
   },
   "attention": {
     "enabled": true,
