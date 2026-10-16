@@ -165,7 +165,8 @@ class ChatBridge(QAbstractListModel):
         self._dying: list = []
         self.on_user_message = None  # v0.6 可选钩子：app 侧 follow-up 启发式
         # v0.26 语音线：可选钩子 callable(text)——聊天回复整段完成时触发
-        # （TTS 订阅点）。None=未注入，零行为变化；降级回复（failed）同触发。
+        # （TTS 订阅点）。None=未注入，零行为变化；降级回复（failed）同触发，
+        # 离线提示（offline）不触发（气泡侧已朗读一次，防重复念）。
         self.on_reply_done = None
         self._offline = False
         self._pet_avatar = ""  # 对方头像 file:// URL；空=未注入（QML 回退 🐱）
@@ -595,6 +596,9 @@ class ChatBridge(QAbstractListModel):
     def _emit_reply_done(self, text: str) -> None:
         """v0.26：把整段回复文本交给订阅方（语音播报）。
 
+        正常回复（``_on_done``）与降级回复（``_on_failed``）都走这里；**离线
+        提示（``_on_offline``）刻意不走**——它同时触发 app 的 offlineRequested
+        气泡，气泡侧已经朗读一次，再走这里会重复念同一件事。
         空文本不触发；回调故障只记日志——聊天主路径绝不因朗读层被拖垮。"""
         cb = self.on_reply_done
         if cb is None or not text:
@@ -670,6 +674,8 @@ class ChatBridge(QAbstractListModel):
         session.history.append(ChatTurn("assistant", reply))
         self._clear_stream(sid)
         self._store.save()
+        # v0.26 语音线：降级回复同样朗读（用户看到的文本即听到的文本）
+        self._emit_reply_done(reply)
         # 降级轮也查摘要（历史持续增长；DS 恢复后下次触发补上）
         self._maybe_summarize(session)
 

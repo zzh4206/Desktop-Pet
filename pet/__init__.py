@@ -121,7 +121,15 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.25.1"
+__version__ = "0.26.4"
+# v0.26.4：语音来源分类修正 + 降级回复朗读——app._auto_bubble 增 keyword-only
+# ``source``（默认 "proactive"：它是 pet/proactive.py 注入的 bubble_fn(text)
+# 落点，即主动关怀的归属），而「用户动作触发的即时反馈」——聊天情绪
+# _apply_chat_emotion、离线提示 _on_chat_offline——显式传 source="system"，
+# 否则会被「主动朗读」开关默认静音；chat_bridge._on_failed 降级回复同样朗读，
+# _on_offline 刻意不朗读（同事件的气泡侧已念一次，防重复）。测试补三条分类
+# 不变量：默认值必须 proactive / 每个调用点必须显式声明 source / done+failed
+# 挂钩而 offline 不挂钩。
 # v0.25.1：番茄专注配置段与测试口径纠正——config 增 focus 段（enabled
 # 默认 true=入口可见但**绝不自动运行** / work_min 25 / short_min 5 /
 # long_min 15 / cycles 4 / break_enforce 默认 false=零输入抑制安全红线 /

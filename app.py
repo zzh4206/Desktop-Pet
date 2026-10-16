@@ -746,20 +746,27 @@ class PetApp:
         return (x, y, self.window.height())
 
     def _auto_bubble(self, text: str, kind=BubbleType.INFO,
-                     duration_ms: int = 5000, anchor: tuple | None = None) -> None:
+                     duration_ms: int = 5000, anchor: tuple | None = None,
+                     *, source: str = "proactive") -> None:
         """自动路径气泡统一入口（批次B/P2-4，REVIEW-2026-09-05）——全屏
         期间丢弃并留痕。H2 只挡了进入全屏瞬间的 hide（window+bubble），
         此后久坐提醒/早晚安/聊天情绪等新气泡 bubble.show 照常 show+raise，
         盖在演示/放映上（气泡是独立 Tool|StaysOnTop 窗，不随 window.hide
         收）。用户主动路径（托盘/右键/设置弹窗反馈）不走此入口不受限；
-        退出全屏后下一轮周期照常发。"""
+        退出全屏后下一轮周期照常发。
+
+        v0.26 ``source`` 默认 ``"proactive"``：本方法是 pet/proactive.py 注入的
+        ``bubble_fn(text)`` 落点，即主动关怀（早晚安/久坐/生日）的默认归属。
+        但本方法也服务于「用户刚做完动作后的即时反馈」——聊天情绪、离线提示
+        等调用点**显式传** ``source="system"``，否则会被主动朗读开关默认静音。
+        """
         if getattr(self, "_fullscreen", False):
             self.logger.info("全屏中丢弃气泡: %s", (text or "")[:40])
             return
         self.bubble.show(text, kind=kind, duration_ms=duration_ms,
                          anchor=anchor if anchor is not None
                          else self._pet_anchor(),
-                         source="proactive")
+                         source=source)
 
     # ---- v0.26 语音线（共享层 pet/voice.py + 平台注入位 get_asset_player/
     # get_tts_engine）----
@@ -1553,7 +1560,8 @@ class PetApp:
                 self.logger.warning("hungry 联动需求表达异常", exc_info=True)
             if fired:
                 return
-        self._auto_bubble(random.choice(_CHAT_EMOTION_BUBBLES[label]))
+        self._auto_bubble(random.choice(_CHAT_EMOTION_BUBBLES[label]),
+                          source="system")
 
     def _maybe_followup(self, text: str) -> None:
         """v0.6：聊天消息启发式排 follow-up（30min 后回访气泡）。"""
@@ -1931,7 +1939,8 @@ class PetApp:
 
     def _on_chat_offline(self) -> None:
         """断网/无 key：气泡提示，宠物仍 WANDER/交互/长大（T8）。"""
-        self._auto_bubble("当前离线，聊天暂不可用～", kind=BubbleType.WARNING)
+        self._auto_bubble("当前离线，聊天暂不可用～", kind=BubbleType.WARNING,
+                          source="system")
 
     def _on_pet_moved(self, x: float, y: float, h: int) -> None:
         self.bubble.follow((x, y, h))
