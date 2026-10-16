@@ -24,6 +24,7 @@ INTERACT_FIELD_LABEL = {
     "mood": "心情",
     "fullness": "饱食",
     "cleanliness": "清洁",
+    "attention": "陪伴",
 }
 # 右键菜单显示动词（v0.19.1 换代：喂食→喂点吃的、洗澡→梳梳毛、戳一戳→逗一逗）
 VERBS = {

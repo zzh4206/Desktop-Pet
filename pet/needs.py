@@ -38,7 +38,7 @@ log = logging.getLogger("pet")
 NEED_FIELDS = ("mood", "fullness", "cleanliness")
 
 # 托盘/状态行固定顺序（饱食→心情→清洁，沿用 0.19.2 F9 措辞顺序）
-LINE_ORDER = ("fullness", "mood", "cleanliness")
+LINE_ORDER = ("fullness", "mood", "cleanliness", "attention")
 
 # ---- 区段表：value 从低到高，(上限, 名称)；value≥末档上限取末名 ----
 # 阈值与既有观感锚点对齐：mood 20/50 与 mood_bucket 一致，饱食/清洁 20
@@ -98,8 +98,10 @@ def status_line(state, thresholds: dict) -> tuple[str, bool]:
             v = 0.0
         low = v < float(thresholds.get(field, 0.0))
         alert = alert or low
-        parts.append(f"{INTERACT_FIELD_LABEL.get(field, field)}{v:.0f}"
-                     + ("⚠" if low else ""))
+        text = f"{INTERACT_FIELD_LABEL.get(field, field)}{v:.0f}" + ("⚠" if low else "")
+        if field == "attention" and low:
+            text += "·有点想你"
+        parts.append(text)
     return "  ".join(parts), alert
 
 

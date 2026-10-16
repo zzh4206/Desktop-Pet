@@ -21,11 +21,11 @@ from typing import Callable
 
 log = logging.getLogger("pet")
 
-# 存档 schema 版本；load 读到此值即停止 migrate。v0.2 = 1。
-SCHEMA_VERSION = 1
+# 存档 schema 版本；load 读到此值即停止 migrate。v0.2 = 1；v0.24.1 = 2（加 attention）。
+SCHEMA_VERSION = 2
 
 # 0-100 数值字段（衰减/交互都作用于此，update 时 clamp）
-_NUMERIC_FIELDS = ("mood", "fullness", "cleanliness")
+_NUMERIC_FIELDS = ("mood", "fullness", "cleanliness", "attention")
 
 
 class Stage(Enum):
@@ -54,6 +54,7 @@ class PetState:
     mood: float = 80.0
     fullness: float = 80.0
     cleanliness: float = 80.0
+    attention: float = 70.0
     age: float = 0.0
     stage: Stage = Stage.YOUNG
     branch: Branch = Branch.HEALTHY
@@ -102,6 +103,7 @@ def _state_from_dict(d: dict | None) -> PetState:
         mood=_num("mood", 80.0, 0.0, 100.0),
         fullness=_num("fullness", 80.0, 0.0, 100.0),
         cleanliness=_num("cleanliness", 80.0, 0.0, 100.0),
+        attention=_num("attention", 70.0, 0.0, 100.0),
         age=max(0.0, _num("age", 0.0)),
         stage=_enum_from_str(d.get("stage"), Stage, Stage.YOUNG),
         branch=_enum_from_str(d.get("branch"), Branch, Branch.HEALTHY),
@@ -109,11 +111,14 @@ def _state_from_dict(d: dict | None) -> PetState:
 
 
 def migrate_v1_to_v2(raw: dict) -> dict:
-    """v1 → v2 迁移占位（v0.2 字段未增，no-op）。
+    """v1 → v2：给 PetState 加 attention（第四独立数值，v0.24.1）。
 
-    v0.3+ 给 PetState 加字段时在此填缺字段默认 + 改 schema，并把
-    SCHEMA_VERSION 提到 2。v0.2 先占位保证 migrate 链结构就位。
+    旧存档（v1）无 attention，填默认 70.0；不改既有字段（不丢档）。
     """
+    if isinstance(raw, dict):
+        state = raw.get("state")
+        if isinstance(state, dict):
+            state.setdefault("attention", 70.0)
     return raw
 
 
