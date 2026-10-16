@@ -330,6 +330,11 @@ class ProactiveScheduler:
         唤醒决策即走新模型。None=回退本地罐头。"""
         self._client = client
 
+    def set_weather_fn(self, fn) -> None:
+        """v0.23.7 运行时更新天气源（定位开关在权限页被改后，app 重建
+        WeatherService 时调用）。None=天气功能静默。"""
+        self._weather_fn = fn
+
     # ---- 链式唤醒 ----
 
     def schedule_wake(self, delay_min: float, reason_ctx: dict) -> None:
@@ -444,16 +449,16 @@ class ProactiveScheduler:
         # 无平台 mouse_lock → 不抑制，静默（久坐 topic 已气泡）
         if self._mouse_lock is None:
             return sess
-        # 铁律5 idle gate：idle<阈值 → 不吃（温和气泡已由上层发）
-        try:
-            idle_s = self._idle()
-        except Exception:
-            _log.warning("[吃鼠标] idle_fn 异常，跳过", exc_info=True)
         # v0.25.3 番茄互斥（§4.3）：专注运行中不吃鼠标（静默，不叠加气泡）；
         # 已在进行的抑制不打断（勿扰铁律4 语义照旧）；IDLE 恒放行（§1）
         if self._focus_active():
             _log.info("[吃鼠标] 番茄专注运行中，跳过")
             return sess
+        # 铁律5 idle gate：idle<阈值 → 不吃（温和气泡已由上层发）
+        try:
+            idle_s = self._idle()
+        except Exception:
+            _log.warning("[吃鼠标] idle_fn 异常，跳过", exc_info=True)
             idle_s = 0.0
         if idle_s < self._eat_idle_min * 60.0:
             return sess
@@ -686,11 +691,6 @@ class ProactiveScheduler:
                 return True
         return False
 
-    def check_needs_now(self) -> bool:
-        """F13 聊天联动入口：立即查需求并表达，绕过 poll 的 quiet 静默
-        （用户正在聊天=在场），DND 仍在 _check_needs 内把守。返是否发了求助。"""
-        return self._check_needs(self._now())
-
     def _focus_active(self) -> bool:
         """v0.25.3 番茄互斥探测：番茄会话运行中（state != IDLE）→ True。
 
@@ -706,6 +706,11 @@ class ProactiveScheduler:
         except Exception:
             _log.warning("[番茄] focus_fn 异常，按非专注放行", exc_info=True)
             return False
+
+    def check_needs_now(self) -> bool:
+        """F13 聊天联动入口：立即查需求并表达，绕过 poll 的 quiet 静默
+        （用户正在聊天=在场），DND 仍在 _check_needs 内把守。返是否发了求助。"""
+        return self._check_needs(self._now())
 
     def _check_needs(self, now: float) -> bool:
         """F8 需求求助：任一数值 < 阈值 → 求助气泡（每需求独立冷却）。
@@ -782,7 +787,8 @@ class ProactiveScheduler:
             if pool:
                 msgs.append(random.choice(pool))
         if msgs:
-            self._emit_bubble(" ".join(msgs), now)
+            # 8s：多条提醒合并的长文案要读完（对齐气泡模块 WARNING 档时长）
+            self._emit_bubble(" ".join(msgs), now, duration_s=8.0)
             _log.info("[天气] 提醒触发: %s", ",".join(new))
 
     # ---- v0.24.4 主动纠缠（attention 五重门 + 撒娇气泡） ----
@@ -930,17 +936,17 @@ class ProactiveScheduler:
         quiet = self._quiet_now(now)
 
         # 2) 链式唤醒（v0.6.2：深夜重排到 quiet 结束，非置 None 丢弃致链断）
-        if self._next_wake_at is not None and now >= self._next_wake_at:
-            self._next_wake_at = None
-            if quiet:
-                # 重排到 quiet 结束时刻（次日 end 点），链条不断
-                next_t = self._quiet_end_after(now)
         # v0.25.3 番茄互斥（§4.3）：专注运行中静默链式唤醒节律提醒——顺延
         # 10min（链不断，非丢弃）；IDLE 恒放行（§1 不变量）
         if (self._next_wake_at is not None and now >= self._next_wake_at
                 and self._focus_active()):
             self._next_wake_at = now + 600.0
             _log.info("[主动] 番茄专注运行中，唤醒链顺延 10min")
+        if self._next_wake_at is not None and now >= self._next_wake_at:
+            self._next_wake_at = None
+            if quiet:
+                # 重排到 quiet 结束时刻（次日 end 点），链条不断
+                next_t = self._quiet_end_after(now)
                 self._next_wake_at = next_t
                 _log.info("[主动] 深夜唤醒顺延到 %s",
                           datetime.fromtimestamp(next_t).strftime("%m-%d %H:%M"))
@@ -1074,12 +1080,22 @@ class ProactiveScheduler:
         except Exception:
             _log.warning("[主动] %s心情奖励异常", reason, exc_info=True)
 
-    def _emit_bubble(self, msg: str, now: float) -> None:
-        """发气泡，带连发间隔限速（v0.6.2：防单次 poll 连发多条后者覆盖前者）。"""
+    def _emit_bubble(self, msg: str, now: float,
+                     duration_s: float | None = None) -> None:
+        """发气泡，带连发间隔限速（v0.6.2：防单次 poll 连发多条后者覆盖前者）。
+
+        ``duration_s``（v0.23.8）：可选停留时长（秒）——天气提醒等多条合并
+        的长文案 5s 读不完（用户实测「闪一下就没了」），复用 app 侧
+        ``_auto_bubble(duration_ms=...)`` 现有结构透传，气泡模块不动。
+        None = 走落点默认（INFO 5s）。
+        """
         try:
             # 连发限速：距上次气泡 <2s 则延后不阻塞（简单实现：直接发，间隔
             # 由调用方自然错开；真队列化留后续）。当前仅记录时间戳供未来用。
-            self._bubble(msg)
+            if duration_s is None:
+                self._bubble(msg)
+            else:
+                self._bubble(msg, duration_s=duration_s)
             self._last_bubble_at = now
         except Exception:
             _log.warning("[主动] bubble_fn 异常", exc_info=True)

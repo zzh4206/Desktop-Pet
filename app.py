@@ -455,7 +455,7 @@ class PetApp:
         proactive_cfg = self.cfg.get("proactive", {})
         self._proactive = ProactiveScheduler(
             store=self.store,
-            bubble_fn=self._auto_bubble,
+            bubble_fn=self._scheduler_bubble,
             idle_fn=lambda: self.sensors.idle_time,
             # M5：独立决策客户端（见 _setup_chat 注释），不与聊天共享 _resp
             client=getattr(self, "_proactive_client", None),
@@ -498,13 +498,12 @@ class PetApp:
             pester_llm_fetch=self._pester_llm_fetch,
         )
         # v0.23 天气刷新：daemon 线程拉新（refresh_async 内部 TTL/退避把守，
-        # 未到期立即返回）；快照消费走 _proactive.poll（30s）与 get_weather 工具
-        if getattr(self, "_weather_service", None) is not None:
-            self._weather_timer = QTimer(self.app)
-            self._weather_timer.timeout.connect(
-                self._weather_service.refresh_async)
-            self._weather_timer.start(60_000)
-            QTimer.singleShot(2000, self._weather_service.refresh_async)
+        # 未到期立即返回）；快照消费走 _proactive.poll（30s）与 get_weather 工具。
+        # timer 经 _refresh_weather 间接调用——定位开关变化后重建 service 仍有效
+        self._weather_timer = QTimer(self.app)
+        self._weather_timer.timeout.connect(self._refresh_weather)
+        self._weather_timer.start(60_000)
+        QTimer.singleShot(2000, self._refresh_weather)
         # v0.7 托盘「强制吐出」→ EatMouseSession.force_spit（停 CGEventTap + 回 idle）
         self.tray.set_spit_callback(self._proactive.force_spit)
         # v0.9 记忆管理页唤出
@@ -800,6 +799,17 @@ class PetApp:
         x, y = self.fsm.pos
         return (x, y, self.window.height())
 
+    def _scheduler_bubble(self, text: str,
+                          duration_s: float | None = None) -> None:
+        """ProactiveScheduler 的 bubble_fn 落点（v0.23.8）。
+
+        复用 ``_auto_bubble`` 现有 kind/duration 结构：scheduler 侧
+        ``_emit_bubble(duration_s=...)`` 透传停留时长（天气提醒等多条合并
+        长文案 5s 读不完），None 走默认 5s。其余主动气泡行为不变。
+        """
+        self._auto_bubble(
+            text, duration_ms=int(duration_s * 1000) if duration_s else 5000)
+
     def _auto_bubble(self, text: str, kind=BubbleType.INFO,
                      duration_ms: int = 5000, anchor: tuple | None = None,
                      *, source: str = "proactive") -> None:
@@ -1042,13 +1052,15 @@ class PetApp:
             from pet.ui.perm_bridge_mac import (
                 PermBridgeMac, register_perm_singleton,
             )
-            self._perm_bridge = PermBridgeMac(self.adapter)
+            self._perm_bridge = PermBridgeMac(
+                self.adapter, location_changed=self._on_location_changed)
             register_perm_singleton(self._perm_bridge)
         else:
             from pet.ui.perm_bridge import (
                 PermBridge, register_perm_singleton,
             )
-            self._perm_bridge = PermBridge(self.adapter)
+            self._perm_bridge = PermBridge(
+                self.adapter, location_changed=self._on_location_changed)
             register_perm_singleton(self._perm_bridge)
         # v0.15 状态板：诊断可视化（无需 key 也可用，故与 mem/perm 同级预注册）
         from pet.ui.status_bridge import StatusBridge, register_status_singleton
@@ -1710,7 +1722,14 @@ class PetApp:
                 # 零输入抑制红线，绝不碰 mouse_lock）：系统空闲 <2s 视为
                 # 「有键鼠活动」，累计 >10s 记一次打断（§9 拍板阈值）
                 idle_fn=lambda: self.sensors.idle_time,
+                # 全屏中到点：只气泡不切 FSM 姿态（focus.py 内判，§4.1）
                 fullscreen_fn=self.adapter.is_fullscreen_active,
+                # 0.25.5 统计养成：完成番茄 store.update(mood=+mood_gain) 走
+                # observer（托盘状态行自动刷新）；当日数/时长/打断数/连续天数
+                # 落 focus_state.json（data_dir，README 可删），重启续算
+                store=self.store,
+                state_path=os.path.join(self._paths["data_dir"],
+                                        "focus_state.json"),
                 cfg=cfg,
             )
         except Exception:
@@ -1718,14 +1737,7 @@ class PetApp:
             return None
 
     def _toggle_focus(self) -> None:
-                # 全屏中到点：只气泡不切 FSM 姿态（focus.py 内判，§4.1）
         """托盘/热键/工具三入口共用的 toggle：非 IDLE → stop，IDLE → start。
-                # 0.25.5 统计养成：完成番茄 store.update(mood=+mood_gain) 走
-                # observer（托盘状态行自动刷新）；当日数/时长/打断数/连续天数
-                # 落 focus_state.json（data_dir，README 可删），重启续算
-                store=self.store,
-                state_path=os.path.join(self._paths["data_dir"],
-                                        "focus_state.json"),
 
         §4.3 反向互斥：吃鼠标中开番茄 → 先 force_spit（幂等，未吃时 no-op）
         再 start——用户显式意图优先。
@@ -2075,6 +2087,37 @@ class PetApp:
         self.bubble.show(msg if ok else f"打不开: {msg}",
                          anchor=self._pet_anchor())
         self.logger.info("[拖放] %s -> %s", path, "OK" if ok else msg)
+
+    def _refresh_weather(self) -> None:
+        """天气刷新节拍（timer/singleShot/定位变化后共用）——经方法间接调用，
+        定位开关开启后重建的 WeatherService 实例仍被 timer 指向。"""
+        svc = getattr(self, "_weather_service", None)
+        if svc is not None:
+            svc.refresh_async()
+
+    def _on_location_changed(self) -> None:
+        """v0.23.7 定位开关在权限页被改后：重读 config → 重建 WeatherService
+        → 更新 scheduler 天气源 → 立即刷新（关则 service 归 None 静默）。"""
+        from pet.config import load_config
+        from pet.weather import build_weather_service
+
+        try:
+            fresh = load_config(self._paths["config_path"])
+            self.cfg["weather"] = fresh.get("weather", {})
+        except Exception:
+            self.logger.warning("[定位] 重读 config 失败", exc_info=True)
+        self._weather_service = build_weather_service(
+            self.cfg, cache_path=os.path.join(
+                self._paths["data_dir"], "weather_cache.json"))
+        if getattr(self, "_proactive", None) is not None:
+            self._proactive.set_weather_fn(
+                self._weather_service.snapshot
+                if self._weather_service else None)
+        if self._weather_service is not None:
+            self._weather_service.refresh_async(force=True)
+        self.logger.info(
+            "[定位] 开关已更新，天气服务%s",
+            "已启用" if self._weather_service else "已静默")
 
     def _show_perm(self) -> None:
         """v0.8 权限自检页（mac 系统特权自检 / win 运行时能力自检；
