@@ -121,7 +121,10 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.24.4"
+__version__ = "0.25.7"
+# v0.25.7：番茄线文档归位（**无代码改动**）——README「版本沿革」的 v0.25.4/.5/.6
+# 三行归位到表内（0.25.4 起误追加到文件末尾「参与贡献」之后，导致表内只到
+# v0.25.3），并补本行；pet/focus.py 与各接线文件与 0.25.6 逐字节一致。
 # v0.24.4：主动纠缠「触发链 + 护栏接线」——pet/proactive.py 挂 poll 轮询：
 # 五重门判定全在 AttentionEngine.should_pester（0.24.0），本版只负责「信号接入
 # + 各归其位」：深夜静默复用 poll 既有 quiet 早退；DND/FOCUS 复用 _dnd_active/

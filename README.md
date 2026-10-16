@@ -372,13 +372,14 @@ python -m compileall app.py pet
 | v0.25.1 | 番茄专注配置：`config.focus` 段（`enabled` 默认 true=入口可见但绝不自动运行、`work_min`/`short_min`/`long_min`/`cycles`/`break_enforce` 默认关/`mood_gain`）+ `hotkeys.focus`（mac ⌘⌥F / win Ctrl+Alt+F，id=3）；测试口径纠正为本地不入库，`focus.py` docstring 的「CI 单测」表述更正为「平台库-free + 本地单测」（本仓无 CI）。 |
 | v0.25.2 | 番茄专注入口：托盘「🍅 开始/停止番茄钟」动态项 + 全局热键 id=3（双平台 shim 注册、冲突沿用 `on_conflict` 改键气泡）+ `platform.start_hotkeys` 透传 `focus_key`/`on_focus` + app 装配 `FocusSession`（气泡/FSM 事件/DND/全屏注入 + 每拍 tick + 三入口收敛 toggle）+ ToolRegistry `start_pomodoro`/`stop_pomodoro`（无危险级）；`focus.enabled=false` 时托盘项与热键同步隐藏。 |
 | v0.25.3 | 番茄陪伴 + 互斥：`behavior.py` 增冻结模式 `_FOCUS_REST`（事件 `focus_rest_on/off`——停 WANDER/物理/攀爬、期间忽略 motion_mode 切换、退出按存量恢复，零新立绘走 idle 静帧）+ `app._LOCO_BREAK_MODES` 收编；`proactive.py` 注入 `focus_fn` 门禁（专注运行中静默久坐提醒/吃鼠标、链式唤醒顺延 10min；只挡新发起不打断已在进行的抑制，fail-open 且 IDLE 恒放行）；0.24 纠缠经既有 `_focus_state` duck-typing 自动静默。 |
+| v0.25.4 | 番茄休息执法（可选，`focus.break_enforce` **默认 false = 零输入抑制红线**）：app 注入 `idle_fn`（系统空闲 <2s 视为有键鼠活动），休息段开始 30s 窗口内活动累计每 10s 记一次 `breaks_cut`、累计 ≥20s 才温和气泡一次（单次误触不提醒，§9 拍板阈值）；**不接 mouse_lock、不做任何输入抑制**。同版修：`FocusSession._emit` 文案池元组 → 随机取一条 `str`（旧版把整池交给 `bubble_fn`，与 `_auto_bubble/BubbleManager.show` 的 `text: str` 契约不符）。 |
+| v0.25.5 | 番茄统计与养成：app 注入 `store`（完成番茄 `store.update(mood=+mood_gain)` 走 observer，托盘状态行自动刷新）+ `state_path=data_dir/focus_state.json`（当日完成数/累计专注秒/打断数/连续天数，跨日归零、`streak_days` 按当日有完成维护）；**重启续算**——进行中节律按 deadline 恢复（5min 宽限内且同日），恢复到 FOCUS 段时补发 `focus_rest_on` 陪伴姿态（全屏静默守卫照旧），IDLE/休息段不补发。 |
+| v0.25.6 | 番茄收尾：托盘 tooltip「🍅×今日完成数」（`TrayManager.set_focus_count` + 纯函数 `tooltip_text`，0 不显示、与状态行互不覆盖）；README 补 `focus.*` / `hotkeys.focus` 配置表与运行期口径（含「默认关 = 零输入抑制」红线）+ 版本沿革。 |
+| v0.25.7 | 番茄线文档归位（无代码改动）：`README.md`「版本沿革」的 v0.25.4/.5/.6 三行归位到表内（0.25.4 起误追加到文件末尾「参与贡献」之后，导致表内只到 v0.25.3），并补本行。 |
 
 ## 参与贡献
 
 欢迎通过 Issue 或 Pull Request 参与改进。提交前请尽量保持 macOS 与 Windows 的适配层一致，并运行与改动模块相关的 `spikes/` 验证脚本。
-| v0.25.4 | 番茄休息执法（可选，`focus.break_enforce` **默认 false = 零输入抑制红线**）：app 注入 `idle_fn`（系统空闲 <2s 视为有键鼠活动），休息段开始 30s 窗口内活动累计每 10s 记一次 `breaks_cut`、累计 ≥20s 才温和气泡一次（单次误触不提醒，§9 拍板阈值）；**不接 mouse_lock、不做任何输入抑制**。同版修：`FocusSession._emit` 文案池元组 → 随机取一条 `str`（旧版把整池交给 `bubble_fn`，与 `_auto_bubble/BubbleManager.show` 的 `text: str` 契约不符）。 |
-| v0.25.5 | 番茄统计与养成：app 注入 `store`（完成番茄 `store.update(mood=+mood_gain)` 走 observer，托盘状态行自动刷新）+ `state_path=data_dir/focus_state.json`（当日完成数/累计专注秒/打断数/连续天数，跨日归零、`streak_days` 按当日有完成维护）；**重启续算**——进行中节律按 deadline 恢复（5min 宽限内且同日），恢复到 FOCUS 段时补发 `focus_rest_on` 陪伴姿态（全屏静默守卫照旧），IDLE/休息段不补发。 |
-| v0.25.6 | 番茄收尾：托盘 tooltip「🍅×今日完成数」（`TrayManager.set_focus_count` + 纯函数 `tooltip_text`，0 不显示、与状态行互不覆盖）；README 补 `focus.*` / `hotkeys.focus` 配置表与运行期口径（含「默认关 = 零输入抑制」红线）+ 版本沿革。 |
 
 ## 许可证
 
