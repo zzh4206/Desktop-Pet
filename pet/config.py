@@ -113,6 +113,7 @@ _SAFE_DEFAULTS: dict = {
         "enabled": True, "work_min": 25, "short_min": 5, "long_min": 15,
         "cycles": 4, "break_enforce": False, "mood_gain": 3,
         "presets": [], "last_work_min": 0, "mode": "pomodoro",
+        "rest_style": "auto",
     },
     # v0.24 主动纠缠（pet/attention.py + pet/pester_lines.py）：总段 enabled +
     # 数值（Stage 分档衰减 / 交互增益）+ 阈值/频控/退避/行为池；``pester.lines``
@@ -501,6 +502,11 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             # （Q4 裁决：开关默认必须保持等价，不许改变既有用户口径）；
             # ``"stopwatch"`` = 正计时/不限时，专注段**不设 deadline**、只累计实耗。
             "mode": {"type": "string", "enum": ["pomodoro", "stopwatch"]},
+            # v0.27.5 休息节律（§4.4 D2）。**同样不进 required**（理由同上面三键：
+            # 老 config 没有此键，写进 required 会让整个 focus 段回退默认）。
+            # 默认 ``"auto"`` = **与旧行为逐值等价**（Q4）；``"none"`` = 无休息：
+            # 专注段完成/跳过后**直接进下一个专注段**，SHORT/LONG 永不出现。
+            "rest_style": {"type": "string", "enum": ["auto", "none"]},
         },
         "required": ["enabled", "work_min", "short_min", "long_min",
                      "cycles", "break_enforce", "mood_gain"],

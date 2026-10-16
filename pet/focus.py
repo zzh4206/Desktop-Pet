@@ -313,7 +313,9 @@ class FocusSession:
 
         # v0.27.4：计时模式（配置派生，见 _apply_cfg）。此处先落默认值，使
         # ``_apply_cfg`` 内部读 ``self._mode`` 之类的派生逻辑不依赖调用顺序。
+        # v0.27.5：休息节律（``rest_style``）同理。
         self._mode = "pomodoro"
+        self._rest_style = "auto"
 
         c = cfg or {}
         self._apply_cfg(c)
@@ -356,6 +358,11 @@ class FocusSession:
         # 大小写怪写法都落在 pomodoro，与 v0.27.3 行为逐值等价（Q4）。
         self._mode = ("stopwatch" if str(c.get("mode", "")).strip().lower()
                       == "stopwatch" else "pomodoro")
+        # v0.27.5 休息节律（§4.4 D2）：只认 "none"（大小写/空白宽容），其余一律
+        # "auto"——与 ``_mode`` 同一套**默认零漂移**守护（老配置无该键、值非法、
+        # 怪写法都落回 "auto"，与 v0.27.4 行为逐值等价，Q4）。
+        self._rest_style = ("none" if str(c.get("rest_style", "")).strip().lower()
+                            == "none" else "auto")
         self._work_min = _num(c.get("work_min", _DEFAULT_WORK_MIN), 1.0, 180.0)
         self._short_min = _num(c.get("short_min", _DEFAULT_SHORT_MIN), 1.0, 60.0)
         self._long_min = _num(c.get("long_min", _DEFAULT_LONG_MIN), 1.0, 120.0)
@@ -424,6 +431,17 @@ class FocusSession:
         ``reconfigure`` 热重载后即刻生效），供托盘文案/可用性与工具回执分流。
         """
         return self._mode
+
+    @property
+    def rest_style(self) -> str:
+        """休息节律：``"auto"``（默认，专注→短休/长休）或 ``"none"``（无休息）。
+
+        v0.27.5（§4.4 D2）。配置派生（``_apply_cfg`` 解析
+        ``config.focus.rest_style``，``reconfigure`` 热重载后即刻生效），
+        只影响**下一次** ``_finish_focus``/``skip`` 的落点，绝不动当前段。
+        ``"none"`` 下 SHORT/LONG **永不出现**。
+        """
+        return self._rest_style
 
     @property
     def last_work_min(self) -> float:
@@ -645,6 +663,11 @@ class FocusSession:
             return
         if phase == FocusPhase.FOCUS:
             self._emit(_SKIP_FOCUS)
+            # v0.27.5 无休息（§4.4 D2）：跳过的下一个落点同样是**专注段**
+            # （没有休息可进）。跳过仍不计完成、不记 focus_sec（口径不变）。
+            if self._rest_style == "none":
+                self._enter(FocusPhase.FOCUS, self._work_minutes(), now)
+                return
             self._enter(FocusPhase.SHORT, self._short_minutes(), now)
         elif phase == FocusPhase.SHORT:
             self._emit(_SKIP_REST)
@@ -711,6 +734,14 @@ class FocusSession:
             self._enter_idle(now)
             return
         self._completed_in_cycle += 1
+        # v0.27.5 无休息（§4.4 D2）：``rest_style="none"`` 时专注段完成 → **直接进
+        # 下一个专注段**。``_completed_in_cycle`` 照常累加、到 ``cycles`` 归零
+        # （保持计数器有界，不推进 LONG），SHORT/LONG 永不出现。
+        if self._rest_style == "none":
+            if self._completed_in_cycle >= self._cycle_target():
+                self._completed_in_cycle = 0
+            self._enter(FocusPhase.FOCUS, self._work_minutes(), now)
+            return
         if self._completed_in_cycle >= self._cycle_target():
             self._enter(FocusPhase.LONG, self._long_minutes(), now)
         else:

@@ -95,7 +95,8 @@
       {"name": "冲刺", "work_min": 15, "short_min": 3, "long_min": 10, "cycles": 6}
     ],
     "last_work_min": 0,
-    "mode": "pomodoro"
+    "mode": "pomodoro",
+    "rest_style": "auto"
   },
   "attention": {
     "enabled": true,
