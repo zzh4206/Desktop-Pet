@@ -121,7 +121,16 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.24.2"
+__version__ = "0.25.1"
+# v0.25.1：番茄专注配置段与测试口径纠正——config 增 focus 段（enabled
+# 默认 true=入口可见但**绝不自动运行** / work_min 25 / short_min 5 /
+# long_min 15 / cycles 4 / break_enforce 默认 false=零输入抑制安全红线 /
+# mood_gain 3）+ _SECTION_SCHEMAS focus 严校验（additionalProperties False，
+# 非法值整段回退默认并告警）+ hotkeys.focus（mac ⌘⌥F / win Ctrl+Alt+F，
+# id=3）+ config.example.json 模板同步；tests/test_focus.py 遵 .gitignore
+# 「本地测试不入库」约定转本地（纠正 0.25.0 的 git add -f）；focus.py
+# docstring 的「win 侧 CI 单测 + lint」表述更正为「平台库-free 代码约束 +
+# 开发者本地单测」（本仓无 CI，见技术方案 §1/§6 更正）。
 # v0.24.2：主动纠缠「行为① PESTER 奔向光标求摸头」——pet/behavior.py FSM 加
 # _PESTER 态（两段式：直线奔向光标复用 _follow_speed/到达阈 10px/超时 5s →
 # 到达转「待摸头」静姿态，窗口期 30s）+ handle_event "pester"/"pester_off" +

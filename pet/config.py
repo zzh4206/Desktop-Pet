@@ -104,6 +104,15 @@ _SAFE_DEFAULTS: dict = {
         "mood_delta": {"happy": 4, "neutral": 0, "sad": -3,
                         "sleepy": -1, "hungry": -2},
     },
+    # v0.25 番茄专注（pet/focus.py）：可选 opt-in 节律器——`enabled=true`
+    # 只表示入口挂载（托盘/热键/工具可见即点即用），**绝不自动运行**；
+    # false = 彻底藏入口且不挂 FocusSession。break_enforce 默认关（安全
+    # 红线：默认配置零输入抑制）。work/short/long_min、cycles 为节律参数，
+    # mood_gain 为每个番茄完成后养成心情增益（§5）。
+    "focus": {
+        "enabled": True, "work_min": 25, "short_min": 5, "long_min": 15,
+        "cycles": 4, "break_enforce": False, "mood_gain": 3,
+    },
     # v0.16 风通道：实时风力 → 立绘静止摆幅（Open-Meteo 免 key + 兜底）
     "wind": {
         "enabled": False, "poll_minutes": 20, "fallback_gain": 1.0,
@@ -407,7 +416,27 @@ _SECTION_SCHEMAS: dict[str, dict] = {
         "properties": {
             "chat": {"type": "string", "minLength": 1},
             "spit": {"type": "string", "minLength": 1},
+            # v0.25 番茄线：id=3，mac ⌘⌥F / win Ctrl+Alt+F（跨平台串同一写法
+            # "cmd+option+f"，win 侧 _MOD_MAP 把 cmd→ctrl、option→alt）
+            "focus": {"type": "string", "minLength": 1},
         },
+        "additionalProperties": False,
+    },
+    # v0.25 番茄专注（pet/focus.py §5）：节律参数 + 休息执法开关 + 心情增益。
+    # schema 上下限即 focus.py 二次钳制的上界（校验失败 → 整段回退默认并告警）
+    "focus": {
+        "type": "object",
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "work_min": {"type": "number", "minimum": 1, "maximum": 180},
+            "short_min": {"type": "number", "minimum": 1, "maximum": 60},
+            "long_min": {"type": "number", "minimum": 1, "maximum": 120},
+            "cycles": {"type": "integer", "minimum": 1, "maximum": 12},
+            "break_enforce": {"type": "boolean"},
+            "mood_gain": {"type": "number", "minimum": 0, "maximum": 20},
+        },
+        "required": ["enabled", "work_min", "short_min", "long_min",
+                     "cycles", "break_enforce", "mood_gain"],
         "additionalProperties": False,
     },
     "llm": {

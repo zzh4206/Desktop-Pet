@@ -8,8 +8,9 @@
 
 平台库-free：时钟/气泡/音效/FSM 事件/养成 store/空闲探测全部注入
 （``now_fn``/``bubble_fn``/``sound_fn``/``fsm_event_fn``/``store``/
-``idle_fn``），**无 import AppKit/WinDLL/ctypes**——win 侧 CI 单测 + lint
-防线。虚拟时钟（now_fn 注入）让单测全路径推演，系统睡眠用 epoch deadline
+``idle_fn``），**无 import AppKit/WinDLL/ctypes**——平台库-free 的代码
+约束 + 开发者本地单测全绿（本仓无 CI，见技术方案 §1/§6 更正）。虚拟时钟
+（now_fn 注入）让单测全路径推演，系统睡眠用 epoch deadline
 比较（醒来发现过期 → 立即迁移，不补算）。
 
 迁移链：IDLE→FOCUS(work_min)→SHORT(short_min)→FOCUS…每 ``cycles`` 个

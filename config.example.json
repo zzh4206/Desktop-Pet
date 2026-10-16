@@ -76,7 +76,17 @@
   },
   "hotkeys": {
     "chat": "cmd+option+p",
-    "spit": "cmd+option+t"
+    "spit": "cmd+option+t",
+    "focus": "cmd+option+f"
+  },
+  "focus": {
+    "enabled": true,
+    "work_min": 25,
+    "short_min": 5,
+    "long_min": 15,
+    "cycles": 4,
+    "break_enforce": false,
+    "mood_gain": 3
   },
   "proactive": {
     "quiet_hours": [
