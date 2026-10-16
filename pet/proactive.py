@@ -66,6 +66,16 @@ _NEED_POOLS = {
              "想你了，跟我说说话嘛～"),
 }
 
+# v0.23 天气提醒文案（诚实护栏：不保证性措辞——「看起来」而非「必然」）
+_WEATHER_POOLS = {
+    "umbrella": ("看起来今天会下雨，出门记得带伞哦☔",
+                 "降水概率不低，带把伞有备无患～"),
+    "colder": ("今天比昨天冷了不少，多穿点再出门呀～",
+               "降温啦，注意添衣保暖哦🧣"),
+    "hot": ("今天好热，注意防暑多喝水🌡️",),
+    "cold": ("今天很冷，注意保暖别冻着啦❄️",),
+}
+
 _FESTIVALS = {  # MM-DD → 名称（config festivals 可扩展）
     "01-01": "元旦", "02-14": "情人节", "05-01": "劳动节",
     "06-01": "儿童节", "10-01": "国庆节", "12-25": "圣诞节",
@@ -192,6 +202,12 @@ class ProactiveScheduler:
         #   callable() -> bool 前台全屏/演示（win adapter.is_fullscreen_active）
         festival_fn=None,                # v0.19.4 F16：callable() -> str|None
         #   今天节日名（mac=EventKit 节假日日历源）；None/空/异常回落内置表
+        # v0.23 天气线：weather_fn 返最新 WeatherSnapshot|None（主线程读
+        # 缓存，pet/weather.WeatherService.snapshot）；weather_alerts 为阈值
+        # 表（config weather.alerts）。规则评估在快照侧纯函数（缺数据不猜），
+        # scheduler 只管触发节拍（今日首次新快照）+ 当日去重 + DND/深夜静默。
+        weather_fn=None,
+        weather_alerts=None,
         state_path: str | None = None,   # 批次B/P2-6（REVIEW-2026-09-05）：
         #   问候/节日/follow-up/唤醒链持久化档案路径；None=不持久化（测试）
     ) -> None:
@@ -231,6 +247,13 @@ class ProactiveScheduler:
         self._birthday = str(c.get("birthday") or "")
         self._birthday_greeted: date | None = None
         self._festival_fn = festival_fn
+        # v0.23 天气线注入
+        self._weather_fn = weather_fn
+        self._weather_alerts = (dict(weather_alerts)
+                                if isinstance(weather_alerts, dict) else {})
+        self._weather_seen_at = 0.0          # 已评估过的 fetched_at
+        self._weather_fired_day: date | None = None
+        self._weather_fired: set = set()     # 当日已发 alert id
 
         # v0.7 平台注入
         self._mouse_lock = mouse_lock
@@ -318,6 +341,9 @@ class ProactiveScheduler:
                 "birthday_greeted": _iso_or_none(self._birthday_greeted),
                 "next_wake_at": self._next_wake_at,
                 "followups": [[float(w), str(m)] for w, m in self._followups],
+                # v0.23 天气提醒当日去重（重启不重发，对齐 greeted 语义）
+                "weather_fired_day": _iso_or_none(self._weather_fired_day),
+                "weather_fired": sorted(self._weather_fired),
             }
             tmp = self._persist_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -349,6 +375,11 @@ class ProactiveScheduler:
             # 读回 date（旧版存字符串与 today 比较永不相等 → 重启重发）
             self._festivaled = _parse_date(raw.get("festivaled"))
             self._birthday_greeted = _parse_date(raw.get("birthday_greeted"))
+            # v0.23 天气提醒去重复原（过期日不复活——下次 poll 换新日期键）
+            self._weather_fired_day = _parse_date(raw.get("weather_fired_day"))
+            wf = raw.get("weather_fired")
+            if isinstance(wf, list):
+                self._weather_fired = {str(x) for x in wf}
             wa = raw.get("next_wake_at")
             # 12h 内的过期唤醒也接受（poll 到点即触发，休眠跨夜场景）；
             # 更陈旧的视为失效重排
@@ -642,6 +673,49 @@ class ProactiveScheduler:
                       float(threshold))
             return True
         return False
+
+    def _check_weather(self, now: float) -> None:
+        """v0.23 天气提醒：今日首次**新**快照触发评估 + 每类每日一次。
+
+        门禁（技术方案 §3.1）：stale/None 不提醒（数据不新鲜不提醒）；
+        同一 fetched_at 只评估一次；DND 静默（poll 已挡深夜）；去重键用
+        **本地日期**（与 greeted 同口径，不用 API 时区日期）。多条同时
+        触发合并为一条气泡（避免连发）。
+        """
+        if self._weather_fn is None or self._dnd_active():
+            return
+        try:
+            snap = self._weather_fn()
+        except Exception:
+            _log.warning("[天气] 快照读取异常，跳过本轮", exc_info=True)
+            return
+        if (snap is None or snap.stale
+                or snap.fetched_at <= self._weather_seen_at):
+            return
+        today = datetime.fromtimestamp(now).date()
+        # daily 字段（降水概率/温差）是「取数当日」口径——昨天的快照今天
+        # 不补发（深夜静默跨天 / 关机过夜场景；测试锁定）
+        if datetime.fromtimestamp(snap.fetched_at).date() != today:
+            return
+        self._weather_seen_at = snap.fetched_at
+        if self._weather_fired_day != today:
+            self._weather_fired_day = today
+            self._weather_fired = set()
+        fired = snap.check_alerts(self._weather_alerts)
+        new = [a for a in fired if a not in self._weather_fired]
+        if not new:
+            return
+        self._weather_fired |= set(new)
+        self._persist()  # 重启不重发
+        msgs = []
+        for a in new:
+            pool = _WEATHER_POOLS.get(a)
+            if pool:
+                msgs.append(random.choice(pool))
+        if msgs:
+            self._emit_bubble(" ".join(msgs), now)
+            _log.info("[天气] 提醒触发: %s", ",".join(new))
+
     # ---- 深夜判定 ----
 
     def _quiet_now(self, now: float) -> bool:
@@ -696,6 +770,12 @@ class ProactiveScheduler:
             self._check_needs(now)
         except Exception:
             _log.warning("[主动] 需求求助检查异常", exc_info=True)
+
+        # 2.7) 天气提醒（v0.23）：今日首次新快照 → 带伞/降温/高温/寒潮
+        try:
+            self._check_weather(now)
+        except Exception:
+            _log.warning("[天气] 提醒检查异常", exc_info=True)
 
         # 3) 久坐提醒（空闲 ≥ 阈值）
         try:
