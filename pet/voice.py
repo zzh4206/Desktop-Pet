@@ -46,6 +46,14 @@ VOICE_ASSET_SUFFIXES: tuple[str, ...] = (
     ".wav", ".aiff", ".m4a", ".mp3", ".caf",
 )
 
+# 占位音文件名标记（v0.26.5）：程序生成的占位音统一叫
+# ``<key>.placeholder.<ext>``，正式录音仍是 ``<key>.<ext>``。
+# 为什么加标记：占位音原先与正式素材同名（都是 ``<key>.wav``），而 ``.wav``
+# 又是探测优先级最高的后缀——用户录了 ``.m4a`` 正式音包后仍会听到占位提示音
+# （用户 2026-10-09 拍板修正）。加标记后**正式素材永远优先**，且占位音在
+# Finder 里一眼可辨、可随时删，不必再"记得先删占位文件"。
+VOICE_PLACEHOLDER_MARK = ".placeholder"
+
 # 罐头语音（固定台词）规范 key —— 逐条对应代码里真实存在的固定气泡/提醒点，
 # 不臆造。元组可加项（新增台词只需追加 key + 补 README 表 + 放同名文件）。
 VOICE_KEYS: tuple[str, ...] = (
@@ -154,10 +162,24 @@ def quiet_hours_active(cfg: dict, now: float) -> bool:
 # ---- 罐头音包目录探测 ----
 
 
+def _asset_candidates(key: str) -> list[str]:
+    """候选文件名列表：**正式素材全部先于占位音**（v0.26.5）。
+
+    先按 ``VOICE_ASSET_SUFFIXES`` 顺序试一遍 ``<key>.<ext>``（正式录音），
+    再试 ``<key>.placeholder.<ext>``（程序占位）——故任何后缀的正式录音都
+    赢过占位音，"录了 .m4a 却听到占位提示音"的问题由此消除。
+    """
+    return ([f"{key}{s}" for s in VOICE_ASSET_SUFFIXES]
+            + [f"{key}{VOICE_PLACEHOLDER_MARK}{s}"
+               for s in VOICE_ASSET_SUFFIXES])
+
+
 class VoiceAssetLoader:
     """``assets/voice/<key>.<ext>`` 多后缀探测（v0.26.0）。
 
     多后缀是用户拍板需求（2026-10-08）：换格式只换文件后缀，代码零改动。
+    探测顺序（v0.26.5 起）：**全部正式后缀 → 全部占位后缀**，正式素材永不
+    被占位音遮挡。
     任何异常静默（返 None/False），永不外抛——探测在气泡路径上，坏掉不能
     连带炸掉主动关怀。
     """
@@ -166,13 +188,13 @@ class VoiceAssetLoader:
         self.root = "" if root is None else root
 
     def find(self, key: str) -> str | None:
-        """按 VOICE_ASSET_SUFFIXES 顺序探测，返首个存在文件的绝对路径。"""
+        """返首个命中文件的绝对路径（正式素材优先，占位音兜底）。"""
         try:
             if not key or not self.root:
                 return None
             base = os.fspath(self.root)
-            for suffix in VOICE_ASSET_SUFFIXES:
-                path = os.path.join(base, f"{key}{suffix}")
+            for name in _asset_candidates(key):
+                path = os.path.join(base, name)
                 if os.path.isfile(path):
                     return os.path.abspath(path)
         except Exception:
@@ -181,7 +203,7 @@ class VoiceAssetLoader:
         return None
 
     def has(self, key: str) -> bool:
-        """任一台法后缀存在即视为命中。"""
+        """任一台法后缀存在即视为命中（正式素材或占位音都算"有"）。"""
         try:
             return self.find(key) is not None
         except Exception:
@@ -267,10 +289,12 @@ def write_placeholder_wav(path: str, seconds: float = 0.35,
 
 
 def ensure_placeholders(root: str, keys=None) -> list[str]:
-    """为缺失的 key 生成 ``<root>/<key>.wav`` 占位（v0.26.0）。
+    """为缺失的 key 生成 ``<root>/<key>.placeholder.wav`` 占位（v0.26.0）。
 
-    已存在（任一合法后缀）的 key 直接跳过——用户录制的正式音包不会被
-    程序生成的提示音覆盖。返已创建文件的绝对路径列表。
+    已存在（任一合法后缀，含正式素材与旧占位）的 key 直接跳过——用户录制的
+    正式音包绝不会被程序生成的提示音覆盖，也**不必删占位音**：正式素材
+    ``<key>.<ext>`` 在探测中永远优先于 ``<key>.placeholder.<ext>``（v0.26.5）。
+    返已创建文件的绝对路径列表。
     """
     created: list[str] = []
     try:
@@ -287,7 +311,8 @@ def ensure_placeholders(root: str, keys=None) -> list[str]:
         try:
             if loader.has(key):
                 continue
-            target = os.path.join(base, f"{key}.wav")
+            target = os.path.join(
+                base, f"{key}{VOICE_PLACEHOLDER_MARK}.wav")
             if os.path.isfile(target):  # has() 已覆盖，双保险防覆写
                 continue
             if write_placeholder_wav(target):

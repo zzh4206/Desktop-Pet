@@ -8,12 +8,22 @@
 ## 目录约定与后缀探测
 
 ```
-assets/voice/<key>.<ext>
+assets/voice/<key>.<ext>              ← 你录制的正式音包（探测优先）
+assets/voice/<key>.placeholder.<ext>  ← 程序生成的占位提示音（探测兜底）
 ```
 
-`<key>` 取下方「key 对照表」中的语义键名。同一个 key 允许只放**一个**文件，
-扩展名从白名单里任选；`VoiceAssetLoader` 对每个 key 按下列**优先级顺序**
-探测，取第一个存在的文件：
+`<key>` 取下方「key 对照表」中的语义键名。同一个 key 只需要放**一个**正式
+文件，扩展名从白名单里任选；`VoiceAssetLoader` 对每个 key 分两轮探测，取
+第一个存在的文件：
+
+1. **先试全部正式素材**：`<key>.wav` → `.aiff` → `.m4a` → `.mp3` → `.caf`
+2. 都没有，**再试占位音**：`<key>.placeholder.wav` → `.aiff` → `.m4a` →
+   `.mp3` → `.caf`
+
+> **v0.26.5 修正（重要）**：占位音曾经与正式素材同名（都叫 `<key>.wav`），
+> 而 `.wav` 又是优先级最高的后缀——于是你录了 `.m4a` 正式音包，听到的却
+> 仍是占位提示音。现在占位音带 `.placeholder` 标记，**任何后缀的正式素材
+> 都稳赢占位音，不必再记得先删占位文件**；而且占位音在 Finder 里一眼可辨。
 
 | 优先级 | 后缀 | 说明 |
 |---|---|---|
@@ -25,7 +35,8 @@ assets/voice/<key>.<ext>
 
 **只用 mac 系统原生格式**（用户拍板 2026-10-08）：不引入 QtMultimedia
 后端与转码依赖，故 `.ogg` / `.flac` **不在白名单**（如需再议为增量）。
-换格式时**只换文件后缀，代码零改动**。
+换格式时**只换文件后缀，代码零改动**。上述五种后缀已实测可被系统 codec
+装载（`NSSound` 静默装载 wav/aiff/m4a/caf/mp3 全部成功，2026-10-09）。
 
 ## key 对照表
 
@@ -61,16 +72,16 @@ cd <仓库根>
 .venv/bin/python -c "from pet.voice import ensure_placeholders; print(ensure_placeholders('assets/voice'))"
 ```
 
-`ensure_placeholders` 只为**缺失**的 key 生成 `<key>.wav`，已存在（任一合法
-后缀）的文件绝不覆盖——所以你可以随时用自己录制的正式音包替换，反复执行
-该命令也不会被占位音盖掉。
+`ensure_placeholders` 只为**缺失**的 key 生成 `<key>.placeholder.wav`，已存在
+（任一合法后缀，含你录的正式素材）的 key 绝不触碰——所以你可以随时用自己
+录制的正式音包替换，反复执行该命令也不会被占位音盖掉。
 
 ## 录制与替换
 
 用户自行录制后，把文件命名为 `<key>.<ext>`（`<ext>` 取上表白名单任一后缀）
-放进本目录即生效，**代码零改动**；不需要删除同名占位 `.wav`——探测优先级
-里 `.wav` 最高，若你的正式素材是 `.m4a` 而占位 `.wav` 还在，会命中占位音，
-此时删掉那份占位 `.wav` 即可。
+放进本目录即生效，**代码零改动**；占位音**不需要删**——正式素材在探测顺序
+里永远优先于 `<key>.placeholder.<ext>`（v0.26.5 起）。想清理时直接删掉带
+`.placeholder` 的文件即可，不影响任何正式素材。
 
 建议录音规格（对齐 `assets/sounds/README.md` 的 44.1kHz/单声道）：
 

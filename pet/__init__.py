@@ -121,7 +121,14 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.24.3"
+__version__ = "0.26.5"
+# v0.26.5：占位音不再遮挡正式素材——占位音改用带标记的文件名
+# ``<key>.placeholder.<ext>``（新增常量 VOICE_PLACEHOLDER_MARK），
+# VoiceAssetLoader 分两轮探测：先把 5 个正式后缀全试一遍，再试占位后缀，
+# 故**任何后缀的正式录音都稳赢占位音**（修正"录了 .m4a 却仍听到占位 .wav"
+# 的坑，用户 2026-10-09 拍板）；ensure_placeholders 改写
+# <key>.placeholder.wav，已有正式素材或已有占位的 key 一律跳过（幂等）；
+# assets/voice/README.md 同步新命名、探测序与实测结论。
 # v0.24.3：主动纠缠「行为② 气泡撒娇」——pet/pester_lines.py（纯共享层，零平台库）：
 # 三级罐头池按纠缠阶段分档（low_attention 低陪伴度撒娇 / pat_failed 求摸头未遂 /
 # ignored 被无视委屈；语气逐级**收敛**，对齐退让铁律——委屈而非指责/升级）+
