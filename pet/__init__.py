@@ -121,7 +121,7 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.23.5"
+__version__ = "0.23.6"
 # v0.23.0：天气感知与提醒（pet/weather.py，wiki 设计-天气感知与提醒 +
 # 设计-天气模块技术方案）——Open-Meteo 免 key 数据源（非商用条款 + CC BY
 # 4.0 署名，README「Powered by Open-Meteo」）；手动城市默认（city 留空=

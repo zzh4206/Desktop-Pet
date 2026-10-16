@@ -349,4 +349,6 @@ three_d/assets_src/
 # spike 派生资产（Balsam 产物与截图，源在 assets_src/ 或可重生）
 three_d/spikes/*/assets/
 three_d/spikes/*/shot_*.png
+three_d/spikes/*/gallery_*.png
+three_d/spikes/*/runtime_preview_*.png
 three_d_assets/
