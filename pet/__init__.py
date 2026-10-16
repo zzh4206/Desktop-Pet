@@ -121,4 +121,16 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.22.1"
+__version__ = "0.23.0"
+# v0.23.0：天气感知与提醒（pet/weather.py，wiki 设计-天气感知与提醒 +
+# 设计-天气模块技术方案）——Open-Meteo 免 key 数据源（非商用条款 + CC BY
+# 4.0 署名，README「Powered by Open-Meteo」）；手动城市默认（city 留空=
+# 功能静默，2026-10-08 拍板），geocoding 坐标随缓存落盘；daemon 线程拉新
+# + 内存/磁盘双缓存（weather_cache.json 原子写）+ 离线回读 stale 标注 +
+# 429/5xx 指数退避（1→5→30min，连续 5 次本日放弃）；三消费方一次落地：
+# ①主动提醒挂 ProactiveScheduler（今日首次新快照评估，带伞/降温/高温/
+# 寒潮阈值可配，每类每日一次落 proactive_state 去重、stale/缺数据/跨日
+# 快照不触发、DND/深夜静默，不保证性措辞）；②LLM 工具 get_weather（只读
+# 缓存不拉网，stale 透传让模型自行说明）；③Sensors.weather 字段位留给
+# 0.24 纠缠线行为调制。本线按 0.23.0→0.23.4 分段提交（核心/config/提醒/
+# 接线/提版），patch 从 0 起每次 commit +1。
