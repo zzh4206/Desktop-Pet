@@ -231,6 +231,8 @@
     "enabled": false,
     "city": "",
     "refresh_min": 30,
+    "locate": "none",
+    "locate_consent": false,
     "alerts": {
       "precip_prob": 50,
       "drop_c": 5,

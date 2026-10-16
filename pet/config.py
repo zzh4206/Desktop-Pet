@@ -176,8 +176,11 @@ _SAFE_DEFAULTS: dict = {
     },
     # v0.23 天气线（pet/weather.py）：Open-Meteo 免 key；city 留空=功能
     # 静默（2026-10-08 拍板）；alerts 阈值（降水概率%/降温℃/高温/寒潮）。
+    # v0.23.7（定位）：locate="none"|"ip"（city 优先，city 空且 consent 才走
+    # IP 定位）；locate_consent 为「确认开启」门禁——权限自检页写回。
     "weather": {
         "enabled": False, "city": "", "refresh_min": 30,
+        "locate": "none", "locate_consent": False,
         "alerts": {"precip_prob": 50, "drop_c": 5,
                    "hot_c": 35, "cold_c": 0},
     },
@@ -288,6 +291,8 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             "enabled": {"type": "boolean"},
             "city": {"type": "string", "maxLength": 64},
             "refresh_min": {"type": "number", "minimum": 5, "maximum": 720},
+            "locate": {"type": "string", "enum": ["none", "ip"]},
+            "locate_consent": {"type": "boolean"},
             "alerts": {
                 "type": "object",
                 "properties": {
@@ -758,6 +763,44 @@ def load_config(config_path: str) -> dict:
             return _validate_sections(cfg, defaults)
     cfg = _migrate(cfg, defaults)
     return _validate_sections(cfg, defaults)
+
+
+def save_weather_location(config_path: str, locate: str,
+                          consent: bool) -> dict:
+    """把 weather.locate / weather.locate_consent 写回用户 config（原子替换）。
+
+    只动这两个键，weather 其余键原样保留（对齐 model_registry.save_llm_section
+    的「只动传入键」语义）。返回写入后的 weather 段。
+    """
+    import json as _json
+
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+    except (OSError, ValueError):
+        log.warning("[天气] 用户 config 读取失败，定位开关未写入", exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    w = raw.get("weather")
+    if not isinstance(w, dict):
+        w = {}
+    w["locate"] = locate
+    w["locate_consent"] = bool(consent)
+    raw["weather"] = w
+    tmp = config_path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(raw, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, config_path)
+    except (OSError, ValueError):
+        log.warning("[天气] 定位开关写入失败", exc_info=True)
+        return {}
+    return w
 
 
 def save_voice_enabled(config_path: str, enabled: bool) -> dict:

@@ -121,7 +121,15 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.24.6"
+__version__ = "0.23.7"
+# v0.23.7–v0.23.10：天气线增量（回填 0.23 线，接着 patch 走）。
+# v0.23.7 定位+兜底核心：IP 定位（opt-in+consent，ip-api 免费档 HTTP）+ wttr.in
+#   备用源兜底（Open-Meteo 偶发超时→立即重试→切 wttr，WWO 码表）+ 工具摘要 data
+#   字段不透传；config 增 locate/consent/save_weather_location。
+# v0.23.8 接线：proactive set_weather_fn（定位开关变更后重建 service）+ 气泡时长
+#   duration_s 透传；app 定位回调 + scheduler bubble_fn 落点。
+# v0.23.9 权限页：perm 定位项（隐私同意非系统特权）+ 页内确认 Dialog + 自绘按钮。
+# v0.23.10 收尾：README weather 节补 locate/consent + 版本沿革。
 # v0.24.6：v0.24「主动纠缠互动」线收尾——README 补「主动纠缠（可选）」节（五重门
 # 判据表 / attention.* 配置表 / 托盘「安静模式」口径 / **「烦人度」坦诚说明**：
 # 罐头池 ≥2/3 + LLM ≤1/3 的实情、默认每小时 2 次为「未经实机浸泡调校的从严起步
