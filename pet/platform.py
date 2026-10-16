@@ -110,6 +110,38 @@ class PlatformAdapter:
         回落内置固定日期表；win 暂无系统节假日 API）。"""
         return None
 
+    # ---- v0.26 语音线注入位（mac 实装见 MacPlatformAdapter，语音模块
+    # pet/voice.py 为平台库-free 的共享层）----
+    # 基类一律 None/unknown = 「win 留坑」：共享层据此静默降级（无播放器跳过
+    # 罐头音、无引擎不朗读、无录音器不采集、权限未知走引导），与 get_mouse_lock
+    # / get_festival_source 的留坑模式完全同构。
+    def get_asset_player(self):
+        """返罐头音包播放器（duck：play/stop/is_playing）。基类 None。
+
+        v0.26 罐头语音走 mac 原生 NSSound（wav/aiff/m4a/mp3/caf 系统 codec），
+        故播放器必须平台注入（用户拍板：不引入 QtMultimedia/不做转码）。"""
+        return None
+
+    def get_tts_engine(self, voice: str = "", rate: int = 0):
+        """返动态 TTS 引擎（duck：speak/stop/is_playing）。基类 None。
+
+        mac=voice_mac.MacTtsEngine（系统 `say`）；win 留坑（未来 SAPI/
+        pyttsx3）。voice/rate 由调用方自 config 传入，便于配置变更后重建。"""
+        return None
+
+    def get_voice_recorder(self):
+        """返录音器（duck：start/stop/is_recording）。基类 None（win 留坑）。
+
+        v0.26 本阶段先落 TTS，录音链路后置——契约先冻结，mac 侧
+        AVFoundation 实装随录音 commit 落地，届时无需再动共享层。"""
+        return None
+
+    def get_mic_permission(self) -> str:
+        """麦克风授权状态：``"granted"``/``"denied"``/``"unknown"``（基类
+        ``"unknown"``，win 留坑）。mac 走 AVCaptureDevice.authorizationStatus
+        （随录音 commit 实装）；共享层据此决定权限引导/降级纯文字输入。"""
+        return "unknown"
+
     def start_mouse_lock(self, duration_s: float) -> bool:
         return False
 
@@ -396,6 +428,47 @@ if sys.platform == "darwin":
                         "节日日历源不可用，回落内置表", exc_info=True)
                     self._festival_source = None
             return self._festival_source
+
+        # ---- v0.26 语音线注入（voice_mac 惰性 import；构造失败即 None，
+        # 由共享层静默降级——对齐节日源「不可用也不抛」的处理）----
+        def get_asset_player(self):
+            """NSSound 罐头音包播放器。失败结果（None）也缓存，避免每次
+            调用都重试 import/构造。"""
+            if not hasattr(self, "_voice_asset_player"):
+                try:
+                    from . import voice_mac
+
+                    self._voice_asset_player = voice_mac.make_asset_player()
+                except Exception:
+                    import logging
+
+                    logging.getLogger("pet").info(
+                        "语音播放器不可用，罐头音包静默跳过", exc_info=True)
+                    self._voice_asset_player = None
+            return self._voice_asset_player
+
+        def get_tts_engine(self, voice: str = "", rate: int = 0):
+            """系统 `say` 动态 TTS。按 (voice, rate) 缓存——配置改了下次调用
+            即重建，无需重启。"""
+            try:
+                rate_i = int(rate or 0)
+            except (TypeError, ValueError):
+                rate_i = 0
+            key = (str(voice or ""), rate_i)
+            if getattr(self, "_voice_tts_key", None) != key:
+                try:
+                    from . import voice_mac
+
+                    self._voice_tts = voice_mac.make_tts_engine(
+                        voice=key[0], rate=key[1])
+                except Exception:
+                    import logging
+
+                    logging.getLogger("pet").info(
+                        "TTS 引擎不可用，语音静默降级", exc_info=True)
+                    self._voice_tts = None
+                self._voice_tts_key = key
+            return getattr(self, "_voice_tts", None)
 
         def start_mouse_lock(self, duration_s: float) -> bool:
             return self.get_mouse_lock().start(duration_s)
