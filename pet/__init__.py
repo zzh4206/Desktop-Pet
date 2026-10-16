@@ -121,7 +121,7 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.23.8"
+__version__ = "0.23.9"
 # v0.23.7–v0.23.10：天气线增量（回填 0.23 线，接着 patch 走）。
 # v0.23.7 定位+兜底核心：IP 定位（opt-in+consent，ip-api 免费档 HTTP）+ wttr.in
 #   备用源兜底（Open-Meteo 偶发超时→立即重试→切 wttr，WWO 码表）+ 工具摘要 data

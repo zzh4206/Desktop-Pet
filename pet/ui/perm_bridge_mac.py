@@ -37,13 +37,18 @@ class _PermCheckWorker(QThread):
 
     def run(self) -> None:
         items = []
-        for name, fn in self._checks:
+        for entry in self._checks:
+            name, fn = entry[0], entry[1]
+            action = entry[2] if len(entry) > 2 else None
             try:
                 ok, detail = fn()
             except Exception as exc:  # 自检自身不许崩
                 _log.warning("[权限自检] %s 异常: %s", name, exc)
                 ok, detail = False, str(exc)[:60]
-            items.append({"name": name, "ok": ok, "detail": detail or "-"})
+            item = {"name": name, "ok": ok, "detail": detail or "-"}
+            if action:
+                item["action"] = action
+            items.append(item)
         self.done.emit(items)
 
 
@@ -54,9 +59,10 @@ class PermBridgeMac(QObject):
     itemsChanged = Signal()
     noteChanged = Signal()
 
-    def __init__(self, adapter, parent=None) -> None:
+    def __init__(self, adapter, location_changed=None, parent=None) -> None:
         super().__init__(parent)
         self._adapter = adapter
+        self._location_changed = location_changed
         self._items: list = []
         self._worker: _PermCheckWorker | None = None
         self._note = "mac 端权限自检：缺权限项请到系统设置→隐私与安全性手动开启"
@@ -84,6 +90,8 @@ class PermBridgeMac(QObject):
              self._check_keychain),
             ("数据目录可写", self._check_paths),
             ("DS key 已设", self._check_ds_key),
+            # v0.23.7 定位：非系统特权，是隐私同意（可操作项，action="location"）
+            ("定位（IP 定位，需确认开启）", self._check_location, "location"),
         ]
         self._worker = _PermCheckWorker(checks, parent=self)
         self._worker.done.connect(self._on_checks_done)
@@ -165,6 +173,49 @@ class PermBridgeMac(QObject):
     def _check_ds_key(self):
         key = self._adapter.get_ds_key()
         return (bool(key), "已设置" if key else "未设置（聊天不可用）")
+
+    # ---- v0.23.7 定位（隐私同意，非系统 TCC 特权；可操作项） ----
+
+    def _check_location(self):
+        """worker 线程只读探测：读 config 判断定位同意状态。"""
+        from pet.config import load_config
+        from pet.weather import weather_location_enabled
+
+        try:
+            cfg = load_config(self._adapter.get_paths()["config_path"])
+        except Exception as exc:
+            _log.warning("[定位] 读 config 失败: %s", exc)
+            return (False, "配置读取失败")
+        ok = weather_location_enabled(cfg)
+        return (ok, "已开启（IP 定位）" if ok else "未开启")
+
+    @Slot()
+    def enable_location(self):
+        """定位「开启」：写 config → 通知 app 重定位。
+
+        v0.23.8 交互修正：确认**不再走 adapter.confirm_dangerous**（mac =
+        NSAlert.runModal 在 QML 鼠标事件回调里嵌套 AppKit 模态循环，对话框
+        不出、主线程冻死——用户实测点「开启」整页无响应）。确认改为 perm.qml
+        页内 Dialog（locateConfirm），本 Slot 只在 QML 侧确认后被调用。
+        """
+        self._set_location("ip", True)
+
+    @Slot()
+    def disable_location(self):
+        """定位「关闭」按钮（对称可关，无需确认）。"""
+        self._set_location("none", False)
+
+    def _set_location(self, locate: str, consent: bool) -> None:
+        from pet.config import save_weather_location
+
+        save_weather_location(
+            self._adapter.get_paths()["config_path"], locate, consent)
+        if self._location_changed is not None:
+            try:
+                self._location_changed()
+            except Exception:
+                _log.warning("[定位] location_changed 回调异常", exc_info=True)
+        self.refresh()
 
 
 _SINGLETON_REGISTERED = False
