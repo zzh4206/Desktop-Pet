@@ -367,14 +367,20 @@ class PetApp:
         # 只决定入口是否挂载（托盘/热键/工具可见即点即用），**绝不自动运行**
         # ——不 start 即 IDLE，对吃鼠标/久坐/纠缠/主动关怀零影响（§1 惰性
         # 接管不变量）。须在 _setup_chat 之前建实例：registry 的
-        # start_pomodoro/stop_pomodoro 工具要拿到会话（同天气服务先建先例）。
+        # start_pomodoro/skip_pomodoro 等工具要拿到会话（同天气服务先建先例）。
         self._focus_session = self._build_focus_session()
-        self._focus_tray_active = None
+        # v0.27.1：托盘状态提供者由 bool 升级为**相位**（set_focus_phase）——
+        # bool 无法表达「休息段禁用 ✅ 提前完成」，故缓存相位而非 active
+        self._focus_tray_phase = None
         self.tray.set_focus_callback(self._toggle_focus)
+        # v0.27.1 运行中控制三个入口（托盘子菜单 → FocusSession 真实调用）
+        self.tray.set_focus_skip_callback(self._skip_focus)
+        self.tray.set_focus_extend_callback(self._extend_focus)
+        self.tray.set_focus_complete_callback(self._complete_focus)
         self.tray.set_focus_visible(self._focus_session is not None)
-        self.tray.set_focus_active(
-            bool(self._focus_session is not None
-                 and self._focus_session.active))
+        self.tray.set_focus_phase(
+            self._focus_session.state if self._focus_session is not None
+            else None)
         try:
             self._setup_chat()
         except Exception:
@@ -1759,14 +1765,48 @@ class PetApp:
             sess.start()
         self._sync_focus_tray()
 
-    def _sync_focus_tray(self) -> None:
-        """托盘番茄项文案/计数 ↔ 运行态与当日统计同步（幂等，每拍可调）。"""
+    # ---- v0.27.1 运行中控制（托盘子菜单三项 + 热键 id=4 的唯一落点） ----
+    # 三个方法都是 FocusSession 的**薄转发**，不自行判相位：模型侧对 IDLE/
+    # 休息段已有明确 no-op 口径（L1），入口层再挡一道（托盘子菜单置灰）只是
+    # 双保险——即使被程序化触发（热键/工具）也不可能有副作用。
+
+    def _skip_focus(self) -> None:
+        """⏭ 跳过当前段（专注段不计完成）/ 热键 id=4。未挂载或 IDLE 零副作用。"""
         sess = getattr(self, "_focus_session", None)
-        active = bool(sess is not None and sess.active)
-        if active != self._focus_tray_active:
-            self._focus_tray_active = active
+        if sess is None:
+            return
+        sess.skip()
+        self._sync_focus_tray()
+
+    def _extend_focus(self, minutes: int = 5) -> None:
+        """➕ 延长当前段（只延不缩，默认 +5 分钟）。未挂载或 IDLE 零副作用。"""
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        sess.extend(minutes)
+        self._sync_focus_tray()
+
+    def _complete_focus(self) -> None:
+        """✅ 提前完成（**计入** completed/streak，与停止不计相反）。
+
+        仅 FOCUS 段有效；休息段/IDLE 由模型侧 no-op，托盘子菜单同时置灰。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        sess.complete()
+        self._sync_focus_tray()
+
+    def _sync_focus_tray(self) -> None:
+        """托盘番茄子菜单 ↔ 相位与当日统计同步（幂等，每拍可调）。"""
+        sess = getattr(self, "_focus_session", None)
+        phase = sess.state if sess is not None else None
+        # v0.27.1：按**相位**（而非 bool）同步——IDLE/focus/short/long 决定
+        # 子菜单四项可用性（set_focus_phase 自身按相位变幂等早返回）
+        if phase != self._focus_tray_phase:
+            self._focus_tray_phase = phase
             try:
-                self.tray.set_focus_active(active)
+                self.tray.set_focus_phase(phase)
             except Exception:
                 self.logger.warning("[番茄] 托盘状态同步失败", exc_info=True)
         # v0.25.6 今日完成数「🍅×N」进 tooltip（set_focus_count 自身按值变
@@ -1802,6 +1842,13 @@ class PetApp:
         if _focus_key:
             _focus_hint = (" / Cmd+Option+F 番茄" if sys.platform == "darwin"
                            else " / Ctrl+Alt+F 番茄")
+        # v0.27.1 跳过当前段热键 id=4：**默认空串 = 不注册**（§6 热键资源
+        # 纪律，不占键位）；focus.enabled=false（session=None）时同番茄键一起
+        # 变空键（入口与热键同步隐藏）
+        _skip_key = (
+            ((self.cfg.get("hotkeys") or {}).get("focus_skip") or "")
+            if getattr(self, "_focus_session", None) is not None else "")
+        _skip_hint = f" / {_skip_key} 跳过番茄段" if _skip_key else ""
         try:
             if sys.platform == "darwin":
                 from pet.hotkey_mac import _HotkeySignalBridge
@@ -1826,26 +1873,31 @@ class PetApp:
             on_spit=lambda: self._proactive.force_spit(),
             focus_key=_focus_key,
             on_focus=self._toggle_focus,
+            skip_key=_skip_key,
+            on_skip=self._skip_focus,
             on_conflict=on_conflict,
             bridge=hotkey_bridge,
         )
         if not ok:
             self.logger.warning("[热键] 全部注册失败")
         else:
-            self.logger.info("[热键] 就绪（%s）", _hk_hint + _focus_hint)
+            self.logger.info("[热键] 就绪（%s）", _hk_hint + _focus_hint + _skip_hint)
             # v0.17.0：热键提示进托盘 tooltip（悬停可见，缓解热键太隐蔽）
-            self.tray.set_tooltip(f"桌宠 · {_hk_hint}{_focus_hint}")
+            self.tray.set_tooltip(f"桌宠 · {_hk_hint}{_focus_hint}{_skip_hint}")
         # v0.25.2：托盘番茄项按当前运行态对齐（重水化后可能是运行中）
         self._sync_focus_tray()
 
     def _on_hotkey_fired(self, hid: int) -> None:
-        """M7：热键信号主线程分发（hid=1 聊天 / hid=2 吐出 / hid=3 番茄）。"""
+        """M7：热键信号主线程分发（1 聊天 / 2 吐出 / 3 番茄 toggle /
+        4 跳过番茄段〔v0.27.1〕）。"""
         if hid == 1:
             self._toggle_chat_panel()
         elif hid == 2:
             self._proactive.force_spit()
         elif hid == 3:
             self._toggle_focus()
+        elif hid == 4:
+            self._skip_focus()
 
     def _toggle_chat_panel(self) -> None:
         """Ctrl+Alt+P 唤出/隐藏聊天面板（v0.11 Must）。"""

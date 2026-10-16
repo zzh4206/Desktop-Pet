@@ -15,10 +15,78 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 _FOCUS_START_LABEL = "🍅 开始番茄钟"
 _FOCUS_STOP_LABEL = "🍅 停止番茄钟"
 
+# v0.27.1 番茄自由度扩展「入口层①：运行中控制」（wiki 设计-番茄自由度扩展技术
+# 方案 §4.2 B1/B2/B3）：单一 toggle 项升级为「🍅 番茄钟」子菜单（▸ 由 Qt 按
+# 子菜单自动绘制，故标题不带箭头字符）——开始/停止（toggle 语义逐字沿用）+
+# ⏭ 跳过当前段 + ➕ 延长 5 分钟 + ✅ 提前完成。可用性由纯函数
+# ``focus_availability`` 决定（**L1：IDLE 时后三项一律不可用**，从入口层再挡
+# 一道，模型侧同类方法本就是 no-op）；``apply_focus_menu`` 只要求对象实现
+# setText/setEnabled，故整条可用性逻辑可脱离 QApplication 单测。
+_FOCUS_MENU_LABEL = "🍅 番茄钟"
+_FOCUS_SKIP_LABEL = "⏭ 跳过当前段"
+_FOCUS_EXTEND_LABEL = "➕ 延长 5 分钟"
+_FOCUS_COMPLETE_LABEL = "✅ 提前完成"
+
+_PHASE_IDLE = "idle"
+_PHASES = ("idle", "focus", "short", "long")
+
 
 def focus_label(active: bool) -> str:
     """番茄项文案：运行中显示「停止」（点击即 stop），否则显示「开始」。"""
     return _FOCUS_STOP_LABEL if active else _FOCUS_START_LABEL
+
+
+def focus_phase_name(state) -> str:
+    """相位归一化：``FocusPhase`` / 其 ``.value`` / 字符串 / None → 四个相位名。
+
+    tray 刻意**不 import pet.focus**（托盘层不耦合节律器，与既有 duck-typing
+    读口同风格）：只读 ``.value`` 或字符串。未知/None 一律按 ``idle`` 处理——
+    fail-safe 方向是「更不可用」：宁可多灰一项，也不给 IDLE 下的误点留门。
+    """
+    v = getattr(state, "value", state)
+    v = str(v).strip().lower() if v is not None else _PHASE_IDLE
+    return v if v in _PHASES else _PHASE_IDLE
+
+
+def focus_availability(state) -> dict:
+    """相位 → 子菜单四项的文案与可用性（纯函数，§4.2 口径）。
+
+    - ``toggle``：**恒可用**（文案沿用 ``focus_label``：「开始」↔「停止」）
+    - ``skip``：非 IDLE 可用（专注/短休/长休；模型侧 IDLE 本就 no-op）
+    - ``extend``：非 IDLE 可用（专注段与休息段均可延长，模型侧 IDLE no-op）
+    - ``complete``：**仅 FOCUS 可用**——休息段没有「提前完成」语义，若可点会
+      凭空 +1 番茄（模型侧已 no-op，此处是入口层双保险）
+    """
+    phase = focus_phase_name(state)
+    active = phase != _PHASE_IDLE
+    return {
+        "phase": phase,
+        "active": active,
+        "toggle_label": focus_label(active),
+        "skip": active,
+        "extend": active,
+        "complete": phase == "focus",
+    }
+
+
+def apply_focus_menu(actions: dict, state) -> dict:
+    """把 ``focus_availability`` 施加到动作集合，返回该可用性字典。
+
+    ``actions`` 的值只需实现 ``setText(str)`` / ``setEnabled(bool)``（真实
+    QAction 或测试替身皆可），故本函数是纯逻辑，可脱离 QApplication 单测。
+    缺项（缺键/None）静默跳过，便于兼容旧调用方。
+    """
+    avail = focus_availability(state)
+    actions = actions or {}
+    toggle = actions.get("toggle")
+    if toggle is not None:
+        toggle.setText(avail["toggle_label"])
+        toggle.setEnabled(True)          # toggle 是唯一恒可用项
+    for key in ("skip", "extend", "complete"):
+        obj = actions.get(key)
+        if obj is not None:
+            obj.setEnabled(avail[key])
+    return avail
 
 
 def tooltip_text(base: str, focus_count: int = 0,
@@ -102,12 +170,30 @@ class TrayManager(QObject):
         # 仍是热键 Cmd+Option+T + 看门狗。
         act_spit = menu.addAction("强制吐出")
         act_spit.triggered.connect(self._emit_spit)
-        # v0.25.2 番茄专注入口（opt-in）：未运行/运行态文案切换；focus.enabled
-        # =false 时 app 调 set_focus_visible(False) 彻底隐藏（§1 两段式开关）
+        # v0.25.2 番茄专注入口（opt-in）；v0.27.1 由单一 toggle 项升级为
+        # 「🍅 番茄钟」子菜单（§4.2 B1/B2/B3 运行中控制）——开始/停止 +
+        # 跳过长休/短休/专注、延长、提前完成。可用性按当前相位经纯函数
+        # apply_focus_menu 施加（初始 IDLE：后三项置灰）。focus.enabled=false
+        # 时 app 调 set_focus_visible(False) 隐藏整个子菜单（§1 两段式开关）
         self._on_focus = None
-        self._focus_active_state = False
-        self._act_focus = act_focus = menu.addAction(_FOCUS_START_LABEL)
+        self._on_focus_skip = None
+        self._on_focus_extend = None
+        self._on_focus_complete = None
+        self._focus_phase = _PHASE_IDLE
+        # 子菜单标题不带「▸」——mac/Qt 会按子菜单自动绘制箭头字符
+        self._focus_menu = focus_menu = menu.addMenu(_FOCUS_MENU_LABEL)
+        self._act_focus = act_focus = focus_menu.addAction(_FOCUS_START_LABEL)
         act_focus.triggered.connect(self._emit_focus)
+        self._act_focus_skip = act_skip = focus_menu.addAction(
+            _FOCUS_SKIP_LABEL)
+        act_skip.triggered.connect(self._emit_focus_skip)
+        self._act_focus_extend = act_ext = focus_menu.addAction(
+            _FOCUS_EXTEND_LABEL)
+        act_ext.triggered.connect(self._emit_focus_extend)
+        self._act_focus_complete = act_cmp = focus_menu.addAction(
+            _FOCUS_COMPLETE_LABEL)
+        act_cmp.triggered.connect(self._emit_focus_complete)
+        self._apply_focus_menu()     # 初始 IDLE → 后三项不可用（L1）
         menu.addSeparator()
         act_quit = menu.addAction("退出")
         act_quit.triggered.connect(self._on_quit)
@@ -302,7 +388,7 @@ class TrayManager(QObject):
         if self._on_spit is not None:
             self._on_spit()
 
-    # ---- v0.25.2 番茄专注入口 ----
+    # ---- v0.25.2 番茄专注入口（v0.27.1 升级为子菜单） ----
 
     def set_focus_callback(self, cb) -> None:
         """托盘'🍅 开始/停止番茄钟'→ app._toggle_focus（toggle 语义单点）。"""
@@ -312,18 +398,74 @@ class TrayManager(QObject):
         if self._on_focus is not None:
             self._on_focus()
 
+    def set_focus_skip_callback(self, cb) -> None:
+        """子菜单「⏭ 跳过当前段」→ app._skip_focus（FocusSession.skip 薄转发）。"""
+        self._on_focus_skip = cb
+
+    def set_focus_extend_callback(self, cb) -> None:
+        """子菜单「➕ 延长 5 分钟」→ app._extend_focus（extend(5) 薄转发）。"""
+        self._on_focus_extend = cb
+
+    def set_focus_complete_callback(self, cb) -> None:
+        """子菜单「✅ 提前完成」→ app._complete_focus（complete() 薄转发，计入完成）。"""
+        self._on_focus_complete = cb
+
+    def _emit_focus_skip(self) -> None:
+        if self._on_focus_skip is not None:
+            self._on_focus_skip()
+
+    def _emit_focus_extend(self) -> None:
+        if self._on_focus_extend is not None:
+            self._on_focus_extend()
+
+    def _emit_focus_complete(self) -> None:
+        if self._on_focus_complete is not None:
+            self._on_focus_complete()
+
+    def _apply_focus_menu(self) -> None:
+        """按当前相位刷新子菜单文案/可用性（幂等；相位未变时上层不会调用）。"""
+        apply_focus_menu({
+            "toggle": getattr(self, "_act_focus", None),
+            "skip": getattr(self, "_act_focus_skip", None),
+            "extend": getattr(self, "_act_focus_extend", None),
+            "complete": getattr(self, "_act_focus_complete", None),
+        }, getattr(self, "_focus_phase", _PHASE_IDLE))
+
     def set_focus_visible(self, visible: bool) -> None:
-        """focus.enabled=false → 彻底隐藏番茄入口（§1 两段式开关）。"""
+        """focus.enabled=false → 彻底隐藏整个「🍅 番茄钟」子菜单（§1 两段式）。
+
+        QMenu 作为菜单项存在时以 ``menuAction()`` 为准（QMenu 自身 setVisible
+        在部分 Qt 版本不联动父菜单项）；保留 QAction 分支兼容旧测试替身。
+        """
+        m = getattr(self, "_focus_menu", None)
         act = getattr(self, "_act_focus", None)
-        if act is not None:
+        if m is not None:
+            m.menuAction().setVisible(bool(visible))
+        elif act is not None:
             act.setVisible(bool(visible))
 
+    def set_focus_phase(self, state) -> None:
+        """app 在 start/stop/skip/extend/complete 后与每拍同步时调：按相位刷新
+        子菜单四项的文案与可用性（相位未变则不碰 QAction，幂等零成本）。
+
+        v0.27.1 取代 v0.25.2 的 ``set_focus_active(bool)``（后者保留为兼容
+        包装）：bool 只能区分「跑没跑」，无法表达「休息段 disable 提前完成」，
+        故状态提供者升级为**相位**。
+        """
+        phase = focus_phase_name(state)
+        if phase == getattr(self, "_focus_phase", None):
+            return
+        self._focus_phase = phase
+        self._apply_focus_menu()
+
     def set_focus_active(self, active: bool) -> None:
-        """app 在 start/stop 后与 tick 变化时调：同步运行态文案（幂等）。"""
-        self._focus_active_state = bool(active)
-        act = getattr(self, "_act_focus", None)
-        if act is not None:
-            act.setText(focus_label(active))
+        """v0.25.2 兼容包装：只区分「跑没跑」（等价于 ``set_focus_phase``）。
+
+        保留既有调用兼容（0.25.2–0.27.0 的 app 调用点）；粗粒度映射下
+        「提前完成」在休息段会随 active=True 可用——模型侧 no-op 兜底，
+        新调用点一律用 ``set_focus_phase`` 传真实相位。
+        """
+        self.set_focus_phase("focus" if active else _PHASE_IDLE)
 
     @staticmethod
     def _make_icon(alert: bool = False) -> QIcon:

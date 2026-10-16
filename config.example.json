@@ -77,7 +77,8 @@
   "hotkeys": {
     "chat": "cmd+option+p",
     "spit": "cmd+option+t",
-    "focus": "cmd+option+f"
+    "focus": "cmd+option+f",
+    "focus_skip": ""
   },
   "focus": {
     "enabled": true,

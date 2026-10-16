@@ -9,6 +9,8 @@ Carbon 子包不保证安装，故不依赖）：
   幂等 no-op）
 - **Cmd+Option+F** → 开始/停止番茄钟（``on_focus``，v0.25 番茄线 id=3；
   ``focus_key`` 空串/``on_focus=None`` = 该入口未挂载，不注册不告警）
+- **（可配置，默认空）** → 跳过当前番茄段（``on_skip``，v0.27.1 id=4；
+  ``skip_key`` 空串/``on_skip=None`` = 未启用，不注册不告警）
 - 注册失败（已被其他 app 占用）→ ``on_conflict(name, key)`` 冲突回调
 
 线程模型：与 win 的专用热键线程不同——``RegisterEventHotKey`` 事件由系统
@@ -59,9 +61,12 @@ eventAttributeNone = 0
 # 应用级 EventHotKeyID 签名（4 字符任意，仅本进程内唯一即可）
 _HOTKEY_SIG = _four("dpet")
 
-_ID_CHAT = 1   # 与 win 对齐：1=聊天 / 2=吐出 / 3=番茄（app._on_hotkey_fired 分发）
+_ID_CHAT = 1   # 与 win 对齐：1=聊天 / 2=吐出 / 3=番茄 / 4=跳过番茄段
 _ID_SPIT = 2
 _ID_FOCUS = 3
+# v0.27.1 番茄自由度扩展「入口层①」（§4.2 B1）：id=4 = 跳过当前段。id=5 留给
+# v0.27.3 的暂停/继续，**本版不占**。空键（默认）→ 不注册（§6 热键资源纪律）
+_ID_SKIP = 4
 
 
 # ---- kVK_ANSI_* 虚拟键码（HIToolbox/Events.h）----
@@ -198,12 +203,12 @@ class _HotkeySignalBridge:
 
 
 class HotkeyManager:
-    """Carbon 全局热键（chat/spit/focus）；注册失败检测+回调通知。
+    """Carbon 全局热键（chat/spit/focus/skip）；注册失败检测+回调通知。
 
     生命周期：
     - ``start(chat_key, spit_key, on_chat, on_spit, focus_key="",
-      on_focus=None, ...)`` → 装事件处理器 + 注册键（focus 键仅在
-      ``focus_key`` 非空且 ``on_focus`` 非 None 时注册）；返
+      on_focus=None, skip_key="", on_skip=None, ...)`` → 装事件处理器 +
+      注册键（focus/skip 键仅在对应键串非空且回调非 None 时注册）；返
       True=至少一个注册成功。
     - ``stop()`` → 注销 + 移除处理器（shutdown 用；幂等）。
     """
@@ -226,11 +231,13 @@ class HotkeyManager:
 
     def start(self, chat_key: str, spit_key: str,
               on_chat, on_spit, focus_key: str = "", on_focus=None,
+              skip_key: str = "", on_skip=None,
               on_conflict=None, bridge=None) -> bool:
         """注册热键并装事件处理器。
 
-        chat_key/spit_key/focus_key 形如 "cmd+option+p"。focus_key 空串或
-        on_focus=None（focus.enabled=false）→ 番茄键不注册（入口隐藏）。
+        chat_key/spit_key/focus_key/skip_key 形如 "cmd+option+p"。focus_key
+        空串或 on_focus=None（focus.enabled=false）→ 番茄键不注册（入口隐藏）；
+        v0.27.1 的 skip_key 同款（**默认空串 = 不注册**，id=4）。
         返 True=至少一个注册成功。
         """
         if not _HAS_CARBON:
@@ -242,12 +249,16 @@ class HotkeyManager:
             _log.warning("[热键] 无 signal bridge，回调将在线程内直调"
                          "（生产路径应注入 bridge 转主线程）")
         _want_focus = bool(focus_key) and on_focus is not None
+        # v0.27.1：skip_key 默认空串 = 不注册（§6）；与 focus 同款守卫
+        _want_skip = bool(skip_key) and on_skip is not None
         with self._lock:
             if self._active:
                 return True  # 幂等
             self._callbacks = {_ID_CHAT: on_chat, _ID_SPIT: on_spit}
             if _want_focus:
                 self._callbacks[_ID_FOCUS] = on_focus
+            if _want_skip:
+                self._callbacks[_ID_SKIP] = on_skip
             self._on_conflict = on_conflict
             self._bridge = bridge
             keys = {
@@ -260,6 +271,10 @@ class HotkeyManager:
                 keys[_ID_FOCUS] = parse_hotkey(focus_key)
                 names[_ID_FOCUS] = "番茄钟"
                 keystrs[_ID_FOCUS] = focus_key
+            if _want_skip:
+                keys[_ID_SKIP] = parse_hotkey(skip_key)
+                names[_ID_SKIP] = "跳过番茄段"
+                keystrs[_ID_SKIP] = skip_key
 
             if not self._install_handler():
                 return False

@@ -440,6 +440,12 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             # v0.25 番茄线：id=3，mac ⌘⌥F / win Ctrl+Alt+F（跨平台串同一写法
             # "cmd+option+f"，win 侧 _MOD_MAP 把 cmd→ctrl、option→alt）
             "focus": {"type": "string", "minLength": 1},
+            # v0.27.1 番茄线：可选热键 **id=4**（跳过当前段）；id=5 预留给
+            # v0.27.3 暂停，本版不占。**刻意不设 minLength**——`""` 是本键的
+            # 合法默认值（=不注册）；本段校验失败会**整段回退默认**
+            # （_validate_section :714-735），若在此拦空串，用户自定义的
+            # chat/spit/focus 会被一起静默丢弃。
+            "focus_skip": {"type": "string"},
         },
         "additionalProperties": False,
     },

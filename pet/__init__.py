@@ -121,7 +121,31 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.0"
+__version__ = "0.27.1"
+# v0.27.1：番茄自由度扩展「入口层①：运行中控制」（wiki 设计-番茄自由度扩展技术
+# 方案 §4.2 B1/B2/B3 + §6）——**本版只为 v0.27.0 已存在的模型能力接线，不改模型**：
+# ① 托盘子菜单「🍅 番茄钟」（pet/tray.py）——单一 toggle 项升级为四项：开始/停止
+#    （文案与 toggle 语义逐字沿用）+ ⏭ 跳过当前段 + ➕ 延长 5 分钟 + ✅ 提前完成。
+#    可用性走模块级纯函数 focus_availability(state)/apply_focus_menu(actions,state)
+#    （只依赖 setText/setEnabled → 可脱离 QApplication 单测）；**L1：IDLE 时后三项
+#    一律置灰**，✅ 仅 FOCUS 可用（休息段点了会凭空 +1 番茄），⏭/➕ 非 IDLE 可用。
+#    状态提供者 set_focus_active(bool) → set_focus_phase(state)（bool 表达不了"休息
+#    段禁用提前完成"），旧方法保留为兼容包装；focus.enabled=false 仍整菜单隐藏。
+# ② 工具 skip_pomodoro/extend_pomodoro（pet/focus.py）——薄转发 skip()/extend()；
+#    extend 的 minutes 1–180 与 start_pomodoro 同钳制口径（复用 _parse_minutes）；
+#    描述如实写明 skip **不计**完成、extend **只延不缩**；IDLE 返回可读说明
+#    （"当前未在番茄中"）而非静默失败；危险级与 start/stop 同级（默认 False=不打扰）。
+# ③ 可选热键 id=4（默认**不注册**）——config hotkeys.focus_skip（schema **刻意
+#    不设 minLength**："" 是合法默认值，且 hotkeys 段校验失败会整段回退默认，
+#    拦空串会连用户自定义的 chat/spit/focus 一起丢）+ platform.start_hotkeys
+#    基类/mac/win 三处加 skip_key/on_skip 透传（适配器内部改全关键字传参，防
+#    透传位增多后位置错位）+ hotkey_mac/win 的 _ID_SKIP=4 注册 + app._skip_focus
+#    落点 + hid==4 分发；冲突沿用既有 on_conflict 改键气泡。**id=5 留给 v0.27.3
+#    的暂停，本版不占**。
+# ④ 入口真实接线（非 UI 壳）：托盘三项与热键 id=4 → app._skip_focus/_extend_focus/
+#    _complete_focus → FocusSession.skip()/extend(5)/complete()，每次后 _sync_focus_tray()。
+# **本版不存在 pause()**；启动时长选择/预设（.2）、正计时（.4）、无休息（.5）、
+# 统计（.6）一律不做。测试：tests/test_focus.py 79 → 106 全绿（本地不入库）。
 # v0.27.0：番茄自由度扩展「模型层①」（wiki 设计-番茄自由度扩展技术方案 §4.1/
 # §4.2/§5.2，本版只动 pet/focus.py + 文档，无入口/配置改动）：
 # ① **L3 记账缺陷修复（正确性，前置）**——focus_sec 由「按配置 work_min 记账」

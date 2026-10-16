@@ -640,6 +640,51 @@ class _StopPomodoroHandler:
                           {"state": self._session.state.value})
 
 
+class _SkipPomodoroHandler:
+    def __init__(self, session) -> None:
+        self._session = session
+
+    def execute(self, args: dict, ctx):
+        from pet.tools_schema import ToolResult
+
+        if self._session is None:
+            return ToolResult(False, "番茄功能未启用（config focus.enabled）", {})
+        # L1：IDLE 下**可读说明**而非静默成功/静默失败——LLM 需要知道"没在
+        # 番茄中"才能正确回话；模型侧 skip() 本就 no-op，这里只是把结果讲清楚
+        if not self._session.active:
+            return ToolResult(True, "当前未在番茄中（空闲），无需跳过",
+                              {"state": self._session.state.value,
+                               "active": False})
+        self._session.skip()
+        return ToolResult(True, "已跳过当前段，进入下一段（本次不计完成）",
+                          {"state": self._session.state.value,
+                           "active": self._session.active})
+
+
+class _ExtendPomodoroHandler:
+    def __init__(self, session) -> None:
+        self._session = session
+
+    def execute(self, args: dict, ctx):
+        from pet.tools_schema import ToolResult
+
+        if self._session is None:
+            return ToolResult(False, "番茄功能未启用（config focus.enabled）", {})
+        if not self._session.active:
+            return ToolResult(True, "当前未在番茄中（空闲），延长无效果",
+                              {"state": self._session.state.value,
+                               "active": False})
+        # 钳制口径与 start_pomodoro 完全一致（复用 _parse_minutes）：>180 钳到
+        # 180，<1/非数值/NaN/缺省 → 按默认 5 分钟（extend() 的默认值）
+        m = _parse_minutes(args.get("minutes", 5))
+        if m is None:
+            m = 5.0
+        self._session.extend(m)
+        return ToolResult(True, f"已延长当前段 {m:g} 分钟（只延不缩）",
+                          {"state": self._session.state.value,
+                           "extended_minutes": m})
+
+
 def build_focus_tools(session) -> list:
     """番茄工具清单（app 喂 ToolRegistry.register，与天气/记忆工具并列）。"""
     from pet.tools_schema import ToolSchema
@@ -664,5 +709,34 @@ def build_focus_tools(session) -> list:
         parameters={"type": "object", "properties": {},
                     "additionalProperties": False},
     )
+    # v0.27.1 运行中控制（§4.2 B1/B2）：skip/extend 与 start/stop 同危险级
+    # （ToolSchema.dangerous 默认 False = 无危险级不打扰，不经 confirm_fn）
+    skip_schema = ToolSchema(
+        name="skip_pomodoro",
+        description=(
+            "跳过当前番茄段、直接进入下一段（专注段跳过**不计完成**：既不记"
+            "完成数/连续天数，也不记专注时长）。专注段跳过 → 短休息；短休跳过"
+            "→ 专注；长休跳过 → 专注并开始新一轮。空闲时无效果（会如实说明）。"
+        ),
+        parameters={"type": "object", "properties": {},
+                    "additionalProperties": False},
+    )
+    extend_schema = ToolSchema(
+        name="extend_pomodoro",
+        description=(
+            "延长当前番茄段（**只延不缩**，默认多给 5 分钟）。可选参数 minutes"
+            " 指定延长分钟数（1–180，与 start_pomodoro 同口径：>180 钳到 180、"
+            "<1/非法当作没传→按 5 分钟）；延长部分计入实际专注时长。空闲时无"
+            "效果（会如实说明）；要提前收工请用 stop_pomodoro（不计完成）。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"minutes": {"type": "number", "minimum": 1,
+                                      "maximum": 180}},
+            "additionalProperties": False,
+        },
+    )
     return [(start_schema, _StartPomodoroHandler(session)),
-            (stop_schema, _StopPomodoroHandler(session))]
+            (stop_schema, _StopPomodoroHandler(session)),
+            (skip_schema, _SkipPomodoroHandler(session)),
+            (extend_schema, _ExtendPomodoroHandler(session))]

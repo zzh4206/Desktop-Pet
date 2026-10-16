@@ -71,11 +71,14 @@ class PlatformAdapter:
 
     def start_hotkeys(self, cfg: dict, on_chat, on_spit,
                       focus_key: str = "", on_focus=None,
+                      skip_key: str = "", on_skip=None,
                       on_conflict=None, bridge=None) -> bool:
         """v0.11 全局热键注册。基类返 False（无实现）。
 
         v0.25 番茄线：``focus_key``/``on_focus`` 为新增透传位（id=3）；
-        focus_key 空串 = 番茄入口未挂载，shim 侧不注册。"""
+        focus_key 空串 = 番茄入口未挂载，shim 侧不注册。
+        v0.27.1 番茄线：``skip_key``/``on_skip`` 同款透传位（id=4「跳过当前
+        段」）；**空串（默认）= 不注册**，不占键位。id=5 留给 v0.27.3 暂停。"""
         return False
 
     def stop_hotkeys(self) -> None:
@@ -530,22 +533,29 @@ if sys.platform == "darwin":
         # + LaunchAgents plist；与 WinPlatformAdapter 接口对齐） ----
         def start_hotkeys(self, cfg: dict, on_chat, on_spit,
                           focus_key: str = "", on_focus=None,
+                          skip_key: str = "", on_skip=None,
                           on_conflict=None, bridge=None) -> bool:
             """v0.11：HotkeyManager 注册 Cmd+Option+P/T + 冲突检测。
 
             默认 "cmd+option+p"/"cmd+option+t"；config ``hotkeys.chat/spit/
             focus`` 可自定义（字符串，修饰键 cmd/option/shift/ctrl + 单键）。
             v0.25 番茄线：focus_key/on_focus 透传（id=3，空串=不注册）。
+            v0.27.1 番茄线：skip_key/on_skip 同款透传（id=4，**空串=不注册**，
+            由 config ``hotkeys.focus_skip`` 提供，默认空）。
             """
             from . import hotkey_mac
 
             self._hotkey_mgr = hotkey_mac.HotkeyManager()
             hk_cfg = cfg.get("hotkeys", {})
+            # v0.27.1：全部经关键字传参——透传位持续增加（3→4→5），位置参数
+            # 极易错位（焦点键/跳过键互换会静默注册成错的回调）
             return self._hotkey_mgr.start(
                 hk_cfg.get("chat", "cmd+option+p"),
                 hk_cfg.get("spit", "cmd+option+t"),
-                on_chat, on_spit, focus_key, on_focus, on_conflict,
-                bridge=bridge,
+                on_chat, on_spit,
+                focus_key=focus_key, on_focus=on_focus,
+                skip_key=skip_key, on_skip=on_skip,
+                on_conflict=on_conflict, bridge=bridge,
             )
 
         def stop_hotkeys(self) -> None:
@@ -781,22 +791,29 @@ elif sys.platform == "win32":
 
         def start_hotkeys(self, cfg: dict, on_chat, on_spit,
                           focus_key: str = "", on_focus=None,
+                          skip_key: str = "", on_skip=None,
                           on_conflict=None, bridge=None) -> bool:
             """v0.11：HotkeyManager 注册 Ctrl+Alt+P/T + 冲突检测。
 
             v0.25 番茄线：focus_key/on_focus 透传（id=3，Ctrl+Alt+F；空串=
             不注册）。win 的 RegisterHotKey 必须在热键线程的消息循环内注册，
             故 focus 键同样只经本方法透传给 hotkey_win.HotkeyManager。
+            v0.27.1 番茄线：skip_key/on_skip 同款透传（id=4「跳过当前段」，
+            **空串=不注册**；由 config ``hotkeys.focus_skip`` 提供，默认空）。
             """
             from . import hotkey_win
 
             self._hotkey_mgr = hotkey_win.HotkeyManager()
             hk_cfg = cfg.get("hotkeys", {})
+            # v0.27.1：全部经关键字传参（同 mac 适配器——透传位增多后位置
+            # 参数错位会静默注册错的回调）
             return self._hotkey_mgr.start(
                 hk_cfg.get("chat", "ctrl+alt+p"),
                 hk_cfg.get("spit", "ctrl+alt+t"),
-                on_chat, on_spit, focus_key, on_focus, on_conflict,
-                bridge=bridge,
+                on_chat, on_spit,
+                focus_key=focus_key, on_focus=on_focus,
+                skip_key=skip_key, on_skip=on_skip,
+                on_conflict=on_conflict, bridge=bridge,
             )
 
         def stop_hotkeys(self) -> None:
