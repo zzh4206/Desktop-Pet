@@ -121,7 +121,16 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.25.0"
+__version__ = "0.26.0"
+# v0.26.0：语音线共享层核心（pet/voice.py，wiki 设计-语音模块技术方案）——
+# 罐头语音音包接入（VoiceAssetLoader 按序优先探测多后缀 [.wav/.aiff/.m4a/
+# .mp3/.caf]，只认 mac 系统原生 codec；未命中回落动态 TTS）+ 占位音频生成
+# （write_placeholder_wav/ensure_placeholders，程序生成短提示音，不含任何
+# 他人录制音色，正式音包同名替换即生效）+ SpeakGate 门禁（enabled/来源开关/
+# dnd/全屏/深夜/去重）+ SpeakQueue 串行队列（重入抑制、stop 清队）+
+# VoiceService 门面（provider 路由 asset/system，注入对象缺失即静默降级）。
+# 平台库-free（mac/win 同代码），平台能力后续经 PlatformAdapter 注入位提供；
+# config.voice 段全部默认关（对齐 sound 先例）。
 # v0.24.1：attention 接入 pet_state——PetState 加 attention 字段（默认 70，第四
 # 独立数值）+ SCHEMA_VERSION 1→2 + migrate_v1_to_v2 旧档补默认（不丢档）+
 # _NUMERIC_FIELDS 加 "attention"（apply_decay 才对其生效，调查缺口 2）+
