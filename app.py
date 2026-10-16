@@ -429,6 +429,16 @@ class PetApp:
             focus_state_fn=self._focus_state,
         )
         self._pester_answered = False   # 本次纠缠是否已被摸头（防重复记账）
+        # v0.24.4 撒娇文案器（pet/pester_lines.py）：罐头池可经 config
+        # attention.pester.lines 覆写；llm_fn 注入 _pester_llm_fetch——voice 据
+        # 此判定「本次是否轮到 LLM」（≤1/3 累计上限），实际调用由 proactive 的
+        # _PesterVoiceWorker 在后台线程执行（本函数阻塞，主线程绝不直调）。
+        from pet.pester_lines import PesterVoice
+
+        self._pester_voice = PesterVoice(
+            (_att.get("pester") or {}).get("lines")
+            if isinstance(_att.get("pester"), dict) else None,
+            llm_fn=self._pester_llm_fetch)
 
         proactive_cfg = self.cfg.get("proactive", {})
         self._proactive = ProactiveScheduler(
@@ -467,6 +477,13 @@ class PetApp:
             focus_fn=lambda: bool(
                 getattr(self, "_focus_session", None) is not None
                 and self._focus_session.active),
+            # v0.24.4 主动纠缠：引擎在上方已建（0.24.0–0.24.2 供摸头闭环/衰减，
+            # 本版起接触发链）；context 装配 interruptibility 信号（breakpoint
+            # 时机/全屏/视频/DND）；LLM 取句走后台线程（隔离上下文，主线程不阻塞）
+            attention_engine=self._attention_engine,
+            pester_voice=self._pester_voice,
+            pester_context_fn=self._pester_context,
+            pester_llm_fetch=self._pester_llm_fetch,
         )
         # v0.23 天气刷新：daemon 线程拉新（refresh_async 内部 TTL/退避把守，
         # 未到期立即返回）；快照消费走 _proactive.poll（30s）与 get_weather 工具
@@ -2416,6 +2433,75 @@ class PetApp:
             return "FOCUS" if bool(getattr(sess, "active", False)) else "IDLE"
         except Exception:
             return "IDLE"
+
+    def _pester_context(self):
+        """装配纠缠时机上下文（interruptibility 信号，技术方案 §5）。
+
+        * ``breakpoint``（任务边界门控）：系统空闲落在 **[30s, 10min]** 视为
+          「刚停下手上的事」——Adamczyk & Bailey 2004：任务边界是低打断成本
+          时点；idle 过短=仍在连续操作（打断成本高），过长=人已离开（发了也
+          看不到）。这是本版唯一接入的**时机**信号（窗口切换信号 win 侧留坑）。
+        * ``fullscreen`` / ``active_video``：既有两个平台探测原样复用（全屏
+          演示、看视频时不打扰——Mark 2008：恢复需 ~23min）。
+        * ``dnd``：config ``proactive.dnd``（与久坐/天气同一静默源）。
+        * ``focus``：**不在此处填**——引擎门 3 经 ``focus_state_fn`` 自探
+          （0.25 番茄线），避免两处判定漂移。
+        任何探测异常都退化为「不打扰」（fail-closed）。
+        """
+        from pet.attention import PesterContext
+
+        try:
+            idle_s = float(getattr(self.sensors, "idle_time", 0.0) or 0.0)
+        except Exception:
+            idle_s = 0.0
+        try:
+            fullscreen = bool(self.adapter.is_fullscreen_active())
+        except Exception:
+            fullscreen = False
+        try:
+            video = bool(self.adapter.is_active_content(
+                (self.cfg.get("proactive") or {}).get("video_apps")))
+        except Exception:
+            video = False
+        try:
+            dnd = bool((self.cfg.get("proactive") or {}).get("dnd", False))
+        except Exception:
+            dnd = False
+        return PesterContext(
+            breakpoint=(30.0 <= idle_s <= 600.0),
+            fullscreen=fullscreen,
+            dnd=dnd,
+            focus=False,
+            active_video=video,
+            idle_s=idle_s,
+        )
+
+    def _pester_llm_fetch(self, facts: str) -> str:
+        """撒娇文案的隔离 LLM 取句——**阻塞**，只在 _PesterVoiceWorker 线程调用。
+
+        隔离上下文（与 0.24.3 的 ``PESTER_SYSTEM_OVERRIDE`` 契约一致）：
+        专用撒娇 system_override 替换人设 + ``tools_override=None`` 不挂工具
+        （既不误触工具调用，也不与人设链/决策链串味，对齐 proactive
+        决策链 ``_DECISION_SYSTEM`` 的既有工艺）。用独立决策客户端，不与
+        聊天共享 ``_resp``。任何异常 → ``""``，由罐头兜底（拔网线不崩）。
+        """
+        client = getattr(self, "_proactive_client", None)
+        if client is None:
+            return ""
+        try:
+            from pet.llm import ChatTurn
+            from pet.pester_lines import PESTER_SYSTEM_OVERRIDE
+
+            history = [ChatTurn(role="user", content=facts)]
+            text, _turns = client.chat_once(
+                history, None,
+                system_override=PESTER_SYSTEM_OVERRIDE,
+                tools_override=None,
+            )
+            return text or ""
+        except Exception:
+            self.logger.warning("撒娇 LLM 取句失败，回落罐头", exc_info=True)
+            return ""
 
     def _set_motion_mode(self, mode: str) -> None:
         self.fsm.handle_event(f"motion_mode:{mode}")

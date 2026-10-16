@@ -171,47 +171,92 @@ class PesterVoice:
         return (self.stats.llm + 1) * self._cap_n <= (self.stats.total + 1)
 
     # ---- 合成 ----
+    def next_uses_llm(self) -> bool:
+        """**peek**：本次是否该走 LLM（不改任何计数）。
+
+        供上层做**异步编排**：LLM 走后台线程（``chat_once`` 网络可达 120s，
+        主线程绝不能直调），先 peek 再决定要不要起线程；结果回填用
+        :meth:`note_result`。罐头路径则直接 :meth:`line`。
+        """
+        return self._llm_fn is not None and self._llm_allowed()
+
+    def note_result(self, used_llm: bool) -> None:
+        """回填一次合成的结局（total 恒 +1；used_llm 时 llm +1）。"""
+        self.stats.total += 1
+        if used_llm:
+            self.stats.llm += 1
+
+    def line(
+        self,
+        category: str,
+        memory: RelationSnapshot | None = None,
+        now: float | None = None,
+    ) -> str:
+        """取一句罐头（**不改计数**；天数事实自动注入）。永不抛错、非空。"""
+        import time as _time
+
+        cat = category if category in self._lines else "low_attention"
+        mem = memory or RelationSnapshot()
+        now_v = _time.time() if now is None else float(now)
+        return self._canned(cat, days_since(mem.last_interact_at, now_v))
+
+    def try_llm(
+        self,
+        facts: str,
+    ) -> str:
+        """隔离调用 LLM（**阻塞**，须在后台线程调用）；失败/坏返回 → ""。"""
+        if self._llm_fn is None:
+            return ""
+        try:
+            out = self._llm_fn(facts)
+        except Exception:
+            return ""
+        return self.sanitize(out)
+
+    def facts_for(
+        self,
+        category: str,
+        memory: RelationSnapshot | None = None,
+        now: float | None = None,
+    ) -> str:
+        """构造喂给 LLM 的情境事实串（与 :meth:`try_llm` 配对）。"""
+        import time as _time
+
+        mem = memory or RelationSnapshot()
+        now_v = _time.time() if now is None else float(now)
+        return (
+            f"当前情境分类：{category}；昵称：{mem.nickname or '鱼片'}；"
+            f"累计被摸头次数：{mem.pat_count}；投喂次数：{mem.feed_count}；"
+            f"距上次互动天数：{days_since(mem.last_interact_at, now_v)}。"
+        )
+
     def compose(
         self,
         category: str,
         memory: RelationSnapshot | None = None,
         now: float | None = None,
     ) -> str:
-        """合成一句撒娇文案。**永不抛错、永不返回空串**（拔网线不崩）。"""
-        import time as _time
+        """**同步**合成一句撒娇文案（同步/测试路径）。
 
-        cat = category if category in self._lines else "low_attention"
-        mem = memory or RelationSnapshot()
-        now_v = _time.time() if now is None else float(now)
-        days = days_since(mem.last_interact_at, now_v)
-
-        # 先判定（用调用前的计数），再计数——保证 3 选 1 的节拍不偏移
-        allowed = self._llm_fn is not None and self._llm_allowed()
-        self.stats.total += 1
-        if allowed:
-            text = self._try_llm(cat, mem, days)
+        生产走异步编排（``next_uses_llm`` + 后台线程 + ``note_result``；
+        本方法即其等价物）。**永不抛错、永不返回空串**（拔网线不崩）。
+        """
+        if self.next_uses_llm():
+            text = self.try_llm(self.facts_for(category, memory, now))
             if text:
-                self.stats.llm += 1
+                self.note_result(True)
                 return text
             # 失败不计入 LLM 用量（比例统计诚实），回落罐头
             self.stats.llm_failed += 1
-        return self._canned(cat, days)
+        self.note_result(False)
+        return self.line(category, memory, now)
 
-    def _try_llm(self, cat: str, mem: RelationSnapshot, days: int) -> str:
-        """隔离调用 + 防御式兜底：任何异常/空返回 → "" 由调用方回落罐头。"""
-        facts = (
-            f"当前情境分类：{cat}；昵称：{mem.nickname or '鱼片'}；"
-            f"累计被摸头次数：{mem.pat_count}；投喂次数：{mem.feed_count}；"
-            f"距上次互动天数：{days}。"
-        )
-        try:
-            out = self._llm_fn(facts)
-        except Exception:
-            return ""
+    def sanitize(self, out) -> str:
+        """清洗 LLM 输出：去引号/取首行/限长；坏类型或空 → ""（公有：
+        异步路径下由回主线程的 slot 复用，保证与同步路径同一套清洗）。"""
         if not isinstance(out, str):
             return ""
         text = out.strip().strip('"').strip("“”").strip()
-        # 多行只取首行（模型偶尔加解释）
         text = text.splitlines()[0].strip() if text else ""
         if not text:
             return ""

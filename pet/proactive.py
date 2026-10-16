@@ -215,6 +215,17 @@ class ProactiveScheduler:
         #   非专注（§1 IDLE 惰性接管不变量：未开番茄时行为与旧版完全一致）。
         #   门禁只作用于「新发起」的久坐提醒/吃鼠标/唤醒链，不打断已在进行的
         #   吃鼠标（勿扰铁律4 的既有语义不变）。
+        # v0.24.4 主动纠缠线：attention 引擎（pet/attention.py 五重门）+
+        # 撒娇文案器（pet/pester_lines.py）+ 时机上下文构造器 + LLM 隔离取句。
+        # 全 None → 纠缠整体静默（win 未接/纯逻辑测试向后兼容，同 weather_fn 模式）。
+        attention_engine=None,
+        pester_voice=None,
+        pester_context_fn=None,          # callable() -> attention.PesterContext
+        #   （app 侧由 sensors 装配 breakpoint/全屏/视频/DND/FOCUS/idle_s）
+        pester_llm_fetch=None,           # callable(facts: str) -> str
+        #   **阻塞**调用（内部走 chat_once + 专用 PESTER_SYSTEM_OVERRIDE +
+        #   tools_override=None），只在 _PesterVoiceWorker 后台线程里被调用；
+        #   失败/离线返回 "" 由罐头兜底——主线程绝不直调。
     ) -> None:
         self._store = store
         self._bubble = bubble_fn
@@ -262,6 +273,13 @@ class ProactiveScheduler:
 
         # v0.25.3 番茄线注入（互斥门禁；IDLE 恒放行，§1 不变量）
         self._focus_fn = focus_fn
+        # v0.24.4 主动纠缠注入
+        self._attention_engine = attention_engine
+        self._pester_voice = pester_voice
+        self._pester_context_fn = pester_context_fn
+        self._pester_llm_fetch = pester_llm_fetch
+        self._pester_worker = None       # 在飞撒娇 LLM worker（shutdown 停）
+        self._pester_pending = None      # (category, RelationSnapshot) 回填用
 
         # v0.7 平台注入
         self._mouse_lock = mouse_lock
@@ -584,7 +602,9 @@ class ProactiveScheduler:
         "QThread: Destroyed while thread is still running" 崩溃。断信号
         → cancel 中断流式 → wait 退出。deleteLater 由 finished→deleteLater
         连接兜底，此处不手删（wait 超时线程未退时强删即同款崩溃）。
+        v0.24.4：一并收口在飞撒娇 LLM worker（``_pester_worker``）。
         """
+        self._shutdown_pester_worker()
         w = self._wake_worker
         if w is None:
             return
@@ -601,6 +621,26 @@ class ProactiveScheduler:
                 self._wake_dying = w
                 return
         self._wake_worker = None
+
+    def _shutdown_pester_worker(self) -> None:
+        """v0.24.4：停撒娇 LLM worker（同 ``_wake_worker`` 的断信号→wait 工艺）。
+
+        超时未退同样保留引用（``_pester_dying``）——QThread wrapper 被 GC 会
+        触发 "QThread: Destroyed while thread is still running" 崩溃。
+        """
+        w = self._pester_worker
+        if w is None:
+            return
+        try:
+            w.produced.disconnect(self._on_pester_llm)
+        except (TypeError, RuntimeError):
+            pass
+        if w.isRunning():
+            w.cancel()
+            if not w.wait(2000):
+                self._pester_dying = w
+                return
+        self._pester_worker = None
 
     def eat_mouse_tick(self) -> None:
         """app 每 tick 调（廉价）：approach 超时兜底 → 到点强制开吃。
@@ -745,6 +785,125 @@ class ProactiveScheduler:
             self._emit_bubble(" ".join(msgs), now)
             _log.info("[天气] 提醒触发: %s", ",".join(new))
 
+    # ---- v0.24.4 主动纠缠（attention 五重门 + 撒娇气泡） ----
+
+    def _relation_snapshot(self):
+        """从引擎取关系事实，供撒娇文案的「N 天没理我」事实注入。"""
+        from .pester_lines import RelationSnapshot
+
+        mem = getattr(self._attention_engine, "relation", None)
+        if mem is None:
+            return RelationSnapshot()
+        return RelationSnapshot(
+            nickname=getattr(mem, "nickname", "") or "鱼片",
+            pat_count=int(getattr(mem, "pat_count", 0) or 0),
+            feed_count=int(getattr(mem, "feed_count", 0) or 0),
+            last_interact_at=float(getattr(mem, "last_interact_at", 0.0) or 0.0),
+        )
+
+    def _check_pester(self, now: float) -> bool:
+        """v0.24.4 纠缠触发：attention 低于阈值 → 靠近/撒娇。
+
+        门禁分工（技术方案 §5，五重门各归其位）：
+        * **深夜静默**：poll 的 ``quiet`` 早退已挡（本函数不会在深夜被调用）；
+        * **DND / FOCUS**：本处复用 ``_dnd_active`` / ``_focus_active``
+          （均 fail-closed：检查异常按「静默」处理，绝不误扰）；
+        * **全屏 / 视频 / breakpoint 时机 / 阈值 / 退避 / 频控日频 / 不重复同行为**：
+          由 ``pester_context_fn`` 提供信号、``AttentionEngine.should_pester``
+          内部判定——任一不过返 None（**不消耗配额**）。
+        命中 → （run_to_cursor 行为时）驱动 FSM 奔向光标 + 开口撒娇。
+        返是否触发。
+        """
+        eng = self._attention_engine
+        if eng is None or self._fsm_event_fn is None:
+            return False
+        try:
+            if self._dnd_active() or self._focus_active():
+                return False
+        except Exception:
+            _log.warning("[纠缠] 静默门检查异常，本轮放弃（fail-closed）",
+                         exc_info=True)
+            return False
+        from .attention import PesterContext
+
+        try:
+            ctx = self._pester_context_fn() if self._pester_context_fn else None
+        except Exception:
+            _log.warning("[纠缠] pester_context_fn 异常，本轮放弃", exc_info=True)
+            return False
+        if ctx is None:
+            ctx = PesterContext()
+        try:
+            decision = eng.should_pester(now=now, ctx=ctx)
+        except Exception:
+            _log.warning("[纠缠] should_pester 异常，本轮放弃", exc_info=True)
+            return False
+        if decision is None:
+            return False
+        # 行为①run_to_cursor：驱动 FSM 奔向光标求摸头（app 侧消费
+        # pester/pester_off 闭环）；行为②bubble_whine：只开口。两者都发一条
+        # 撒娇气泡——「宠物先开口」是纠缠的存在感本身。
+        if decision.behavior == "run_to_cursor":
+            try:
+                self._fsm_event_fn("pester")
+            except Exception:
+                _log.warning("[纠缠] fsm_event_fn 异常", exc_info=True)
+        st = getattr(self._pester_voice, "stats", None)
+        _log.info("[纠缠] 触发(%s, attention=%.0f, LLM 抽样 %d/%d)",
+                  decision.behavior, decision.attention,
+                  getattr(st, "llm", 0), getattr(st, "total", 0))
+        self._emit_pester_bubble(now)
+        return True
+
+    def _emit_pester_bubble(self, now: float) -> None:
+        """发撒娇气泡：轮到时走**异步** LLM，否则即时罐头。
+
+        异步路径**只发一条**气泡（LLM 成功发其文案、失败/空回落罐头）——
+        绝不「先罐头再补一条」造成连发。主线程永不阻塞（chat_once 可达 120s）。
+        """
+        voice = self._pester_voice
+        if voice is None:
+            return
+        cat = "low_attention"
+        mem = self._relation_snapshot()
+        if self._pester_llm_fetch is not None and voice.next_uses_llm():
+            facts = voice.facts_for(cat, mem, now)
+            self._pester_pending = (cat, mem)
+            try:
+                w = _PesterVoiceWorker(self._pester_llm_fetch, facts)
+                w.produced.connect(self._on_pester_llm)
+                self._pester_worker = w
+                w.start()
+                return
+            except Exception:
+                _log.warning("[纠缠] 异步 LLM 启动失败，走罐头", exc_info=True)
+                self._pester_pending = None
+        voice.note_result(False)
+        self._emit_bubble(voice.line(cat, mem, now), now)
+
+    def _on_pester_llm(self, text: str) -> None:
+        """后台线程经排队信号回主线程：成功发其文案，失败/空回落罐头。
+
+        失败计入 ``llm_failed`` 且**不占 LLM 用量**——「LLM 抽样 ≤1/3」
+        的统计因此诚实（实际发出的 LLM 文案确实 ≤1/3）。
+        """
+        pending = self._pester_pending
+        self._pester_pending = None
+        self._pester_worker = None
+        voice = self._pester_voice
+        if pending is None or voice is None:
+            return
+        cat, mem = pending
+        now = self._now()
+        clean = voice.sanitize(text)
+        if clean:
+            voice.note_result(True)
+            self._emit_bubble(clean, now)
+        else:
+            voice.stats.llm_failed += 1
+            voice.note_result(False)
+            self._emit_bubble(voice.line(cat, mem, now), now)
+
     # ---- 深夜判定 ----
 
     def _quiet_now(self, now: float) -> bool:
@@ -811,6 +970,12 @@ class ProactiveScheduler:
             self._check_weather(now)
         except Exception:
             _log.warning("[天气] 提醒检查异常", exc_info=True)
+
+        # 2.8) 主动纠缠（v0.24.4）：attention 低 → 靠近/撒娇（五重门内部判定）
+        try:
+            self._check_pester(now)
+        except Exception:
+            _log.warning("[纠缠] 检查异常", exc_info=True)
 
         # 3) 久坐提醒（空闲 ≥ 阈值）
         try:
@@ -1057,6 +1222,39 @@ class ProactiveScheduler:
             "抬起头看看远处吧，眼睛也要休息～",
         )
         return (random.uniform(*_LOCAL_WAKE_RANGE), random.choice(canned))
+
+
+class _PesterVoiceWorker(QThread):
+    """v0.24.4 撒娇文案 LLM 后台线程。
+
+    隔离上下文的 ``chat_once`` 网络耗时可观（读超时 120s），主线程绝不能
+    直调——对齐 ``_ProactiveWorker`` 既有工艺（实测：信号连到非 QObject
+    普通类的绑定方法时，PySide6 经全局接收器排队回主线程执行）。
+    """
+
+    produced = Signal(str)   # 成功文案（未清洗，由主线程 slot 清洗）；失败 → ""
+
+    def __init__(self, fetch_fn, facts: str, parent=None, client=None) -> None:
+        super().__init__(parent)
+        self._fetch = fetch_fn
+        self._facts = facts
+        self._client = client
+
+    def cancel(self) -> None:
+        """中断在飞请求（shutdown 用）：关底层流式 socket（同 _ProactiveWorker）。"""
+        try:
+            if self._client is not None and self._client._resp is not None:
+                self._client._resp.close()
+        except Exception:
+            pass
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            out = self._fetch(self._facts)
+        except Exception:
+            out = ""
+        self.produced.emit(out if isinstance(out, str) else "")
 
 
 class _ProactiveWorker(QThread):

@@ -121,7 +121,22 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.25.6"
+__version__ = "0.24.4"
+# v0.24.4：主动纠缠「触发链 + 护栏接线」——pet/proactive.py 挂 poll 轮询：
+# 五重门判定全在 AttentionEngine.should_pester（0.24.0），本版只负责「信号接入
+# + 各归其位」：深夜静默复用 poll 既有 quiet 早退；DND/FOCUS 复用 _dnd_active/
+# _focus_active（与 0.25.3 番茄门禁同一把锁，fail-closed 绝不误扰）；全屏/视频
+# 复用既有双平台探测；**breakpoint 时机门控**（系统空闲 ∈ [30s,10min] 视为任务
+# 边界——Adamczyk & Bailey 2004：边界是低打断成本时点；过短=仍在连续操作、
+# 过长=人已离开）为 v0.24 新接入的唯一时机信号（窗口切换信号 win 侧留坑）。
+# 行为①run_to_cursor 驱动 FSM 奔向光标求摸头、行为②bubble_whine 只开口，两者
+# 都经 _emit_bubble 发一条撒娇气泡（宠物先开口=纠缠的存在感）。LLM 文案走
+# _PesterVoiceWorker 后台线程（chat_once 读超时 120s，主线程绝不直调；实测
+# PySide6 把非 QObject 普通类的绑定方法排队回主线程），隔离上下文用专用
+# PESTER_SYSTEM_OVERRIDE + tools_override=None；失败/离线回落罐头且**不占**
+# ≤1/3 额度（比例统计诚实）。shutdown 一并收口在飞 worker（防 QThread 被 GC
+# 崩溃）。app 侧 _pester_context（idle/全屏/视频/DND）与 _pester_llm_fetch
+# （独立决策客户端，不与聊天共享 _resp）。
 # v0.25.6：番茄收尾——托盘 tooltip「🍅×今日完成数」（TrayManager.
 # set_focus_count + 纯函数 tooltip_text；0 不显示、与 v0.19.2 状态行互不
 # 覆盖，app._sync_focus_tray 每拍幂等推送）+ README 补 focus.* /
