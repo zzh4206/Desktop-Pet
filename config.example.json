@@ -78,7 +78,8 @@
     "chat": "cmd+option+p",
     "spit": "cmd+option+t",
     "focus": "cmd+option+f",
-    "focus_skip": ""
+    "focus_skip": "",
+    "focus_pause": ""
   },
   "focus": {
     "enabled": true,

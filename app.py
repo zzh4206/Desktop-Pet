@@ -377,6 +377,8 @@ class PetApp:
         self.tray.set_focus_skip_callback(self._skip_focus)
         self.tray.set_focus_extend_callback(self._extend_focus)
         self.tray.set_focus_complete_callback(self._complete_focus)
+        # v0.27.3 暂停/继续（单项 toggle → 按 paused 分发 pause()/resume()）
+        self.tray.set_focus_pause_callback(self._toggle_focus_pause)
         # v0.27.2 启动类四个入口（§4.1 A 时长 / §4.4 D1 预设 / 设为默认 / D3 重载）
         self.tray.set_focus_minutes_callback(self._start_focus_minutes)
         self.tray.set_focus_preset_callback(self._start_focus_preset)
@@ -1821,6 +1823,22 @@ class PetApp:
         sess.complete()
         self._sync_focus_tray()
 
+    def _toggle_focus_pause(self) -> None:
+        """⏸ 暂停 / ▶️ 继续（**单项 toggle**，v0.27.3）+ 热键 id=5 的唯一落点。
+
+        托盘子菜单只有一项、文案随 ``paused`` 切换，故分发按会话当前状态决定：
+        暂停中 → ``resume()``，否则 → ``pause()``。未挂载或 IDLE 时模型侧本就
+        no-op（``pause()`` 对 IDLE 直接返回，L1 零副作用），托盘项同时置灰。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        if getattr(sess, "paused", False):
+            sess.resume()
+        else:
+            sess.pause()
+        self._sync_focus_tray()
+
     # ---- v0.27.2 启动类四入口（§4.1 A 时长 / §4.4 D1 预设 / 设为默认 / D3 重载）----
 
     def _start_focus_minutes(self, minutes) -> None:
@@ -1931,6 +1949,13 @@ class PetApp:
                 self.tray.set_focus_phase(phase)
             except Exception:
                 self.logger.warning("[番茄] 托盘状态同步失败", exc_info=True)
+        # v0.27.3：暂停态与相位**正交**（暂停不改相位），故单独同步——只影响
+        # 「⏸ 暂停 / ▶️ 继续」这一项的文案（set_focus_paused 自身幂等早返回）
+        try:
+            self.tray.set_focus_paused(
+                bool(sess.paused) if sess is not None else False)
+        except Exception:
+            self.logger.warning("[番茄] 托盘暂停态同步失败", exc_info=True)
         # v0.25.6 今日完成数「🍅×N」进 tooltip（set_focus_count 自身按值变
         # 幂等早返回——tick 每拍调用零成本）
         try:
@@ -1977,6 +2002,12 @@ class PetApp:
             ((self.cfg.get("hotkeys") or {}).get("focus_skip") or "")
             if getattr(self, "_focus_session", None) is not None else "")
         _skip_hint = f" / {_skip_key} 跳过番茄段" if _skip_key else ""
+        # v0.27.3 暂停/继续热键 id=5：**默认空串 = 不注册**（§6 同款纪律）；
+        # focus.enabled=false（session=None）时同番茄键一起变空键
+        _pause_key = (
+            ((self.cfg.get("hotkeys") or {}).get("focus_pause") or "")
+            if getattr(self, "_focus_session", None) is not None else "")
+        _pause_hint = f" / {_pause_key} 暂停/继续番茄" if _pause_key else ""
         try:
             if sys.platform == "darwin":
                 from pet.hotkey_mac import _HotkeySignalBridge
@@ -2003,21 +2034,25 @@ class PetApp:
             on_focus=self._toggle_focus,
             skip_key=_skip_key,
             on_skip=self._skip_focus,
+            pause_key=_pause_key,
+            on_pause=self._toggle_focus_pause,
             on_conflict=on_conflict,
             bridge=hotkey_bridge,
         )
         if not ok:
             self.logger.warning("[热键] 全部注册失败")
         else:
-            self.logger.info("[热键] 就绪（%s）", _hk_hint + _focus_hint + _skip_hint)
+            self.logger.info("[热键] 就绪（%s）",
+                             _hk_hint + _focus_hint + _skip_hint + _pause_hint)
             # v0.17.0：热键提示进托盘 tooltip（悬停可见，缓解热键太隐蔽）
-            self.tray.set_tooltip(f"桌宠 · {_hk_hint}{_focus_hint}{_skip_hint}")
+            self.tray.set_tooltip(
+                f"桌宠 · {_hk_hint}{_focus_hint}{_skip_hint}{_pause_hint}")
         # v0.25.2：托盘番茄项按当前运行态对齐（重水化后可能是运行中）
         self._sync_focus_tray()
 
     def _on_hotkey_fired(self, hid: int) -> None:
         """M7：热键信号主线程分发（1 聊天 / 2 吐出 / 3 番茄 toggle /
-        4 跳过番茄段〔v0.27.1〕）。"""
+        4 跳过番茄段〔v0.27.1〕/ 5 暂停继续番茄〔v0.27.3〕）。"""
         if hid == 1:
             self._toggle_chat_panel()
         elif hid == 2:
@@ -2026,6 +2061,8 @@ class PetApp:
             self._toggle_focus()
         elif hid == 4:
             self._skip_focus()
+        elif hid == 5:
+            self._toggle_focus_pause()
 
     def _toggle_chat_panel(self) -> None:
         """Ctrl+Alt+P 唤出/隐藏聊天面板（v0.11 Must）。"""

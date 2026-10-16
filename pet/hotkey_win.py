@@ -7,8 +7,10 @@
   或 ``on_focus=None`` = 该入口未挂载，不注册不告警）
 - **（可配置，默认空）** → 跳过当前番茄段（v0.27.1 id=4；``skip_key`` 空串
   或 ``on_skip=None`` = 未启用，不注册不告警）
+- **（可配置，默认空）** → 暂停/继续番茄（v0.27.3 id=5；``pause_key`` 空串
+  或 ``on_pause=None`` = 未启用，不注册不告警）
 - 注册失败（被占用）→ 冲突检测，日志 warning + 回调通知上层气泡提示改键
-- config `hotkeys.chat/spit/focus/focus_skip` 可自定义（v0.11 版本规划 Must）
+- config `hotkeys.chat/spit/focus/focus_skip/focus_pause` 可自定义（v0.11 版本规划 Must）
 
 热键字符串解析："ctrl+alt+p" → (MOD_CONTROL|MOD_ALT, VK_P)。
 支持修饰 ctrl/alt/shift/win + 字母数字键。
@@ -40,8 +42,11 @@ _ID_FOCUS = 3   # v0.25 番茄线：与 mac 侧对齐（app._on_hotkey_fired 分
 # v0.27.1 番茄自由度扩展「入口层①」：id=4 = 跳过当前段（默认空键=不注册）；
 # id=5 留给 v0.27.3 的暂停/继续，**本版不占**
 _ID_SKIP = 4
+# v0.27.3 番茄自由度扩展「模型层②」（§5.1）：id=5 = 暂停/继续（**toggle 语义**：
+# 暂停态则 resume、否则 pause；默认空键=不注册）。id=5 自 v0.27.1 起预留。
+_ID_PAUSE = 5
 _HOTKEY_NAMES = {_ID_CHAT: "聊天", _ID_SPIT: "吐出", _ID_FOCUS: "番茄钟",
-                 _ID_SKIP: "跳过番茄段"}
+                 _ID_SKIP: "跳过番茄段", _ID_PAUSE: "暂停/继续番茄"}
 
 _MOD_MAP = {
     "ctrl": MOD_CONTROL, "control": MOD_CONTROL,
@@ -144,16 +149,19 @@ class HotkeyManager:
     def start(self, chat_key: str, spit_key: str,
               on_chat, on_spit, focus_key: str = "", on_focus=None,
               skip_key: str = "", on_skip=None,
+              pause_key: str = "", on_pause=None,
               on_conflict=None, bridge=None) -> bool:
         """注册热键并启动消息循环。
 
-        chat_key/spit_key/focus_key/skip_key 形如 "ctrl+alt+p"；
+        chat_key/spit_key/focus_key/skip_key/pause_key 形如 "ctrl+alt+p"；
         on_conflict(name, key) 在注册失败时回调（气泡提示改键）。focus_key
         空串或 on_focus=None（focus.enabled=false）→ 番茄键不注册；v0.27.1
-        的 skip_key 同款（**默认空串 = 不注册**，id=4）。返 True 至少一个成功。
+        的 skip_key（id=4）与 v0.27.3 的 pause_key（id=5）同款（**默认空串 =
+        不注册**）。返 True 至少一个成功。
         """
         _want_focus = bool(focus_key) and on_focus is not None
         _want_skip = bool(skip_key) and on_skip is not None
+        _want_pause = bool(pause_key) and on_pause is not None
         with self._lock:
             if self._active:
                 return True  # 幂等（已在跑）
@@ -176,6 +184,10 @@ class HotkeyManager:
                 self._callbacks[_ID_SKIP] = on_skip
                 self._keys[_ID_SKIP] = parse_hotkey(skip_key)
                 self._key_strs[_ID_SKIP] = skip_key
+            if _want_pause:
+                self._callbacks[_ID_PAUSE] = on_pause
+                self._keys[_ID_PAUSE] = parse_hotkey(pause_key)
+                self._key_strs[_ID_PAUSE] = pause_key
             self._on_conflict = on_conflict
             self._bridge = bridge
             # M11 修（REVIEW-2026-08-25）：_ready/_reg_ok 必须在 start() 前

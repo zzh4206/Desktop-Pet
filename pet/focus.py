@@ -34,8 +34,8 @@ v0.27.0「番茄自由度扩展」模型层①（wiki 设计-番茄自由度扩�
 * ``complete()``：提前完成——走 ``_on_focus_complete()`` 进休息且**计入**
   ``completed``/``streak``，与 ``stop()``（不计）明确对照；IDLE/休息段 no-op。
 
-未实装（按 §3 分期留后续）：暂停继续（v0.27.3，故本文件**无 pause()**）、
-正计时模式（v0.27.4）、无休息（v0.27.5）、统计历史（v0.27.6）。
+未实装（按 §3 分期留后续）：正计时模式（v0.27.4）、无休息（v0.27.5）、
+统计历史（v0.27.6）。
 
 v0.27.2「入口层② + 配置面」（wiki 设计-番茄自由度扩展技术方案 §4.1 A /
 §4.4 D1/D3）——三件配置面能力（入口接线在 pet/tray.py + app.py）：
@@ -51,6 +51,35 @@ v0.27.2「入口层② + 配置面」（wiki 设计-番茄自由度扩展技术�
   等全局默认；``start(minutes, as_default=)`` 语义零改动。
 * ``last_work_min``：只读属性（上次使用的专注时长；无历史 = 当前默认），
   app 侧检测到变化时落 config ``focus.last_work_min``（"记住上次"）。
+
+v0.27.3「番茄自由度扩展·模型层②（结构性）：暂停/继续」（wiki 设计-番茄自由度
+扩展技术方案 §5.1/§5.2，本线最高风险版：结构性 + ``focus_state.json`` schema v2）：
+
+* **剩余量语义**（§5.1）：L2 是"绝对时刻 deadline"，暂停不能靠停表实现，故新增
+  ``_paused_at``（暂停时刻，None=未暂停）与 ``_remaining_s``（暂停时冻结的剩余
+  秒）。``pause()`` 把 ``_deadline - now`` 冻结进 ``_remaining_s`` 后置
+  ``_deadline = None``；``resume()`` 按 ``now + _remaining_s`` 重算绝对时刻，并
+  **回填已消耗部分** ``_phase_started_at = now - (相位时长 - 剩余)``——不这样
+  resume 后 L3 实耗会把"暂停前已专注的那段"丢掉（§5.2 坑 3）。
+* ``tick()`` **最前置早退**（紧跟 ``_refresh_dnd()``、在 IDLE 判断之前）：暂停态
+  **睡多久都不迁移、不补算**（L2 初衷在暂停态天然满足）。
+* **Q1 姿态语义**：暂停期间 ``active`` **仍为 True**（严格 == state != IDLE，L1
+  不被削弱；门禁久坐/吃鼠标/纠缠继续静默——"我还在专注，只是暂时离开"），但
+  ``pause()`` 发 ``focus_rest_off``（姿态回 idle，一眼可辨"已暂停"）、``resume()``
+  在 FOCUS 段发 ``focus_rest_on``（重新趴下）。**暂停时长不计入 ``focus_sec``**。
+* **Q2 隐式继续守卫**：``complete()`` 在暂停态**先** ``resume()`` 再
+  ``_finish_focus()``——不 resume 则 ``_deadline=None`` 不封顶，暂停时长会被算进
+  ``focus_sec``。``skip()``/``stop()``/自然迁移**不特判**：``_enter()`` 与
+  ``_enter_idle()`` 各自清 ``_paused_at``/``_remaining_s``，离开暂停态自动发生。
+* **schema v2**（§5.2 三坑）：``_persist()`` 写 ``version: 2`` + ``paused`` +
+  ``remaining_s`` + ``phase_started_at``；loader **显式**加暂停分支（loader 不读
+  ``version``，不能指望版本号分流——坑 1），在 ``phase`` 判定**之前**处理，且
+  **不做 deadline 三重校验**（暂停态 ``_deadline=None`` 必然通不过 → 会静默落回
+  IDLE 让暂停的番茄消失——坑 2）。语义：**暂停跨重启仍然暂停、剩余时间不变**
+  （app 关多久都算暂停）。非暂停路径**优先**用档案里的 ``phase_started_at``（存在
+  且合理时），否则回退旧的反推公式——于是「**延长后重启**」也保真（v1 无该字段，
+  只能记回配置时长）。**v1 档案必须仍能加载**：无 ``paused`` 字段 → 视为未暂停，
+  走原路径。
 """
 
 from __future__ import annotations
@@ -288,6 +317,9 @@ class FocusSession:
         self._state = FocusPhase.IDLE
         self._deadline: float | None = None
         self._phase_started_at: float | None = None   # 本相位起点（L3 实耗记账）
+        # v0.27.3 暂停/继续（§5.1 剩余量语义）：
+        self._paused_at: float | None = None      # 暂停时刻；None=未暂停
+        self._remaining_s: float | None = None    # 暂停时冻结的剩余秒
         self._completed_in_cycle = 0     # 本轮已完成番茄数（决定 SHORT/LONG）
         self._run: dict | None = None    # v0.27.2 本轮预设覆盖（IDLE 时清除）
         self._stats = FocusStats()
@@ -358,8 +390,22 @@ class FocusSession:
 
     @property
     def active(self) -> bool:
-        """== (state != IDLE)。上层互斥门禁统一用此（§1 不变量）。"""
+        """== (state != IDLE)。上层互斥门禁统一用此（§1 不变量）。
+
+        v0.27.3（Q1）：**暂停期间仍为 True**——``active`` 严格等于
+        ``state != IDLE``，暂停只是"不改 state 的时间冻结"，L1 不被削弱；
+        门禁（久坐/吃鼠标/纠缠）继续静默。
+        """
         return self._state != FocusPhase.IDLE
+
+    @property
+    def paused(self) -> bool:
+        """是否处于**暂停态**（只读；供托盘/工具/热键判定，v0.27.3）。
+
+        严格 == ``_paused_at is not None``：暂停态 ``active`` 仍为 True，
+        两个属性表达正交的两件事（跑没跑 / 冻没冻）。
+        """
+        return self._paused_at is not None
 
     @property
     def last_work_min(self) -> float:
@@ -478,6 +524,51 @@ class FocusSession:
         self._deadline += m * 60.0
         self._persist()
 
+    def pause(self) -> None:
+        """暂停当前段：冻结剩余量（§5.1，v0.27.3）。**IDLE 或已暂停 → no-op**（L1）。
+
+        ``_deadline`` 是绝对 epoch，时间照走——故暂停不能靠"停表"，必须把剩余量
+        摘出来存进 ``_remaining_s`` 并把 ``_deadline`` 置 None（``tick()`` 在暂停态
+        最前置早退，故 None 不会被误判为"到期"）。
+
+        Q1：``active`` **保持 True**（门禁继续静默），但发 ``focus_rest_off`` 让
+        陪伴姿态回 idle——"我还在专注，只是暂时离开"，视觉上一眼可辨。非 IDLE 段
+        （专注/短休/长休）都可暂停。立即落盘：不落盘则重启后暂停态丢失。
+        """
+        if self._state == FocusPhase.IDLE or self._paused_at is not None:
+            return
+        if self._deadline is None:
+            return
+        now = self._now()
+        self._remaining_s = max(0.0, self._deadline - now)
+        self._deadline = None
+        self._paused_at = now
+        self._fsm_event("focus_rest_off")     # Q1：姿态回 idle，一眼可辨"已暂停"
+        self._persist()
+
+    def resume(self) -> None:
+        """继续：按冻结的剩余量重算绝对时刻（§5.1）。**未暂停 → no-op**。
+
+        关键在 ``_phase_started_at`` 的**回填已消耗部分**（§5.2 坑 3）：v1 的
+        "``_deadline`` − 相位时长"反推在暂停路径下会丢数——resume 后的 ``_deadline``
+        是**重算**的，"暂停前已专注的那部分"照抄会被丢掉，L3 实耗随之少算。故写成
+        ``now - (相位时长 − 剩余)``，于是收口
+        ``min(now, _deadline) - _phase_started_at`` 仍正确，**暂停时长不计入**。
+        FOCUS 段恢复时发 ``focus_rest_on``（重新趴下）；休息段不发。
+        """
+        if self._paused_at is None or self._remaining_s is None:
+            return
+        now = self._now()
+        rem = self._remaining_s
+        self._deadline = now + rem
+        self._phase_started_at = now - (
+            self._phase_minutes(self._state) * 60.0 - rem)
+        self._remaining_s = None
+        self._paused_at = None
+        if self._state == FocusPhase.FOCUS:
+            self._fsm_event("focus_rest_on")
+        self._persist()
+
     def complete(self) -> None:
         """提前完成当前专注段：**计入** ``completed``/``streak`` 后进休息。
 
@@ -487,7 +578,14 @@ class FocusSession:
         no-op：休息没有"提前完成"语义（提前结束休息用 ``skip()``），且若在
         休息段计完成会凭空 +1 番茄。``focus_sec`` 按实耗（L3）：此处 deadline
         未到，故记 ``now - _phase_started_at`` 的真实秒数（不封顶）。
+
+        v0.27.3（Q2）：**暂停态先隐式 ``resume()`` 再收口**——不 resume 则
+        ``_deadline is None`` 会让 ``_focus_elapsed`` 不封顶，**暂停时长会被算进
+        专注**（口径是"暂停不算专注"）；回填后只记暂停前真实专注的那一段。
+        不额外计打断/完成（§9 Q2）。
         """
+        if self._paused_at is not None:
+            self.resume()                     # Q2：先隐式继续（不额外计打断）
         if self._state != FocusPhase.FOCUS:
             return
         self._finish_focus(self._now())
@@ -520,6 +618,10 @@ class FocusSession:
         """非 IDLE 才有效：deadline 比较 + 迁移 + 提醒（幂等）。IDLE 直接返
         回零副作用（§1 不变量）。"""
         self._refresh_dnd()
+        # v0.27.3（§5.1）：暂停态**最前置早退**——睡多久都不迁移、不补算，也
+        # 不进休息执法计量（"时间冻结"）。必须在 IDLE 判断之前。
+        if self._paused_at is not None:
+            return
         if self._state == FocusPhase.IDLE:
             return
         now = self._now()
@@ -562,6 +664,10 @@ class FocusSession:
         self._state = phase
         self._deadline = now + float(minutes) * 60.0
         self._phase_started_at = now      # L3：实耗记账的相位起点
+        # v0.27.3：进入新相位 = 离开暂停态。放在这里，`skip()` 与自然迁移
+        # **无需各自特判**（§5.1「_enter/_enter_idle 都清」的关键简化）。
+        self._paused_at = None
+        self._remaining_s = None
         self._reset_break_window()
         if phase == FocusPhase.FOCUS:
             self._fsm_event("focus_rest_on")
@@ -574,6 +680,9 @@ class FocusSession:
         self._state = FocusPhase.IDLE
         self._deadline = None
         self._phase_started_at = None
+        # v0.27.3：回 IDLE = 离开暂停态（`stop()` 无需特判，见 _enter 同注）
+        self._paused_at = None
+        self._remaining_s = None
         self._completed_in_cycle = 0
         self._run = None          # v0.27.2：本轮预设覆盖到 IDLE 即清除（D1）
         self._reset_break_window()
@@ -606,12 +715,20 @@ class FocusSession:
            数十毫秒），不封顶会记成 1501/1500+ε。
         延长过的段 ``_deadline`` 已后移，故延长部分照记进实耗（§9 Q3）。
 
-        重启续算：v1 档案只有 ``deadline``（无相位起点字段），
-        ``_load_persisted`` 按「``deadline`` − 本相位时长」反推
-        ``_phase_started_at``——未延长的段重启后口径仍逐值等价；**"延长后
-        重启"** 的段只能记回配置时长（延长量在 v1 无字段可存，待 v0.27.3
-        schema v2 一并携带；进程内照记不误，故非静默失真）。
+        重启续算（v0.27.3 schema v2）：档案带 ``phase_started_at`` → 非暂停
+        路径**优先**直接采用（合理时），故「**延长后重启**」的实耗也保真；v1
+        档案无该字段（或值不合理）→ ``_load_persisted`` 按「``deadline`` − 本
+        相位时长」反推，未延长的段与旧口径逐值等价（延长量在 v1 无字段可存，
+        只能记回配置时长——进程内照记不误，故非静默失真）。
+
+        v0.27.3 防御分支：暂停态 ``_deadline is None`` **不封顶**，若此时结算
+        会把暂停时长算进专注——故显式按「本相位时长 − 冻结剩余」作为已消耗量
+        返回。正常路径不会走到（``complete()`` 先隐式 ``resume()``），这是
+        兜底：万一有别的路径在暂停态结算，也不丢数/不多算。
         """
+        if self._paused_at is not None:
+            return max(0.0, self._phase_minutes(self._state) * 60.0
+                       - float(self._remaining_s or 0.0))
         started = self._phase_started_at
         if started is None:
             # 兜底（正常路径不会到这）：沿用旧口径，绝不因缺起点而丢记账
@@ -734,7 +851,10 @@ class FocusSession:
         try:
             phase = None if self._state == FocusPhase.IDLE else self._state.value
             data = {
-                "version": 1,
+                # v0.27.3：schema 1 → 2（新增 paused/remaining_s/phase_started_at）。
+                # **loader 不读 version**（§5.2 坑 1），故别指望版本号自动分流——
+                # 分流靠显式判 `paused` 键；version 只作档案自描述。
+                "version": 2,
                 "stats": {
                     "date": self._stats.date,
                     "completed": self._stats.completed,
@@ -745,6 +865,13 @@ class FocusSession:
                 "phase": phase,
                 "deadline": self._deadline if phase else None,
                 "completed_in_cycle": self._completed_in_cycle if phase else 0,
+                # v2：暂停态 `deadline` 恒为 None，剩余量只能靠 remaining_s 携带
+                # （不写则重启后暂停的番茄消失，§5.2 坑 2）
+                "paused": self._paused_at is not None if phase else False,
+                "remaining_s": self._remaining_s if phase else None,
+                # v2 顺带补既有缺口：相位起点落盘，非暂停路径重启时**优先**用它，
+                # 于是「延长后重启」也保真（v1 只能记回配置时长，见 _focus_elapsed）
+                "phase_started_at": self._phase_started_at if phase else None,
             }
             tmp = self._state_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -776,17 +903,50 @@ class FocusSession:
             self._rollover(now)
             phase = raw.get("phase")
             deadline = raw.get("deadline")
-            if (phase in ("focus", "short", "long")
+            # v0.27.3（§5.2 坑 1+2）：**暂停分支必须在 phase 判定之前**，且**不
+            # 做 deadline 校验**。loader 不读 version（坑 1）→ 不能指望版本号分流；
+            # 暂停态 `deadline` 恒为 None（坑 2）→ 必过不了下面那三重校验 →
+            # 静默落回 IDLE，**暂停的番茄凭空消失**。语义（§5.1 拍板）：暂停跨
+            # 重启仍然暂停、剩余时间不变（app 关多久都算暂停，故 `_paused_at`
+            # 取 now、相位起点按同式回填）。v1 档案无 `paused` 键 → 自然走 else。
+            rem = raw.get("remaining_s")
+            if (raw.get("paused") and phase in ("focus", "short", "long")
+                    and isinstance(rem, (int, float))
+                    and not isinstance(rem, bool) and rem > 0):
+                self._state = FocusPhase(phase)
+                self._deadline = None
+                self._paused_at = now
+                self._remaining_s = float(rem)
+                # 与 resume() 同式回填：`now - (相位时长 − 剩余)`（坑 3）
+                self._phase_started_at = now - (
+                    self._phase_minutes(self._state) * 60.0 - self._remaining_s)
+                self._completed_in_cycle = _int(
+                    raw.get("completed_in_cycle"), 0, self._cycles)
+                _log.info("[番茄] 恢复**暂停中**的节律（%s，剩余 %.0fs）",
+                          phase, self._remaining_s)
+                # Q1：暂停态姿态＝起身回 idle（不发 focus_rest_on）
+                if self._state is FocusPhase.FOCUS:
+                    self._fsm_event("focus_rest_off")
+            elif (phase in ("focus", "short", "long")
                     and isinstance(deadline, (int, float))
                     and deadline > now - _RESUME_GRACE_S
                     and deadline < now + _RESUME_MAX_FORWARD_S
                     and _same_day(float(deadline), now)):
                 self._state = FocusPhase(phase)
                 self._deadline = float(deadline)
-                # L3 实耗记账：v1 档案不存相位起点，按「deadline − 本相位时长」
-                # 反推。未延长的段由此与旧口径逐值等价（见 _focus_elapsed）。
-                self._phase_started_at = (
-                    self._deadline - self._phase_minutes(self._state) * 60.0)
+                # L3 实耗记账的相位起点：**优先**用 v2 档案里的 phase_started_at
+                # （存在且合理时）——这样「延长后重启」的实耗也保真；v1 档案无
+                # 该字段/值不合理 → 回退旧的「deadline − 本相位时长」反推（未
+                # 延长的段由此与旧口径逐值等价，见 _focus_elapsed）。
+                started = raw.get("phase_started_at")
+                if (isinstance(started, (int, float))
+                        and not isinstance(started, bool)
+                        and now - _RESUME_MAX_FORWARD_S <= float(started) <= now
+                        and float(started) < self._deadline):
+                    self._phase_started_at = float(started)
+                else:
+                    self._phase_started_at = (
+                        self._deadline - self._phase_minutes(self._state) * 60.0)
                 self._completed_in_cycle = _int(
                     raw.get("completed_in_cycle"), 0, self._cycles)
                 _log.info("[番茄] 恢复进行中节律（%s）", phase)
@@ -889,6 +1049,53 @@ class _ExtendPomodoroHandler:
                            "extended_minutes": m})
 
 
+class _PausePomodoroHandler:
+    def __init__(self, session) -> None:
+        self._session = session
+
+    def execute(self, args: dict, ctx):
+        from pet.tools_schema import ToolResult
+
+        if self._session is None:
+            return ToolResult(False, "番茄功能未启用（config focus.enabled）", {})
+        # L1：IDLE 下**可读说明**而非静默成功/静默失败（同 skip/extend 口径）
+        if not self._session.active:
+            return ToolResult(True, "当前未在番茄中（空闲），无需暂停",
+                              {"state": self._session.state.value,
+                               "active": False, "paused": False})
+        if self._session.paused:
+            return ToolResult(True, "已处于暂停中，无需重复暂停",
+                              {"state": self._session.state.value,
+                               "active": True, "paused": True})
+        self._session.pause()
+        return ToolResult(True, "已暂停番茄钟（剩余时间冻结，继续时接着走）",
+                          {"state": self._session.state.value,
+                           "active": self._session.active, "paused": True})
+
+
+class _ResumePomodoroHandler:
+    def __init__(self, session) -> None:
+        self._session = session
+
+    def execute(self, args: dict, ctx):
+        from pet.tools_schema import ToolResult
+
+        if self._session is None:
+            return ToolResult(False, "番茄功能未启用（config focus.enabled）", {})
+        if not self._session.active:
+            return ToolResult(True, "当前未在番茄中（空闲），无需继续",
+                              {"state": self._session.state.value,
+                               "active": False, "paused": False})
+        if not self._session.paused:
+            return ToolResult(True, "当前未暂停，无需继续",
+                              {"state": self._session.state.value,
+                               "active": True, "paused": False})
+        self._session.resume()
+        return ToolResult(True, "已继续番茄钟（按暂停前的剩余时间接着走）",
+                          {"state": self._session.state.value,
+                           "active": self._session.active, "paused": False})
+
+
 def build_focus_tools(session) -> list:
     """番茄工具清单（app 喂 ToolRegistry.register，与天气/记忆工具并列）。"""
     from pet.tools_schema import ToolSchema
@@ -940,7 +1147,32 @@ def build_focus_tools(session) -> list:
             "additionalProperties": False,
         },
     )
+    # v0.27.3 暂停/继续（§5.1）：与 start/stop 同危险级（无危险级不打扰）。
+    # 两个工具分开（而非单个 toggle）：LLM 语义更明确，且各自能如实回答
+    # "已在暂停中"/"当前未暂停"这类无操作情形。
+    pause_schema = ToolSchema(
+        name="pause_pomodoro",
+        description=(
+            "暂停当前番茄段：剩余时间被冻结，暂停期间**不计**专注时长，计时"
+            "不再向前走；用 resume_pomodoro 按剩余时间接着走。暂停期间宠物"
+            "姿态回空闲，但仍算作专注中（不会打扰你）。空闲时无效果（会如实"
+            "说明）；已在暂停中也会如实说明。"
+        ),
+        parameters={"type": "object", "properties": {},
+                    "additionalProperties": False},
+    )
+    resume_schema = ToolSchema(
+        name="resume_pomodoro",
+        description=(
+            "继续被暂停的番茄段（按暂停前的剩余时间接着走）。空闲时无效果"
+            "（会如实说明）；本来就没暂停时也会如实说明。"
+        ),
+        parameters={"type": "object", "properties": {},
+                    "additionalProperties": False},
+    )
     return [(start_schema, _StartPomodoroHandler(session)),
             (stop_schema, _StopPomodoroHandler(session)),
             (skip_schema, _SkipPomodoroHandler(session)),
-            (extend_schema, _ExtendPomodoroHandler(session))]
+            (extend_schema, _ExtendPomodoroHandler(session)),
+            (pause_schema, _PausePomodoroHandler(session)),
+            (resume_schema, _ResumePomodoroHandler(session))]

@@ -121,7 +121,47 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.2"
+__version__ = "0.27.3"
+# v0.27.3：番茄自由度扩展「模型层②（结构性）：暂停/继续」（wiki 设计-番茄自由度
+# 扩展技术方案 §5.1/§5.2）——本线**最高风险版**（结构性 + `focus_state.json`
+# schema v2）：
+# ① 剩余量语义（pet/focus.py，§5.1）——L2 是"绝对 epoch deadline"，暂停不能靠
+#    "停表"：新增 `_paused_at`（暂停时刻，None=未暂停）+ `_remaining_s`（冻结的
+#    剩余秒）。`pause()` 把 `_deadline − now` 存进 `_remaining_s` 后置
+#    `_deadline = None`；`resume()` 按 `now + _remaining_s` 重算绝对时刻，并
+#    **回填已消耗部分** `_phase_started_at = now − (相位时长 − 剩余)`——不这样
+#    resume 后 L3 实耗会丢掉"暂停前已专注的那段"（§5.2 坑 3）。新增只读属性
+#    `paused`。`tick()` **最前置早退**（紧跟 `_refresh_dnd()`、在 IDLE 判断之前）：
+#    暂停态睡多久都不迁移、不补算。`_focus_elapsed` 另补暂停态兜底分支（按
+#    "相位时长 − 冻结剩余"作已消耗量），防别的路径在暂停态结算时丢数/多算。
+# ② Q1 姿态/门禁语义——暂停期间 `active` **仍为 True**（严格 == state != IDLE，
+#    L1 不被削弱；门禁久坐/吃鼠标/纠缠继续**静默**＝"我还在专注，只是暂时离开"）；
+#    但 `pause()` 发 `focus_rest_off`（姿态回 idle 便于辨识）、`resume()` 在 FOCUS
+#    段发 `focus_rest_on`（重新趴下）。**暂停时长不计入 `focus_sec`**。
+# ③ Q2 隐式继续守卫——`complete()` 在暂停态**先** `resume()` 再 `_finish_focus()`
+#    （不 resume 则 `_deadline=None` 不封顶，暂停时长会被算进专注），不额外计
+#    打断/完成；`skip()`/`stop()`/自然迁移**不特判**——`_enter()` 与
+#    `_enter_idle()` 各自清 `_paused_at`/`_remaining_s`，离开暂停态自动发生
+#    （关键简化）。
+# ④ **schema v2**（§5.2 三坑全解）——`_persist()` 写 `version: 2` + `paused` +
+#    `remaining_s` + `phase_started_at`；loader 不读 version（坑 1，不能指望版本号
+#    分流）→ **显式**加暂停分支，且在 `phase` 判定**之前**、**不做 deadline 三重
+#    校验**（暂停态 `_deadline=None` 必过不了 → 会静默落回 IDLE 让暂停的番茄消失，
+#    坑 2）。语义：**暂停跨重启仍然暂停、剩余时间不变**（app 关多久都算暂停）。
+#    非暂停路径**优先**用档案里的 `phase_started_at`（存在且合理时），否则回退旧
+#    反推公式——于是「**延长后重启**」也保真（v1 无该字段只能记回配置时长；此为
+#    `_focus_elapsed` docstring 里挂了两版的注记，本版收口）。**v1 档案必须仍能
+#    加载**：无 `paused` 字段 → 视为未暂停，走原路径。
+# ⑤ 入口层（同版接线，非 UI 壳）——托盘「⏸ 暂停 / ▶️ 继续」**单项**、文案随
+#    `paused` 切（`focus_availability` 的 `pause` = `active`、`pause_label`；
+#    **IDLE 置灰**，符合 L1）→ `app._toggle_focus_pause()` → 按 `paused` 分发
+#    `resume()`/`pause()`；可选热键 **id=5** `hotkeys.focus_pause`（**默认空串 =
+#    不注册**，schema 刻意不设 minLength；`platform.start_hotkeys` 基类/mac/win
+#    三处加 `pause_key`/`on_pause` 透传；app `_on_hotkey_fired` hid==5 分发）；
+#    工具新增 `pause_pomodoro`/`resume_pomodoro`（IDLE/已暂停/未暂停各返回**可读
+#    文案**而非静默失败）。
+# ⑥ README：配置表补 `hotkeys.focus_pause`、运行期补暂停语义、记 schema v2 与
+#    v1 向后兼容。本版**不做**：正计时（.4）、无休息（.5）、统计历史（.6）。
 # v0.27.2：番茄自由度扩展「入口层② + 配置面」（wiki 设计-番茄自由度扩展技术方案
 # §4.1 A / §4.4 D1/D3）——**启动时选时长 + 命名预设 + 配置热重载**：
 # ① 托盘子菜单加「启动类」入口（pet/tray.py）——⏱ 25/45/60 分钟三档 +

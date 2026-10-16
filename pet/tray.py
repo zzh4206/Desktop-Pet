@@ -23,6 +23,10 @@ _FOCUS_STOP_LABEL = "🍅 停止番茄钟"
 # 一道，模型侧同类方法本就是 no-op）；``apply_focus_menu`` 只要求对象实现
 # setText/setEnabled，故整条可用性逻辑可脱离 QApplication 单测。
 _FOCUS_MENU_LABEL = "🍅 番茄钟"
+# v0.27.3 暂停/继续（§5.1）：**单项**、文案随 paused 切换（暂停中显示「继续」）。
+# 可用性 = `active`（**IDLE 置灰**——IDLE 下暂停无意义，也符合 L1）。
+_FOCUS_PAUSE_LABEL = "⏸ 暂停"
+_FOCUS_RESUME_LABEL = "▶️ 继续"
 _FOCUS_SKIP_LABEL = "⏭ 跳过当前段"
 _FOCUS_EXTEND_LABEL = "➕ 延长 5 分钟"
 _FOCUS_COMPLETE_LABEL = "✅ 提前完成"
@@ -61,6 +65,11 @@ def focus_label(active: bool) -> str:
     return _FOCUS_STOP_LABEL if active else _FOCUS_START_LABEL
 
 
+def focus_pause_label(paused: bool) -> str:
+    """暂停项文案（v0.27.3，单项 toggle）：暂停中显示「▶️ 继续」，否则「⏸ 暂停」。"""
+    return _FOCUS_RESUME_LABEL if paused else _FOCUS_PAUSE_LABEL
+
+
 def focus_phase_name(state) -> str:
     """相位归一化：``FocusPhase`` / 其 ``.value`` / 字符串 / None → 四个相位名。
 
@@ -84,16 +93,23 @@ def _fmt_minutes(m) -> str:
     return str(int(f)) if f == int(f) else f"{f:g}"
 
 
-def focus_availability(state, last_work_min=None) -> dict:
+def focus_availability(state, last_work_min=None, paused=False) -> dict:
     """相位 → 子菜单各项的文案与可用性（纯函数，§4.1/§4.2/§4.4）。
 
-    「运行中控制」四项（v0.27.1 口径逐字不变）：
+    「运行中控制」项（v0.27.1 口径逐字不变）：
 
     - ``toggle``：**恒可用**（文案沿用 ``focus_label``：「开始」↔「停止」）
     - ``skip``：非 IDLE 可用（专注/短休/长休；模型侧 IDLE 本就 no-op）
     - ``extend``：非 IDLE 可用（专注段与休息段均可延长，模型侧 IDLE no-op）
     - ``complete``：**仅 FOCUS 可用**——休息段没有「提前完成」语义，若可点会
       凭空 +1 番茄（模型侧已 no-op，此处是入口层双保险）
+
+    v0.27.3 新增：
+
+    - ``pause``：**非 IDLE 可用**（== ``active``）——IDLE 下暂停无意义（模型侧
+      本就 no-op），置灰同时满足 L1「IDLE 零副作用」；暂停中**仍可用**（点击
+      = 继续），故不看 ``paused``。
+    - ``pause_label``：随 ``paused`` 在「⏸ 暂停」/「▶️ 继续」间切换。
 
     v0.27.2 新增（L1 要点）：
 
@@ -111,6 +127,8 @@ def focus_availability(state, last_work_min=None) -> dict:
         "phase": phase,
         "active": active,
         "toggle_label": focus_label(active),
+        "pause": active,
+        "pause_label": focus_pause_label(paused),
         "skip": active,
         "extend": active,
         "complete": phase == "focus",
@@ -121,7 +139,8 @@ def focus_availability(state, last_work_min=None) -> dict:
     }
 
 
-def apply_focus_menu(actions: dict, state, last_work_min=None) -> dict:
+def apply_focus_menu(actions: dict, state, last_work_min=None,
+                     paused=False) -> dict:
     """把 ``focus_availability`` 施加到动作集合，返回该可用性字典。
 
     ``actions`` 的值只需实现 ``setText(str)`` / ``setEnabled(bool)``（真实
@@ -130,12 +149,17 @@ def apply_focus_menu(actions: dict, state, last_work_min=None) -> dict:
     预设项文案由 ``TrayManager.set_focus_presets`` 建项时写死，与相位无关）。
     缺项（缺键/None）静默跳过，便于兼容旧调用方。
     """
-    avail = focus_availability(state, last_work_min)
+    avail = focus_availability(state, last_work_min, paused)
     actions = actions or {}
     toggle = actions.get("toggle")
     if toggle is not None:
         toggle.setText(avail["toggle_label"])
         toggle.setEnabled(True)          # toggle 是唯一恒可用项
+    # v0.27.3 暂停/继续（单项，文案随 paused 切；IDLE 置灰）
+    pause = actions.get("pause")
+    if pause is not None:
+        pause.setText(avail["pause_label"])
+        pause.setEnabled(avail["pause"])
     for key in ("skip", "extend", "complete"):
         obj = actions.get(key)
         if obj is not None:
@@ -247,6 +271,7 @@ class TrayManager(QObject):
         # apply_focus_menu 施加（初始 IDLE：后三项置灰）。focus.enabled=false
         # 时 app 调 set_focus_visible(False) 隐藏整个子菜单（§1 两段式开关）
         self._on_focus = None
+        self._on_focus_pause = None
         self._on_focus_skip = None
         self._on_focus_extend = None
         self._on_focus_complete = None
@@ -260,6 +285,7 @@ class TrayManager(QObject):
         self._focus_preset_sep = None
         self._focus_last_work_min = 0.0    # 0 → 文案用 _FOCUS_FALLBACK_MIN 兜底
         self._focus_phase = _PHASE_IDLE
+        self._focus_paused = False         # v0.27.3 暂停态（暂停项文案/可用性）
         # 子菜单标题不带「▸」——mac/Qt 会按子菜单自动绘制箭头字符
         self._focus_menu = focus_menu = menu.addMenu(_FOCUS_MENU_LABEL)
         self._act_focus = act_focus = focus_menu.addAction(_FOCUS_START_LABEL)
@@ -282,6 +308,10 @@ class TrayManager(QObject):
             _FOCUS_SET_DEFAULT_LABEL_FMT.format(m=_FOCUS_FALLBACK_MIN))
         act_default.triggered.connect(self._emit_focus_default)
         focus_menu.addSeparator()
+        # v0.27.3 暂停/继续（单项，文案随 paused 切；可用性=非 IDLE）
+        self._act_focus_pause = act_pause = focus_menu.addAction(
+            _FOCUS_PAUSE_LABEL)
+        act_pause.triggered.connect(self._emit_focus_pause)
         self._act_focus_skip = act_skip = focus_menu.addAction(
             _FOCUS_SKIP_LABEL)
         act_skip.triggered.connect(self._emit_focus_skip)
@@ -500,6 +530,18 @@ class TrayManager(QObject):
         if self._on_focus is not None:
             self._on_focus()
 
+    def set_focus_pause_callback(self, cb) -> None:
+        """子菜单「⏸ 暂停 / ▶️ 继续」→ app._toggle_focus_pause（v0.27.3）。
+
+        **单项 toggle**：app 侧按 ``FocusSession.paused`` 决定调 ``pause()`` 还是
+        ``resume()``，托盘只负责"这一项被点了"。
+        """
+        self._on_focus_pause = cb
+
+    def _emit_focus_pause(self) -> None:
+        if self._on_focus_pause is not None:
+            self._on_focus_pause()
+
     def set_focus_skip_callback(self, cb) -> None:
         """子菜单「⏭ 跳过当前段」→ app._skip_focus（FocusSession.skip 薄转发）。"""
         self._on_focus_skip = cb
@@ -631,9 +673,10 @@ class TrayManager(QObject):
         self._apply_focus_menu()
 
     def _apply_focus_menu(self) -> None:
-        """按当前相位 + 上次时长刷新子菜单文案/可用性（幂等）。"""
+        """按当前相位 + 上次时长 + 暂停态刷新子菜单文案/可用性（幂等）。"""
         actions = {
             "toggle": getattr(self, "_act_focus", None),
+            "pause": getattr(self, "_act_focus_pause", None),
             "skip": getattr(self, "_act_focus_skip", None),
             "extend": getattr(self, "_act_focus_extend", None),
             "complete": getattr(self, "_act_focus_complete", None),
@@ -646,7 +689,8 @@ class TrayManager(QObject):
             actions[f"minute_{m}"] = act
         apply_focus_menu(
             actions, getattr(self, "_focus_phase", _PHASE_IDLE),
-            getattr(self, "_focus_last_work_min", 0.0))
+            getattr(self, "_focus_last_work_min", 0.0),
+            getattr(self, "_focus_paused", False))
 
     def set_focus_visible(self, visible: bool) -> None:
         """focus.enabled=false → 彻底隐藏整个「🍅 番茄钟」子菜单（§1 两段式）。
@@ -673,6 +717,18 @@ class TrayManager(QObject):
         if phase == getattr(self, "_focus_phase", None):
             return
         self._focus_phase = phase
+        self._apply_focus_menu()
+
+    def set_focus_paused(self, paused) -> None:
+        """同步**暂停态**（v0.27.3，app 在 pause/resume 后与每拍同步时调）。
+
+        暂停不改相位，故必须与 ``set_focus_phase`` 分开表达——只影响「⏸ 暂停 /
+        ▶️ 继续」这一项的文案（可用性只看 ``active``）。幂等：值未变不碰 QAction。
+        """
+        p = bool(paused)
+        if p == getattr(self, "_focus_paused", None):
+            return
+        self._focus_paused = p
         self._apply_focus_menu()
 
     def set_focus_active(self, active: bool) -> None:

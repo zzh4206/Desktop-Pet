@@ -447,6 +447,11 @@ _SECTION_SCHEMAS: dict[str, dict] = {
             # （_validate_section :714-735），若在此拦空串，用户自定义的
             # chat/spit/focus 会被一起静默丢弃。
             "focus_skip": {"type": "string"},
+            # v0.27.3 番茄线：可选热键 **id=5**（暂停/继续，toggle 语义）。
+            # 同 focus_skip：**刻意不设 minLength**——`""` 是合法默认值
+            # （=不注册）；本段校验失败会整段回退默认，拦空串会连带丢弃
+            # 用户自定义的 chat/spit/focus/focus_skip。
+            "focus_pause": {"type": "string"},
         },
         "additionalProperties": False,
     },
