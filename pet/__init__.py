@@ -121,7 +121,17 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.26.3"
+__version__ = "0.24.2"
+# v0.24.2：主动纠缠「行为① PESTER 奔向光标求摸头」——pet/behavior.py FSM 加
+# _PESTER 态（两段式：直线奔向光标复用 _follow_speed/到达阈 10px/超时 5s →
+# 到达转「待摸头」静姿态，窗口期 30s）+ handle_event "pester"/"pester_off" +
+# 模式切换保护（pester 期间忽略 motion_mode，仿吃鼠标 v0.7.4 教训）+
+# AssetProvider._FRAME_SPECS 加 "pester" 键（帧未产 → 缺帧降级静帧）+
+# app 层消费（_frame_tick 两段帧：奔向走 walk/到位走静姿态帧；_tick 进出记账；
+# _interact 摸头闭环 on_pester_answered → attention 回满 + 走 needs pet 通道；
+# 窗口超时 mode 回落 → on_pester_ignored **只加深退避、绝不升级**）+ 建
+# AttentionEngine 实例与 Stage 分档衰减回写 PetState（0.1 粒度防存盘抖动）。
+# 触发链（poll 挂 should_pester 五重门）归 0.24.4；单测 tests/test_behavior_pester.py。
 # v0.26.3：语音线接线（app.py/tray.py/bubble.py/ui/chat_bridge.py，config.py
 # 加 save_voice_enabled）——两路来源分流：气泡 on_show 回带 source
 # （proactive=自动路径 _auto_bubble / system=用户主动路径直调），聊天回复走

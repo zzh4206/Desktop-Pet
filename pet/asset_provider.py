@@ -284,6 +284,9 @@ class AIArtProvider:
         "fall":   (("fall_air", "fall_land"), 200),
         "eat_mouse": (("eat_mouse_0", "eat_mouse_1", "eat_mouse_2", "eat_mouse_3"), 320),
         "chew":   (("chew_0", "chew_1"), 280),
+        # v0.24.2 主动纠缠「待摸头」静姿态（帧资产未产 → frames_for 返 [] →
+        # app 走静帧兜底，不阻塞提版；产能到位后补 {stage}_pester_*.png）
+        "pester": (("pester_0", "pester_1"), 300),
     }
 
     def _frames_dir(self) -> str:
@@ -304,7 +307,7 @@ class AIArtProvider:
         # ACTION 名 → 帧规格键
         key = {
             "move_to": "walk", "animate": None, "fall": "fall",
-            "eat_mouse": "eat_mouse", "speak": None,
+            "eat_mouse": "eat_mouse", "speak": None, "pester": "pester",
         }.get(action_name, None)
         # animate 的 name 参数（app 传 ActionType.ANIMATE + params 里 name；
         # 这里无 params，由 app 走 get_frames(state, ANIMATE) 通用序或由

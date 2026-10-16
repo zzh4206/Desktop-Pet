@@ -390,6 +390,34 @@ class PetApp:
 
         # v0.23 天气线（共享层，mac/win 同代码）：未启用/未配城市 → None
 
+        # v0.24.2 主动纠缠：attention 引擎（pet/attention.py 纯共享层，零平台库）。
+        # 初始值取自持久化档（0.24.1 起 PetState.attention）；Stage 分档衰减速率
+        # 与技术方案 §2.1 默认对齐，config ``attention`` 段可覆写（0.24.5 铺满）。
+        # 触发链（poll 挂 should_pester）属 0.24.4；本版先建实例供摸头闭环 +
+        # 衰减回写使用。
+        from pet.attention import AttentionConfig, AttentionEngine
+
+        _att = self.cfg.get("attention") or {}
+        self._attention_engine = AttentionEngine(
+            cfg=AttentionConfig(
+                decay_per_hour=dict(_att.get("decay_per_hour") or {
+                    "YOUNG": 4.0, "ADULT": 2.5, "FINAL": 1.5,
+                }),
+                gain=dict(_att.get("gain") or {
+                    "pet": 40.0, "poke": 25.0, "chat": 30.0,
+                }),
+                pester_threshold=float(_att.get("pester_threshold", 35.0)),
+                hourly_limit=int(_att.get("hourly_limit", 2)),
+                daily_limit=int(_att.get("daily_limit", 3)),
+                backoff_s=tuple(_att.get("backoff_s") or (300.0, 1800.0, 7200.0)),
+                behaviors=tuple(_att.get("behaviors") or
+                                ("run_to_cursor", "bubble_whine")),
+            ),
+            attention=self.store.get().attention,
+            focus_state_fn=self._focus_state,
+        )
+        self._pester_answered = False   # 本次纠缠是否已被摸头（防重复记账）
+
         proactive_cfg = self.cfg.get("proactive", {})
         self._proactive = ProactiveScheduler(
             store=self.store,
@@ -1921,6 +1949,25 @@ class PetApp:
         import time
 
         out = self.needs.interact(kind, now=time.monotonic())
+        # v0.24.2 纠缠闭环：PESTER 待摸头期间被摸 → attention 回满
+        # （on_pester_answered，退避清零）+ FSM 退场回 idle。心情增益/疲劳
+        # 照走上面 needs.interact 既有 pet 通道（拒绝/疲劳也照记）。
+        att = getattr(self, "_attention_engine", None)
+        if att is not None and self.fsm.mode == "pester" and kind == "pet":
+            self._pester_answered = True
+            try:
+                att.on_pester_answered("run_to_cursor", now=time.time())
+            except Exception:
+                self.logger.warning("on_pester_answered 异常", exc_info=True)
+            self.fsm.handle_event("pester_off")
+            self._sync_attention(0.01)
+        elif att is not None and out.field is not None:
+            # 常规交互 → attention 增益（摸头/逗一逗/聊天；表在 AttentionConfig）
+            try:
+                att.on_interaction(kind, now=time.time())
+                self._sync_attention(0.01)
+            except Exception:
+                self.logger.warning("attention 交互增益失败", exc_info=True)
         if out.field is None:
             return
         if out.floating_text:
@@ -2047,6 +2094,14 @@ class PetApp:
             self.cfg.get("decay_per_hour", {}),
             age_speed_multiplier=self.cfg.get("age_speed_multiplier", 1.0),
         )
+        # v0.24.2 attention 衰减（独立于 needs 三值：速率按 Stage 分档，表在
+        # AttentionConfig.decay_per_hour）。0.24.0 起引擎持运行时值，此处回写
+        # PetState（托盘状态行 + 持久化载体）。
+        try:
+            self._attention_engine.apply_decay(self.store.get().stage)
+            self._sync_attention(0.1)   # 0.1 粒度：防每秒 notify→存盘抖动（H1 同款）
+        except Exception:
+            self.logger.warning("attention 衰减回写失败", exc_info=True)
         # 循环 check_evolve 补齐离线多阶进化（旧版只调一次漏多阶，A6）
         while True:
             event = self.store.check_evolve(
@@ -2190,13 +2245,49 @@ class PetApp:
     def _fsm_event(self, event: str) -> None:
         self.fsm.handle_event(event)
 
+    def _sync_attention(self, min_step: float = 0.1) -> None:
+        """引擎 attention → PetState（托盘状态行 + 持久化载体）。
+
+        ``min_step`` 粒度守卫：衰减路径用 0.1（防每秒 notify→存盘抖动），
+        交互动路径用更小值（增益跳变大，需立即落账）。
+        """
+        try:
+            delta = (self._attention_engine.attention
+                     - self.store.get().attention)
+        except Exception:
+            self.logger.warning("attention 读取异常", exc_info=True)
+            return
+        if abs(delta) < min_step:
+            return
+        try:
+            self.store.update(attention=delta)
+        except Exception:
+            self.logger.warning("attention 回写失败", exc_info=True)
+
+    def _focus_state(self) -> str:
+        """focus 防御探测输入（AttentionEngine 门 3）：专注会话 active → "FOCUS"。
+
+        0.25 番茄线 ``pet/focus.py`` 已按 duck-typing 预留读口
+        （``getattr(focus, "state"/"active")``，见该文件「状态读口」注释），
+        本版用防御式 getattr 探测——模块缺失/异常一律视为非专注，绝不崩
+        （0.24.0 引擎侧即按此设计，0.25 落地后自动接通，无需改本行）。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return "IDLE"
+        try:
+            return "FOCUS" if bool(getattr(sess, "active", False)) else "IDLE"
+        except Exception:
+            return "IDLE"
+
     def _set_motion_mode(self, mode: str) -> None:
         self.fsm.handle_event(f"motion_mode:{mode}")
         self.window.set_motion_mode(self.fsm.motion_mode)
 
     # ---- ADULT / FINAL 侧身行走（各阶段 locomotion 配置）----
     _LOCO_SPEED_CAP = 200.0     # px/s；跟随模式 600 px/s 限速到步行上限（方案 §8 决策 4 缺省）
-    _LOCO_BREAK_MODES = ("fall", "thrown", "drag", "climb", "eat_approach", "eat_mouse")
+    _LOCO_BREAK_MODES = ("fall", "thrown", "drag", "climb", "eat_approach",
+                         "eat_mouse", "pester")
     # G7 跟手/边缘：意图按误差比例给速——远处贴上限、近处随距离减速，步态
     # 刹车（0.4s 线性）+ 收步前移的动量不再冲过目标（旧版恒速 120/200 到
     # 达，过冲 ~30-70px → follow 反向再起步 = 侧身⇄正面转身片段循环）。
@@ -2295,6 +2386,20 @@ class PetApp:
         mode = self.fsm.mode
         if mode == "eat_mouse" and getattr(self, "_fsm_last_mode", "") != "eat_mouse":
             self._proactive.eat_mouse_arrived()
+        # v0.24.2 主动纠缠：进「待摸头」复位记账；pester→idle 且**未被摸头**
+        # → 记一次退让（on_pester_ignored 只加深退避，绝不升级力度——退让铁律）
+        _prev_mode = getattr(self, "_fsm_last_mode", "")
+        if mode == "pester" and _prev_mode != "pester":
+            self._pester_answered = False
+        elif _prev_mode == "pester" and mode != "pester":
+            if not getattr(self, "_pester_answered", False):
+                _att_e = getattr(self, "_attention_engine", None)
+                if _att_e is not None:
+                    try:
+                        _att_e.on_pester_ignored("run_to_cursor", now=_time.time())
+                    except Exception:
+                        self.logger.warning("on_pester_ignored 异常", exc_info=True)
+            self._pester_answered = False
         # v0.15.1 接回：新引擎有效部分（motion + wind/sun）经中间层 EngineBridge
         # 逐帧叠加到原有引擎 frames。风/光影逐拍刷新（内部节流）；落地沿
         # squash 由 MotionEnricher 在 set_motion 的下降沿自触发。整块永不抛错。
@@ -2446,6 +2551,24 @@ class PetApp:
             if seq:
                 self._play_key("eat_mouse_chew", seq, loop=True,
                                interval=provider.frame_interval("chew"))
+            return
+        if mode == "pester":
+            # v0.24.2 纠缠两段帧：奔向段沿用 walk 帧（下方 walk 分支的条件不含
+            # pester 模式，故此处显式放行）；到位「待摸头」切静姿态帧（帧资产
+            # 未产 → seq 空 → 停 walk 循环走静帧兜底，不阻塞提版；产能到位后
+            # 补 {stage}_pester_*.png 即自动生效）。
+            if not getattr(self.fsm, "pester_arrived", False):
+                walk = provider.frames_for(stage, "walk")
+                if walk:
+                    self._play_key("walk", walk, loop=True,
+                                   interval=provider.frame_interval("walk", stage))
+                return
+            seq = provider.frames_for(stage, "pester")
+            if seq:
+                self._play_key("pester_wait", seq, loop=True,
+                               interval=provider.frame_interval("pester"))
+            elif getattr(self, "_anim_key", None) in ("walk", "pester_wait"):
+                self._stop_anim()
             return
         # L1 修（REVIEW-2026-08-25）：follow 判定读 FSM 真实模式（旧版
         # getattr(self,"_follow") 读 PetApp 不存在的属性恒 False——死分支）

@@ -31,6 +31,7 @@ class ActionType(Enum):
     ANIMATE = "animate"
     SPEAK = "speak"
     EAT_MOUSE = "eat_mouse"
+    PESTER = "pester"   # v0.24.2 主动纠缠「待摸头」静姿态（帧未产则降级静帧）
 
     # WANDER 是 FSM 行为模式（反复发 MOVE_TO 随机目标），非独立 ActionType。
     # L15 修（REVIEW-2026-08-25）：删 FOLLOW_CURSOR 死枚举——全仓无构造点
@@ -80,6 +81,13 @@ _EAT_MOUSE = "eat_mouse"  # v0.7 吃鼠标态：冻结（不出 WANDER/物理）
 _EAT_APPROACH = "eat_approach"  # v0.7.3：先直线奔向光标，到达才开吃
 _EAT_APPROACH_TIMEOUT_S = 5.0   # 追赶兜底（用户持续移动光标时防无限追）
 _EAT_APPROACH_ARRIVE_PX = 10.0
+# v0.24.2 主动纠缠：奔向光标求摸头（两段式——奔向 → 待摸头静姿态）。
+# 与吃鼠标同款直线奔向复用参数；到达后等待窗口期，无人理则**退让**回 idle
+# （联动 attention.on_pester_ignored，退让而非升级铁律）。
+_PESTER = "pester"
+_PESTER_ARRIVE_PX = 10.0
+_PESTER_APPROACH_TIMEOUT_S = 5.0
+_PESTER_WINDOW_S = 30.0         # 待摸头窗口期（秒）
 # follow 跟手（G7）：到达/再起步滞后带。到达阈值小（贴住光标），再起步
 # 阈值放宽到覆盖步态收步动量（刹车 0.4s 线性 + 收步前移，120–200 px/s
 # 下过冲 ~10 px）——过窄会在光标附近 WALK↔IDLE 高频翻转，方向一反就是
@@ -139,6 +147,8 @@ class BehaviorFSM:
         self._follow = False
         self._motion_mode = "free"  # free（默认）/ follow / edge
         self._eat_approach_t0 = 0.0
+        self._pester_arrived = False   # v0.24.2：True=已到位「待摸头」；False=奔向中
+        self._pester_t0 = 0.0          # 奔向起点/到位时点（monotonic）
         self._suppressed = False   # 全屏：暂停 WANDER（不出新目标）
         self._anim_left = random.uniform(_ANIM_MIN_S, _ANIM_MAX_S)
         self._drag_hist: deque = deque()  # (t, x, y) release 初速度估算
@@ -454,8 +464,8 @@ class BehaviorFSM:
             # edge 分支强置 _mode=IDLE 会让 FSM 与 EatMouseSession 的抑制态
             # 脱钩（锁还挂着、FSM 已回 idle）。菜单选中态由 app 回读
             # fsm.motion_mode 同步，忽略后不脱节
-            if self._mode in (_EAT_MOUSE, _EAT_APPROACH):
-                _log.info("[吃鼠标] 期间忽略移动模式切换: %s", mode)
+            if self._mode in (_EAT_MOUSE, _EAT_APPROACH, _PESTER):
+                _log.info("[吃鼠标/纠缠] 期间忽略移动模式切换: %s", mode)
                 return
             self._motion_mode = mode
             self._follow = mode == "follow"
@@ -481,10 +491,32 @@ class BehaviorFSM:
                 # 批次D/M4（REVIEW-2026-08-31）：按 motion_mode 恢复跟随——
                 # 旧版只清 _follow，释放后 UI 仍显示跟随而实际不再跟随
                 self._follow = self._motion_mode == "follow"
+        elif event == "pester":
+            # v0.24.2 主动纠缠：奔向光标求摸头（两段式——奔向 → 待摸头）。
+            # 不收敛位置（就地起奔向光标）；_motion_mode 不动（pester_off 恢复）。
+            self._mode = _PESTER
+            self._pester_arrived = False
+            self._pester_t0 = time.monotonic()
+            self._stand_win = None
+            self._vx = self._vy = 0.0
+            self._follow = False
+        elif event == "pester_off":
+            # 被摸头（app 侧 attention 回满）或外部取消 → 回 idle 恢复跟随
+            if self._mode == _PESTER:
+                self._mode = _IDLE
+                self._idle_left = self._new_idle()
+                self._pester_arrived = False
+                self._follow = self._motion_mode == "follow"
 
     @property
     def mode(self) -> str:
         return self._mode
+
+    @property
+    def pester_arrived(self) -> bool:
+        """是否已到位「待摸头」（v0.24.2：呈现层据此切静姿态帧——奔向段
+        仍走 walk 帧，到位才算「站定等你摸」）。"""
+        return self._pester_arrived
 
     @property
     def motion_mode(self) -> str:
@@ -617,6 +649,9 @@ class BehaviorFSM:
         # 咀嚼动画为 v0.7 占位，留 provider/动画 v0.7.1+ 精修）
         if self._mode == _EAT_APPROACH:
             return self._step_eat_approach(dt)
+
+        if self._mode == _PESTER:
+            return self._step_pester(dt)
 
         if self._mode == _EAT_MOUSE:
             return Action(ActionType.EAT_MOUSE, {"pos": self._pos})
@@ -863,6 +898,43 @@ class BehaviorFSM:
         if dist <= _EAT_APPROACH_ARRIVE_PX or timed_out:
             self._mode = _EAT_MOUSE
             return Action(ActionType.EAT_MOUSE, {"pos": self._pos})
+        step = min(dist, self._follow_speed * dt)
+        self._pos = (
+            self._pos[0] + dx / dist * step,
+            self._pos[1] + dy / dist * step,
+        )
+        return Action(ActionType.MOVE_TO, {"pos": self._pos})
+
+    def _step_pester(self, dt: float) -> Action:
+        """v0.24.2 主动纠缠：直线奔向光标求摸头（两段式）。
+
+        段 1 奔向：直线奔向 _last_mouse_pos（复用跟随速度），到达 <10px 或
+        超时 5s（用户持续移动光标防无限追）→ 段 2；
+        段 2 待摸头：原地静姿态，_PESTER_WINDOW_S 内被摸 → app 发
+        ``pester_off``（attention 回满 + 心情增益）；窗口超时无人理 →
+        自行回 idle（app 侧据 mode 变化调 ``on_pester_ignored``——
+        **退让而非升级**，绝不加大力度再试）。
+
+        返回 ``ActionType.PESTER`` 让 app 播「待摸头」帧（帧资产未产 →
+        缺帧自动降级静帧，不阻塞）。
+        """
+        if self._pester_arrived:
+            if time.monotonic() - self._pester_t0 >= _PESTER_WINDOW_S:
+                # 超时无人理 → 退让回 idle（app 见 pester→idle 转换即记账）
+                self._mode = _IDLE
+                self._idle_left = self._new_idle()
+                self._pester_arrived = False
+                self._follow = self._motion_mode == "follow"
+            return Action(ActionType.PESTER, {"pos": self._pos})
+        mp = self._last_mouse_pos or self._pos
+        dx, dy = mp[0] - self._pos[0], mp[1] - self._pos[1]
+        dist = (dx * dx + dy * dy) ** 0.5
+        timed_out = (time.monotonic() - self._pester_t0
+                     >= _PESTER_APPROACH_TIMEOUT_S)
+        if dist <= _PESTER_ARRIVE_PX or timed_out:
+            self._pester_arrived = True
+            self._pester_t0 = time.monotonic()
+            return Action(ActionType.PESTER, {"pos": self._pos})
         step = min(dist, self._follow_speed * dt)
         self._pos = (
             self._pos[0] + dx / dist * step,
