@@ -121,7 +121,7 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.24.1"
+__version__ = "0.25.0"
 # v0.24.1：attention 接入 pet_state——PetState 加 attention 字段（默认 70，第四
 # 独立数值）+ SCHEMA_VERSION 1→2 + migrate_v1_to_v2 旧档补默认（不丢档）+
 # _NUMERIC_FIELDS 加 "attention"（apply_decay 才对其生效，调查缺口 2）+
