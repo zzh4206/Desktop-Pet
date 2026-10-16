@@ -273,6 +273,49 @@ python app.py --verbose
 节律照走。当日完成数/累计时长/打断数/连续天数落 `focus_state.json`（数据目录，
 可删），重启在 5 分钟宽限内恢复进行中的节律；托盘悬停可见「🍅×今日完成数」。
 
+### 主动纠缠（可选）
+
+宠物有自己的「陪伴值」（`attention`）——与心情/饱食/清洁度并列的**第四个独立数值**，
+托盘状态行显示为「陪伴」。摸头/逗一逗/聊天会涨，随时间按成长阶段衰减（幼年掉得最快，
+成年次之）。陪伴值低到阈值以下时，它会**主动凑过来**：跑到光标边求摸头，或冒个气泡
+撒娇（鲸鱼娘式的傲娇抱怨，比如「才、才不是想你了」）。
+
+默认**不打扰正在干活的你**——下列五重门全部通过才可能触发一次：
+
+| 门 | 判据 |
+| --- | --- |
+| 静默 | 全屏、系统勿扰、番茄专注中、正在看视频 → 一律不吵；深夜时段（`proactive.quiet_hours`，默认 23–8 点）不动 |
+| 时机 | **只在任务边界放行**——键鼠空闲 30 秒到 10 分钟之间（正打字 / 刚离开都不算；这是本版唯一接入的新时机信号） |
+| 阈值 | 陪伴值低于 `attention.pester_threshold`（默认 35） |
+| 退让 | **被无视就退让，绝不升级**：连续被无视后按 5 分钟 → 30 分钟 → 2 小时阶梯静默，静默期内完全不打扰。这是铁律，**不存在「越不理越闹」** |
+| 频控 | 默认每小时最多 2 次、每 24 小时最多 3 次（**从严**起步） |
+
+此外托盘「**安静模式**」是更外层的总闸，勾上即恒不触发。它只挡**行为**——陪伴值照常
+演化，所以取消勾选是「接着算」，不是回出厂值。
+
+| 键 | 默认值 | 范围 | 说明 |
+| --- | --- | --- | --- |
+| `attention.enabled` | `true` | 布尔 | 陪伴系统总开关。`false` = 陪伴值不演化、也不主动纠缠。 |
+| `attention.pester.enabled` | `true` | 布尔 | **纠缠行为总闸**（托盘「安静模式」就是它）。`false` = 不主动纠缠，但陪伴值照常演化。 |
+| `attention.pester.hourly_limit` | `2` | 0 – 20 | 每小时最多主动纠缠几次。**觉得烦就调小或设 0**。 |
+| `attention.pester.behaviors` | `["run_to_cursor","bubble_whine"]` | 行为名列表 | 纠缠行为池：`run_to_cursor` 奔光标求摸头（走 FSM 两段态）、`bubble_whine` 气泡撒娇。写错的名字会被配置校验挡下（整段回退默认 + 日志告警）。 |
+| `attention.pester.lines` | 内置池 | 按类覆写 | 撒娇文案罐头池覆写，三类：`low_attention` / `pat_failed` / `ignored`。 |
+| `attention.pester_threshold` | `35` | 0 – 100 | 陪伴值低于此线才可能纠缠（调低 = 更少打扰）。 |
+| `attention.daily_limit` | `3` | 0 – 50 | 每 24 小时最多几次。 |
+| `attention.backoff_s` | `[300, 1800, 7200]` | 秒列表 | 退让阶梯：连续被无视第 1 / 2 / 3+ 次后的静默时长。 |
+| `attention.decay_per_hour` | `{"YOUNG":4.0,"ADULT":2.5,"FINAL":1.5}` | 每小时点数 | 陪伴值衰减速率（按成长阶段）。 |
+| `attention.gain` | `{"pet":40.0,"poke":25.0,"chat":30.0}` | 每次点数 | 摸头 / 逗一逗 / 聊天的陪伴值增益。 |
+
+**「烦人度」坦诚说明**：撒娇文案以**本地罐头池为主**（≥2/3），少量（≤1/3，按累计调用
+计）由 LLM 现编——也就是说它大多数时候说的是写死的话，**不是「每次都新想一句」**。LLM
+那一路在后台线程执行，**失败即回退罐头**且不占用那 1/3 配额。默认每小时 2 次是**未经实机
+浸泡调校的从严起步值**，实机体感后按需调 `hourly_limit` / `backoff_s`；完全不想要就把
+托盘「安静模式」勾上。
+
+> 说明性/机制性依据见 [wiki/设计-纠缠互动技术方案.md](wiki/设计-纠缠互动技术方案.md)
+> 与 [wiki/资料-桌宠与虚拟陪伴全景调研.md](wiki/资料-桌宠与虚拟陪伴全景调研.md)（打断
+> 成本、可打断性预测、任务边界门控等）；「降低打扰感」是设计目标而非已量化承诺。
+
 ## 启用 AI 聊天（可选）
 
 默认配置提供 DeepSeek：
@@ -368,6 +411,7 @@ python -m compileall app.py pet
 | v0.22 | mini-swe 上下文管理（`pet/swe_context.py`）：线性历史 token 治理两层手段——T1 观测瘦身（`keep_recent` 外老步骤 tool 消息头尾摘录，确定性零成本）+ T2 轨迹滚屏摘要（估算 token 超 `budget_tokens` → 最老一半可压步骤 LLM 压成单条 `[此前步骤摘要]`，单条滚动不累积；失败/关闭回退 T1，fail-open 不杀任务）；压缩只影响喂 LLM 的 messages、UI 步骤回显全量（同 v0.17.1 摘要解耦哲学）；压缩单位为步骤对（assistant `tool_calls` 与 tool 消息按 `tool_call_id` 配对整对替换，杜绝孤儿 tool_call 400）；`SweAgent(context_policy=)` 注入，`config.swe.context` 段（`budget_tokens` 默认 24000 可按模型窗口调整，`summarize=false` 即 T1-only）。 |
 | v0.22.1 | mini-swe 本地任务记忆（`pet/swe_memory.py`）：跨任务「本地上下文」三件套——M1 任务档案（任务结束把 instruction/exit_status/submission 追加进工作区 `.swe/history.jsonl`，上限可配、坏行容错、本地明文可删）+ M2 相似召回注入（新任务起跑按 instruction 相似度取 top-k 历史记录拼进任务前缀；分词复用 `pet.memory._tokenize` 单一实现，平滑 IDF 加权 + 重合度 <0.2 视为零相关不注入 + 30 天近期加分）+ M3 NOTES.md 发现级记忆（system prompt 新增规则：旧记忆需命令验证后采信、值得跨任务保留的发现写入工作区 `NOTES.md`，任务起跑注入其头部）；归档只存原始 instruction（防记忆自噬膨胀）；`config.swe.memory` 段（`recall_k=5`/`recall_chars=200`/`history_cap=200`/`notes` 开关）。 |
 | v0.23 | 天气感知与提醒（`pet/weather.py`）：Open-Meteo 免 key 数据源（**Powered by Open-Meteo**，CC BY 4.0 非商用免费；调研报告核实并修正初稿「商用免费」表述）；手动城市默认 + geocoding 坐标随缓存落盘（`city` 留空=功能静默）；daemon 线程拉新 + 内存/磁盘双缓存（`weather_cache.json` 原子写、明文可删）+ 离线回读 stale 标注 + 429/5xx 指数退避（连续 5 次失败本日放弃）；主动提醒挂 ProactiveScheduler——今日首次新快照评估带伞/降温/高温/寒潮（阈值 `weather.alerts.*` 可配，每类每日一次落 proactive_state 去重、stale/缺数据/跨日快照不触发、DND/深夜静默、不保证性措辞）；LLM 工具 `get_weather`（只读缓存不拉网，stale 透传）；`Sensors.weather` 字段位留给 0.24 纠缠线行为调制；纯共享层 mac/win 同代码（系统级天气源 adapter `get_weather_source()` 坑位预留，本线不实装）。 |
+| v0.24 | 主动纠缠互动（`pet/attention.py` + `pet/pester_lines.py`）：新增**第四个独立数值「陪伴值」**（`PetState.attention`，存档 schema v2 带 v1 迁移，托盘状态行显示「陪伴」、低陪伴追一句「有点想你」）；纯逻辑引擎 `AttentionEngine`（按成长阶段分档衰减 + 摸头/逗一逗/聊天增益 + 阈值触发）与多门 `should_pester`（静默 → 任务边界时机 → 专注防御探测 → 阈值 → 退让阶梯 → 频控/日频，未过门不消耗配额）；**退让铁律**——被无视只降级不升级（5min → 30min → 2h 静默），从机制上杜绝「越不理越闹」；纠缠行为池两个——`run_to_cursor` 奔光标求摸头（FSM `_PESTER` 两段态：奔向光标 → 停留待摸）与 `bubble_whine` 气泡撒娇；撒娇文案**本地罐头池 ≥2/3 + LLM 现编 ≤1/3**（按累计调用计，后台线程执行、失败回退罐头且不占配额）；托盘「安静模式」一键总闸（`attention.pester.enabled=false`，与「陪伴值照常演化」解耦）+ config `attention.*` 三处同步（说明见「主动纠缠（可选）」节）。任务边界本版只接入键鼠空闲窗口（30s–10min）一个信号；窗口切换信号按共享层约定留 win 侧坑位（诚实标注，未实装）。 |
 | v0.25.0 | 番茄专注核心（`pet/focus.py`）：可选节律器 `FocusSession`（`IDLE→FOCUS→SHORT→LONG` 迁移链、`start/stop/skip/tick/on_dnd_active`、`active` 门禁、虚拟时钟 `now_fn` 注入、`focus_state.json` 原子写重水化、当日统计 + streak）；**IDLE 惰性接管不变量**——不 start 即零影响。 |
 | v0.25.1 | 番茄专注配置：`config.focus` 段（`enabled` 默认 true=入口可见但绝不自动运行、`work_min`/`short_min`/`long_min`/`cycles`/`break_enforce` 默认关/`mood_gain`）+ `hotkeys.focus`（mac ⌘⌥F / win Ctrl+Alt+F，id=3）；测试口径纠正为本地不入库，`focus.py` docstring 的「CI 单测」表述更正为「平台库-free + 本地单测」（本仓无 CI）。 |
 | v0.25.2 | 番茄专注入口：托盘「🍅 开始/停止番茄钟」动态项 + 全局热键 id=3（双平台 shim 注册、冲突沿用 `on_conflict` 改键气泡）+ `platform.start_hotkeys` 透传 `focus_key`/`on_focus` + app 装配 `FocusSession`（气泡/FSM 事件/DND/全屏注入 + 每拍 tick + 三入口收敛 toggle）+ ToolRegistry `start_pomodoro`/`stop_pomodoro`（无危险级）；`focus.enabled=false` 时托盘项与热键同步隐藏。 |

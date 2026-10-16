@@ -121,7 +121,14 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.24.5"
+__version__ = "0.24.6"
+# v0.24.6：v0.24「主动纠缠互动」线收尾——README 补「主动纠缠（可选）」节（五重门
+# 判据表 / attention.* 配置表 / 托盘「安静模式」口径 / **「烦人度」坦诚说明**：
+# 罐头池 ≥2/3 + LLM ≤1/3 的实情、默认每小时 2 次为「未经实机浸泡调校的从严起步
+# 值」、依据标注为说明性而非已量化承诺）+ 版本沿革补 v0.24 行（v0.23 之后原本直接
+# 跳到 v0.25.0）。本版**无代码改动**，只提版号 + 文档。
+# 遗留（交由实机验收）：0.24.5 的托盘「安静模式」点击、静默条件逐条手测、端到端
+# 纠缠触发观察；浸泡 1–2 周后按体感调 hourly_limit / backoff_s。
 # v0.24.5：主动纠缠「配置与开关」——config **三处同步**（_SECTION_SCHEMAS +
 # _SAFE_DEFAULTS + config.example.json；additionalProperties:False 陷阱见调查报告
 # 缺口 3，behaviors 用 enum 挡下拼错的行为名——写错的行为只会静默不触发）+ 托盘
