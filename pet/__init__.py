@@ -121,7 +121,30 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.23.10"
+__version__ = "0.27.0"
+# v0.27.0：番茄自由度扩展「模型层①」（wiki 设计-番茄自由度扩展技术方案 §4.1/
+# §4.2/§5.2，本版只动 pet/focus.py + 文档，无入口/配置改动）：
+# ① **L3 记账缺陷修复（正确性，前置）**——focus_sec 由「按配置 work_min 记账」
+#    改为**按实耗**：_enter() 记 _phase_started_at，收口 elapsed =
+#    min(now, _deadline) − _phase_started_at（deadline 封顶是等价性/不补算的
+#    必要条件：不封顶则 +1s 拍长就记 1501、睡 2 小时记 7200，破坏 L2「过期即
+#    迁移不补算」与「pomodoro 未延长时与旧口径逐值相等」两条硬要求）。重启
+#    续算按 deadline − 相位时长反推起点（v1 档案无新字段，无 schema 变更；
+#    "延长后重启"只能记回配置时长，待 v0.27.3 schema v2 一并携带）。
+# ② start(minutes, *, as_default=False)（修 L4 / §9 Q6）——minutes **只影响这
+#    一次**，不再永久改写 _work_min；仅 as_default=True 写回默认（托盘「设为
+#    默认」走此路，落 config focus.last_work_min 归 v0.27.2）。保留 [1,180] 钳制
+#    （>180 钳、<1/非法/NaN 当作没传）与「已运行改期重启、cycle 归零」。
+# ③ extend(minutes=5)（§9 Q3）——非 IDLE 推移绝对时刻 _deadline 并立即落盘
+#    （deadline 是 v1 档案字段，不落盘则重启丢延长）；延长部分靠实耗记账自动
+#    计入，无需新字段；IDLE no-op（L1）。单次钳 [1,180]、非法/非正 no-op（不做缩短）。
+# ④ complete()（§4.2 B3）——提前完成走 _on_focus_complete()（completed/streak/
+#    实耗/mood 养成联动全走）后进休息，与 stop()（一概不计）明确对照；IDLE 与
+#    休息段 no-op（休息没有「提前完成」语义，提前结束用 skip()）。
+# ⑤ skip() 逻辑零改动，补 IDLE no-op 与「跳过不计 focus_sec」用例；本版**无
+#    pause()**（与 v0.27.3 暂停继续同版落地，§9 Q2 的隐式 resume 守卫一并不实现）。
+# 测试：tests/test_focus.py 52 → 79 全绿（本地不入库）；全量失败集合不新增
+# （既有 16 条漂移 + 他线在制 1 条）。
 # v0.23.7–v0.23.10：天气线增量（回填 0.23 线，接着 patch 走）。
 # v0.23.7 定位+兜底核心：IP 定位（opt-in+consent，ip-api 免费档 HTTP）+ wttr.in
 #   备用源兜底（Open-Meteo 偶发超时→立即重试→切 wttr，WWO 码表）+ 工具摘要 data

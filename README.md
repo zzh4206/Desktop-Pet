@@ -424,6 +424,7 @@ python -m compileall app.py pet
 | v0.25.5 | 番茄统计与养成：app 注入 `store`（完成番茄 `store.update(mood=+mood_gain)` 走 observer，托盘状态行自动刷新）+ `state_path=data_dir/focus_state.json`（当日完成数/累计专注秒/打断数/连续天数，跨日归零、`streak_days` 按当日有完成维护）；**重启续算**——进行中节律按 deadline 恢复（5min 宽限内且同日），恢复到 FOCUS 段时补发 `focus_rest_on` 陪伴姿态（全屏静默守卫照旧），IDLE/休息段不补发。 |
 | v0.25.6 | 番茄收尾：托盘 tooltip「🍅×今日完成数」（`TrayManager.set_focus_count` + 纯函数 `tooltip_text`，0 不显示、与状态行互不覆盖）；README 补 `focus.*` / `hotkeys.focus` 配置表与运行期口径（含「默认关 = 零输入抑制」红线）+ 版本沿革。 |
 | v0.25.7 | 番茄线文档归位（无代码改动）：`README.md`「版本沿革」的 v0.25.4/.5/.6 三行归位到表内（0.25.4 起误追加到文件末尾「参与贡献」之后，导致表内只到 v0.25.3），并补本行。 |
+| v0.27.0 | 番茄自由度扩展·模型层①（`pet/focus.py`）：**L3 记账缺陷修复**——`focus_sec` 由「按配置 `work_min` 记账」改为**按实耗**（`_enter` 记 `_phase_started_at`，收口 `min(now, _deadline) − 起点`），pomodoro 未延长时与旧口径**逐值相等**、睡眠大跳仍不补算（L2），是「延长/正计时」不失真的前置；`start(minutes, *, as_default=False)` 拆「一次性 vs 设为默认」（修 L4：旧版 `start(minutes)` 永久改写默认，Q6）；新增 `extend(minutes=5)`（只推移绝对时刻 `_deadline`，延长部分按实耗自动计入，Q3）与 `complete()`（提前完成**计入** completed/streak，与 `stop()` 不计形成明确对照）；`skip()` 逻辑零改动、只补测。入口接线/预设热更新/暂停继续/正计时/统计历史分别归 0.27.1–.7，本版 `pause()` **不存在**。 |
 
 ## 参与贡献
 

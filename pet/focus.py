@@ -17,6 +17,26 @@
 番茄→LONG(long_min)；LONG 自然收尾→IDLE（本轮结束），``skip()`` 长休→FOCUS
 （新一轮）；任意态 ``stop()``→IDLE。专注段 skip 不计完成直接进休息（诚实
 口径）；休息段 skip 不计打断。
+
+v0.27.0「番茄自由度扩展」模型层①（wiki 设计-番茄自由度扩展技术方案 §4.1/
+§4.2/§5.2）——四件模型层能力，入口接线归 v0.27.1：
+
+* **L3 记账缺陷修复（正确性，本版前置）**：``focus_sec`` 由"按配置
+  ``_work_min`` 记账"改为**按实耗**（``_enter()`` 记 ``_phase_started_at``，
+  收口按 ``min(now, _deadline) - _phase_started_at`` 结算，见
+  ``_focus_elapsed``）。**pomodoro 未延长时与旧口径逐值相等**、睡眠大跳仍
+  不补算（L2），是让"延长/正计时"不失真的前置条件。
+* ``start(minutes, *, as_default=False)``（修 L4/§9 Q6）：``minutes``
+  **只影响这一次**，不再永久改写 ``_work_min``；改默认须显式
+  ``as_default=True``。
+* ``extend(minutes=5)``：非 IDLE 推移绝对时刻 ``_deadline``（L2 天然支持），
+  延长部分靠实耗记账自动计入（§9 Q3）；IDLE no-op。
+* ``complete()``：提前完成——走 ``_on_focus_complete()`` 进休息且**计入**
+  ``completed``/``streak``，与 ``stop()``（不计）明确对照；IDLE/休息段 no-op。
+
+未实装（按 §3 分期留后续）：托盘/热键/工具入口（v0.27.1）、预设与配置热更新
+（v0.27.2）、暂停继续（v0.27.3，故本版**无 pause()**）、正计时模式
+（v0.27.4）、统计历史（v0.27.6）。
 """
 
 from __future__ import annotations
@@ -128,6 +148,24 @@ def _pick(pool) -> str:
     return random.choice(pool)
 
 
+def _parse_minutes(minutes) -> float | None:
+    """外部传入的分钟数 → [1,180] 的 float；"没传/非法/越下界" 一律 None。
+
+    沿用旧 ``start(minutes)`` 的容错口径（避免行为漂移）：``< 1``、非数值、
+    NaN 当作"没传"（用当前默认值），``> 180`` 钳制而非忽略。``None`` 入参
+    同样返回 None（区分"没传"与"传了非法值"对调用方无意义，两者同解）。
+    """
+    if minutes is None:
+        return None
+    try:
+        m = float(minutes)
+    except (TypeError, ValueError):
+        return None
+    if not (m >= 1.0):        # NaN 走此分支（NaN 与任何数比较均 False）
+        return None
+    return min(180.0, m)
+
+
 class FocusSession:
     """可选番茄节律器（对标 EatMouseSession 接口风格，proactive.py:96）。
 
@@ -161,6 +199,7 @@ class FocusSession:
 
         self._state = FocusPhase.IDLE
         self._deadline: float | None = None
+        self._phase_started_at: float | None = None   # 本相位起点（L3 实耗记账）
         self._completed_in_cycle = 0     # 本轮已完成番茄数（决定 SHORT/LONG）
         self._stats = FocusStats()
         self._state_path = state_path
@@ -192,19 +231,28 @@ class FocusSession:
 
     # ---- 用户操作 ----
 
-    def start(self, minutes: float | int | None = None) -> None:
-        """IDLE→FOCUS；已运行则改期重启（显式 start = 新一轮，cycle 归零）。"""
+    def start(self, minutes: float | int | None = None, *,
+              as_default: bool = False) -> None:
+        """IDLE→FOCUS；已运行则改期重启（显式 start = 新一轮，cycle 归零）。
+
+        ``minutes``（1–180 分钟；``<1``/非数值/NaN 一律"当作没传"、``>180``
+        钳到 180，沿用旧口径）**只影响这一次**——不改 ``self._work_min``。
+        这是修 L4（§9 Q6）：旧版 ``start(minutes)`` 会永久改写默认，用户以为
+        "只这一次"其实后续所有轮次都变了。要把本次时长写成后续默认，须显式
+        ``as_default=True``（托盘「设为默认」走此路；落 config
+        ``focus.last_work_min`` 归 v0.27.2）。
+
+        本次实际时长只用于 ``_enter`` 的 deadline；下一个专注段回到
+        ``_work_min``（除非 ``as_default=True`` 改了它）。
+        """
         now = self._now()
         self._rollover(now)
-        if minutes is not None:
-            try:
-                m = float(minutes)
-                if m >= 1.0:
-                    self._work_min = min(180.0, m)
-            except (TypeError, ValueError):
-                pass
+        one_shot = _parse_minutes(minutes)
+        if as_default and one_shot is not None:
+            self._work_min = one_shot
         self._completed_in_cycle = 0
-        self._enter(FocusPhase.FOCUS, self._work_min, now)
+        self._enter(FocusPhase.FOCUS,
+                    one_shot if one_shot is not None else self._work_min, now)
 
     def stop(self) -> None:
         """任意态→IDLE，释放全部接管（当前番茄不计完成）。幂等。"""
@@ -212,9 +260,48 @@ class FocusSession:
             return
         self._enter_idle(self._now())
 
+    def extend(self, minutes: float | int | None = 5) -> None:
+        """延长当前段（默认 +5 分钟）。**IDLE 时 no-op**（L1 零副作用）。
+
+        只推移绝对时刻 ``_deadline``（L2 epoch-deadline 天然支持；延长期间
+        "系统睡眠不补算"的初衷不变），不改 ``_work_min``/``_completed_in_cycle``
+        /state。延长部分靠 L3 实耗记账自动计入 ``focus_sec``——无需新字段
+        （§9 Q3：延长后记实耗含延长部分）。``minutes`` 单次调用钳到 [1,180]，
+        非法/非正/NaN 一律 no-op（**不做缩短**；要提前结束用 ``complete()``/
+        ``stop()``）。延长后立即落盘：``deadline`` 是 v1 档案字段，不落盘则
+        重启续算会丢延长。
+        """
+        if self._state == FocusPhase.IDLE or self._deadline is None:
+            return
+        m = _parse_minutes(minutes)
+        if m is None:
+            return
+        self._deadline += m * 60.0
+        self._persist()
+
+    def complete(self) -> None:
+        """提前完成当前专注段：**计入** ``completed``/``streak`` 后进休息。
+
+        与 ``stop()`` 形成明确对照（§4.2 B3）：``complete()`` 走
+        ``_on_focus_complete()``——完成数/连续天数/``focus_sec`` 实耗/养成
+        mood 联动全走；``stop()`` 一概不计。休息段（SHORT/LONG）与 IDLE 下
+        no-op：休息没有"提前完成"语义（提前结束休息用 ``skip()``），且若在
+        休息段计完成会凭空 +1 番茄。``focus_sec`` 按实耗（L3）：此处 deadline
+        未到，故记 ``now - _phase_started_at`` 的真实秒数（不封顶）。
+        """
+        if self._state != FocusPhase.FOCUS:
+            return
+        self._finish_focus(self._now())
+
     def skip(self) -> None:
         """跳过当前段进下一段。专注段 skip 不计完成直接进短休；短休 skip
-        进 FOCUS；长休 skip 进 FOCUS 且新一轮（cycle 归零）。休息 skip 不计打断。"""
+        进 FOCUS；长休 skip 进 FOCUS 且新一轮（cycle 归零）。休息 skip 不计打断。
+
+        **IDLE 时 no-op**（L1）。专注段 skip 既然不计完成，就**不记
+        ``focus_sec``**——实耗记账只发生在 ``_finish_focus``（自然到期 /
+        ``complete()``）这一处收口，skip 不经过它（诚实口径：跳过的那段不算
+        专注）。
+        """
         if self._state == FocusPhase.IDLE:
             return
         now = self._now()
@@ -253,13 +340,7 @@ class FocusSession:
     def _advance(self, now: float) -> None:
         phase = self._state
         if phase == FocusPhase.FOCUS:
-            self._on_focus_complete(now)
-            self._emit(_FOCUS_DONE)
-            self._completed_in_cycle += 1
-            if self._completed_in_cycle >= self._cycles:
-                self._enter(FocusPhase.LONG, self._long_min, now)
-            else:
-                self._enter(FocusPhase.SHORT, self._short_min, now)
+            self._finish_focus(now)
         elif phase == FocusPhase.SHORT:
             self._emit(_REST_DONE)
             self._enter(FocusPhase.FOCUS, self._work_min, now)
@@ -267,9 +348,21 @@ class FocusSession:
             self._emit(_REST_DONE)
             self._enter_idle(now)
 
+    def _finish_focus(self, now: float) -> None:
+        """专注段收口——自然到期（``_advance``）与 ``complete()`` 提前完成
+        共用这一条路径，保证两条入口的记账/气泡/cycle 推进逐字一致。"""
+        self._on_focus_complete(now)
+        self._emit(_FOCUS_DONE)
+        self._completed_in_cycle += 1
+        if self._completed_in_cycle >= self._cycles:
+            self._enter(FocusPhase.LONG, self._long_min, now)
+        else:
+            self._enter(FocusPhase.SHORT, self._short_min, now)
+
     def _enter(self, phase: FocusPhase, minutes: float, now: float) -> None:
         self._state = phase
         self._deadline = now + float(minutes) * 60.0
+        self._phase_started_at = now      # L3：实耗记账的相位起点
         self._reset_break_window()
         if phase == FocusPhase.FOCUS:
             self._fsm_event("focus_rest_on")
@@ -281,6 +374,7 @@ class FocusSession:
     def _enter_idle(self, now: float) -> None:
         self._state = FocusPhase.IDLE
         self._deadline = None
+        self._phase_started_at = None
         self._completed_in_cycle = 0
         self._reset_break_window()
         self._fsm_event("focus_rest_off")
@@ -292,13 +386,48 @@ class FocusSession:
             # 今日首次完成：streak +1（昨日有完成则续，否则从 1 起算）
             self._stats.streak_days += 1
         self._stats.completed += 1
-        self._stats.focus_sec += int(round(self._work_min * 60.0))
+        self._stats.focus_sec += int(round(self._focus_elapsed(now)))
         # 养成联动（0.25.5）：完成番茄 → 心情 +mood_gain（store 未注入静默）
         if self._store is not None and self._mood_gain > 0:
             try:
                 self._store.update(mood=float(self._mood_gain))
             except Exception:
                 _log.warning("[番茄] 心情增益异常", exc_info=True)
+
+    def _focus_elapsed(self, now: float) -> float:
+        """本专注段实耗秒（L3：按实耗记账，不再按 ``_work_min`` 配置值）。
+
+        起点 ``_phase_started_at`` 由 ``_enter()`` 在进入该相位那一刻写入。
+        到期收口时**以 ``_deadline`` 封顶**，这不是可选优化：
+        ① L2 的初衷是"系统睡眠过期即迁移、**不补算**"——不封顶则睡 2 小时
+           醒来的第一个 tick 会把 2 小时记进 ``focus_sec``（旧口径恒记 25min）；
+        ② 「pomodoro 未延长时与旧口径逐值相等」也只有封顶才成立：tick 有拍长，
+           实际 ``now`` 通常略晚于 ``deadline``（既有单测故意 +1s，真实 app 每拍
+           数十毫秒），不封顶会记成 1501/1500+ε。
+        延长过的段 ``_deadline`` 已后移，故延长部分照记进实耗（§9 Q3）。
+
+        重启续算：v1 档案只有 ``deadline``（无相位起点字段），
+        ``_load_persisted`` 按「``deadline`` − 本相位时长」反推
+        ``_phase_started_at``——未延长的段重启后口径仍逐值等价；**"延长后
+        重启"** 的段只能记回配置时长（延长量在 v1 无字段可存，待 v0.27.3
+        schema v2 一并携带；进程内照记不误，故非静默失真）。
+        """
+        started = self._phase_started_at
+        if started is None:
+            # 兜底（正常路径不会到这）：沿用旧口径，绝不因缺起点而丢记账
+            return max(0.0, self._work_min * 60.0)
+        elapsed = now - started
+        if self._deadline is not None:
+            elapsed = min(elapsed, self._deadline - started)
+        return max(0.0, elapsed)
+
+    def _phase_minutes(self, phase: FocusPhase) -> float:
+        """该相位的配置时长（分钟）——仅供重启反推相位起点用。"""
+        if phase == FocusPhase.SHORT:
+            return self._short_min
+        if phase == FocusPhase.LONG:
+            return self._long_min
+        return self._work_min
 
     def _refresh_dnd(self) -> None:
         if self._dnd_fn is not None:
@@ -450,6 +579,10 @@ class FocusSession:
                     and _same_day(float(deadline), now)):
                 self._state = FocusPhase(phase)
                 self._deadline = float(deadline)
+                # L3 实耗记账：v1 档案不存相位起点，按「deadline − 本相位时长」
+                # 反推。未延长的段由此与旧口径逐值等价（见 _focus_elapsed）。
+                self._phase_started_at = (
+                    self._deadline - self._phase_minutes(self._state) * 60.0)
                 self._completed_in_cycle = _int(
                     raw.get("completed_in_cycle"), 0, self._cycles)
                 _log.info("[番茄] 恢复进行中节律（%s）", phase)
@@ -462,6 +595,7 @@ class FocusSession:
             else:
                 self._state = FocusPhase.IDLE
                 self._deadline = None
+                self._phase_started_at = None
                 self._completed_in_cycle = 0
         except (OSError, ValueError):
             _log.warning("[番茄] 状态档案损坏，忽略", exc_info=True)
@@ -514,7 +648,8 @@ def build_focus_tools(session) -> list:
         name="start_pomodoro",
         description=(
             "开始一个番茄钟专注段。可选参数 minutes 指定专注时长（分钟，"
-            "1–180，默认按配置 25 分钟）；已运行时重新开始计时。"
+            "1–180）；**只影响这一次**，不改变配置里的默认时长（下一轮回到"
+            "默认值）；已运行时重新开始计时。"
         ),
         parameters={
             "type": "object",
