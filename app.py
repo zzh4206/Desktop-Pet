@@ -356,6 +356,13 @@ class PetApp:
         self._model_registry = None
         self._model_providers = {}
         self._model_selected = ""
+        # v0.23 天气线（共享层，mac/win 同代码）：未启用/未配城市 → None
+        # 静默（拍板②）。缓存落 data_dir（weather_cache.json，README 可删）。
+        # 须在 _setup_chat 之前——registry 的 get_weather 工具要拿到服务实例。
+        from pet.weather import build_weather_service
+        self._weather_service = build_weather_service(
+            self.cfg, cache_path=os.path.join(
+                self._paths["data_dir"], "weather_cache.json"))
         try:
             self._setup_chat()
         except Exception:
@@ -375,6 +382,8 @@ class PetApp:
         # 隔离决策，否则本地罐头。v0.7 注入平台 mouse_lock + 四门禁检查器 +
         # FSM 事件派发（共享 ProactiveScheduler 零平台库，经 adapter 注入）。
         from pet.proactive import ProactiveScheduler
+
+        # v0.23 天气线（共享层，mac/win 同代码）：未启用/未配城市 → None
 
         proactive_cfg = self.cfg.get("proactive", {})
         self._proactive = ProactiveScheduler(
@@ -399,10 +408,23 @@ class PetApp:
             fullscreen_fn=self.adapter.is_fullscreen_active,
             # v0.19.4 F16：mac 日历节日源（EventKit；拒绝/无绑定回落内置表）
             festival_fn=self.adapter.get_festival_source(),
+            # v0.23 天气线：快照读缓存（无网络）+ 阈值表；提醒评估在
+            # scheduler._check_weather（今日首次新快照 + 当日去重 + DND 静默）
+            weather_fn=(self._weather_service.snapshot
+                        if getattr(self, "_weather_service", None) else None),
+            weather_alerts=(self.cfg.get("weather") or {}).get("alerts"),
             # 批次B/P2-6（REVIEW-2026-09-05）：问候/节日/follow-up/唤醒链
             # 持久化——旧版全内存，重启重发早晚安/节日、回访静默丢失
             state_path=os.path.join(paths["data_dir"], "proactive_state.json"),
         )
+        # v0.23 天气刷新：daemon 线程拉新（refresh_async 内部 TTL/退避把守，
+        # 未到期立即返回）；快照消费走 _proactive.poll（30s）与 get_weather 工具
+        if getattr(self, "_weather_service", None) is not None:
+            self._weather_timer = QTimer(self.app)
+            self._weather_timer.timeout.connect(
+                self._weather_service.refresh_async)
+            self._weather_timer.start(60_000)
+            QTimer.singleShot(2000, self._weather_service.refresh_async)
         # v0.7 托盘「强制吐出」→ EatMouseSession.force_spit（停 CGEventTap + 回 idle）
         self.tray.set_spit_callback(self._proactive.force_spit)
         # v0.9 记忆管理页唤出
@@ -750,6 +772,12 @@ class PetApp:
             for schema, handler in build_win_tools():
                 registry.register(schema, handler)
         for schema, handler in build_memory_tools(self.memory):
+            registry.register(schema, handler)
+        # v0.23.3 get_weather：读缓存快照（无危险级不打扰）；未启用也注册，
+        # handler 返回失败说明（LLM 可向用户解释功能未开）
+        from pet.weather import build_weather_tool
+        for schema, handler in build_weather_tool(
+                getattr(self, "_weather_service", None)):
             registry.register(schema, handler)
 
         # v0.9/v0.8 面板 singleton 预注册：必须在 _build_chat_panel 创建首个
