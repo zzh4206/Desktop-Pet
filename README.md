@@ -233,15 +233,19 @@ python app.py --verbose
 
 | 键 | 默认值 | 范围 | 说明 |
 | --- | --- | --- | --- |
-| `weather.enabled` | `false` | 布尔 | 天气感知总开关（关闭或 `city` 为空时功能静默，不发任何请求）。 |
-| `weather.city` | `""` | 城市名 | 手动填写（如 `"Shanghai"` / `"上海"`），经 geocoding 转坐标并缓存；隐私最优，不上传其他信息。 |
+| `weather.enabled` | `false` | 布尔 | 天气感知总开关（关闭时功能静默，不发任何请求）。 |
+| `weather.city` | `""` | 城市名 | 手动填写（如 `"Shanghai"` / `"上海"`），经 geocoding 转坐标并缓存；隐私最优，不上传其他信息。填了则优先于 IP 定位。 |
 | `weather.refresh_min` | `30` | 5 – 720 | 刷新间隔（分钟）。断网时用最后一次快照并标注「数据可能过期」，不触发提醒。 |
+| `weather.locate` | `"none"` | `"none"` / `"ip"` | 定位方式：`"ip"` 用 IP 定位（仅 `city` 为空且 `locate_consent=true` 时生效）。 |
+| `weather.locate_consent` | `false` | 布尔 | IP 定位「确认开启」门禁。建议在「设置 → 桌宠权限自检」页开启（会弹确认框），也可手动填 `true`。 |
 | `weather.alerts.precip_prob` | `50` | 0 – 100 | 今日最大降水概率超过该值 → 提醒带伞（措辞不保证性：「看起来要下雨」）。 |
 | `weather.alerts.drop_c` | `5` | 0 – 40 | 较昨日最高温降温超过该值（℃）→ 提醒添衣。 |
 | `weather.alerts.hot_c` | `35` | 0 – 60 | 今日最高温达到该值（℃）→ 高温提醒。 |
 | `weather.alerts.cold_c` | `0` | −60 – 20 | 今日最低温达到该值（℃）→ 寒潮提醒。 |
 
 每类提醒每天最多一次（重启不重复发）；安静时段与勿扰模式静默。聊天中宠物可回答「今天穿什么/要下雨吗」（`get_weather` 工具，读本地缓存）。天气数据 **Powered by [Open-Meteo](https://open-meteo.com/)**（CC BY 4.0，非商用免费；准确性不做保证）。
+
+**国内可达性兜底**：Open-Meteo（境外源）在国内偶发超时——抓取失败会**立即重试一次**，仍失败自动切换备用源 [wttr.in](https://wttr.in/)（免 key；实测直连可达）。备用源字段降级：无「昨日温差」数据，降温提醒自动跳过（缺数据不猜）；其余提醒（带伞/高温/寒潮）正常。单次请求超时 6 秒，连续失败按 1→5→30 分钟退避、连续 5 次当日放弃。IP 定位由 [ip-api.com](http://ip-api.com/) 提供（免费档仅 HTTP、城市级精度；开启后仅单次发送公网 IP，坐标随缓存落盘）。
 
 ### 热键与日志
 
