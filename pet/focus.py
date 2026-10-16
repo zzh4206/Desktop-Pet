@@ -80,6 +80,27 @@ v0.27.3「番茄自由度扩展·模型层②（结构性）：暂停/继续」�
   且合理时），否则回退旧的反推公式——于是「**延长后重启**」也保真（v1 无该字段，
   只能记回配置时长）。**v1 档案必须仍能加载**：无 ``paused`` 字段 → 视为未暂停，
   走原路径。
+
+v0.27.6「番茄自由度扩展·**统计面**」（wiki 设计-番茄自由度扩展技术方案 §4.5 E
++ 裁决 Q5）——四件统计能力，**纯数据面**，不引入任何配置项：
+
+* **逐日历史**（``_history``，随 ``focus_state.json`` 落盘，schema v2 → v3）：
+  ``_rollover()`` 在把当日聚合清零**之前**，先把**刚结束的那一天**推进历史
+  （``_archive_day``；同日重复调用**覆盖不追加**，故幂等）。上限
+  ``_HISTORY_MAX_DAYS`` = 400 天，超限丢最旧（§4.5 E）。**只记有活动的天**：
+  ``date`` 为空、或当日 ``completed``/``focus_sec`` 全为 0 时**不记录**——空转日
+  不该占历史额度，也不该让"连续天数"看起来有数据。
+* ``stats_range(rng)``：按 ``"today"``/``"week"``（近 7 天含今日）/``"month"``
+  （近 30 天）聚合；未知值一律按 ``today``（宽容不抛）。**只读**——不改 phase/
+  deadline/``_stats``/``_history``（L1）。今日一律以 ``self._stats`` 为准（历史里
+  若已有今日那条也**不许算两遍**），历史按 ``date`` 去重且容忍乱序/重复。
+* 工具 ``get_focus_stats(range)``（第 7 个番茄工具，无危险级）：**任何相位（含
+  IDLE）都可查、零副作用**，回一句可读摘要（今日/近 7 天/近 30 天）。
+* 托盘 tooltip 摘要（``TrayManager.set_focus_stats_summary`` + 纯函数
+  ``format_stats_brief``），由 app 在 ``_sync_focus_tray()`` 里与相位/暂停态/模式
+  **正交**的一路独立同步。
+
+**QML 面板图表本版不做**（§8 占位登记表里已有它，仍是占位）。
 """
 
 from __future__ import annotations
@@ -101,6 +122,10 @@ _DEFAULT_SHORT_MIN = 5.0
 _DEFAULT_LONG_MIN = 15.0
 _DEFAULT_CYCLES = 4
 _DEFAULT_MOOD_GAIN = 3.0
+
+# v0.27.6（§4.5 E）：逐日历史上限（天）——超限丢最旧，防档案无限膨胀。
+# 400 天 ≈ 一年多的日粒度数据，够"近 7/30 天"聚合与长期回看。
+_HISTORY_MAX_DAYS = 400
 
 # 休息执法（break_enforce，默认关）计量窗口（§9 拍板项）：
 # 休息开始 30s 窗口内，键鼠活动累计每 10s 记一次打断；连续 2 次（累计
@@ -288,6 +313,59 @@ def _parse_presets(v) -> list:
     return out
 
 
+# ---- 统计文案（v0.27.6 §4.5 E：工具回执 + 托盘 tooltip 共用，纯函数） ----
+
+_STATS_RANGE_LABEL = {"today": "今日", "week": "近 7 天", "month": "近 30 天"}
+
+
+def _stats_label(rng) -> str:
+    """范围键 → 中文标签；未知值按 ``today``（与 ``stats_range`` 同宽容口径）。"""
+    return _STATS_RANGE_LABEL.get(str(rng or "today"), "今日")
+
+
+def _minutes_of(sec) -> int:
+    """秒 → 分钟（四舍五入、非负；非法值 0）——统计文案只报到分钟。"""
+    try:
+        return max(0, int(round(float(sec) / 60.0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def format_stats_summary(st: dict) -> str:
+    """``stats_range()`` 结果 → 一句可读摘要（v0.27.6，工具回执用）。
+
+    形如 ``今日：完成 3 个番茄 · 专注 75 分钟 · 休息打断 1 次 · 连续 5 天``；
+    近 7/30 天再带「共 N 天、日均 X 个」。纯函数、入参缺失/非法一律当 0，
+    **绝不抛**（工具回执不能因为一个坏字段变成异常）。
+    """
+    st = st if isinstance(st, dict) else {}
+    key = str(st.get("range") or "today")
+    parts = [
+        f"{_stats_label(key)}：完成 {_int(st.get('completed'), 0, 10 ** 6)} 个番茄",
+        f"专注 {_minutes_of(st.get('focus_sec'))} 分钟",
+        f"休息打断 {_int(st.get('breaks_cut'), 0, 10 ** 6)} 次",
+        f"连续 {_int(st.get('streak_days'), 0, 10 ** 4)} 天",
+    ]
+    if key != "today":
+        days = max(1, _int(st.get("days"), 1, 400))
+        parts.append(f"共 {days} 天、日均 {st.get('avg_completed', 0)} 个")
+    return " · ".join(parts)
+
+
+def format_stats_brief(st: dict) -> str:
+    """``stats_range()`` 结果 → 托盘 tooltip 用的**短**摘要（v0.27.6）。
+
+    形如 ``今日 3 个 · 专注 75 分钟 · 连续 5 天``（近 7/30 天只换首个标签）。
+    比 ``format_stats_summary`` 少「打断次数」一段——悬停一眼可看，长了会被
+    系统托盘截断。同样纯函数、不抛。
+    """
+    st = st if isinstance(st, dict) else {}
+    key = str(st.get("range") or "today")
+    return (f"{_stats_label(key)} {_int(st.get('completed'), 0, 10 ** 6)} 个 · "
+            f"专注 {_minutes_of(st.get('focus_sec'))} 分钟 · "
+            f"连续 {_int(st.get('streak_days'), 0, 10 ** 4)} 天")
+
+
 class FocusSession:
     """可选番茄节律器（对标 EatMouseSession 接口风格，proactive.py:96）。
 
@@ -316,6 +394,10 @@ class FocusSession:
         # v0.27.5：休息节律（``rest_style``）同理。
         self._mode = "pomodoro"
         self._rest_style = "auto"
+        # v0.27.6（§4.5 E）：逐日历史——**运行时状态，不由配置派生**，故必须
+        # 在 ``_apply_cfg`` **之前**初始化（``_apply_cfg`` 只写配置派生字段，
+        # 不得覆盖它）；真正的数据由 ``_load_persisted()`` 在构造末尾灌入。
+        self._history: list[dict] = []
 
         c = cfg or {}
         self._apply_cfg(c)
@@ -456,6 +538,77 @@ class FocusSession:
     def presets(self) -> list:
         """命名预设清单（只读副本；config ``focus.presets`` 归一化后）。"""
         return [dict(p) for p in self._presets]
+
+    @property
+    def history(self) -> list:
+        """逐日历史（**只读副本**；v0.27.6 §4.5 E，最旧在前、上限 400 条）。
+
+        每条形如 ``{"date": "2026-01-02", "completed": 3, "focus_sec": 4500,
+        "breaks_cut": 1}``；只含**有活动**的天（零活动日不记）。返回深拷贝的
+        浅层副本（每条再 dict 一次），调用方改不动内部状态。
+        """
+        return [dict(r) for r in self._history if isinstance(r, dict)]
+
+    def stats_range(self, rng: str = "today") -> dict:
+        """按范围聚合统计（v0.27.6，**只读**，§4.5 E）。
+
+        ``rng``：``"today"`` 当日 / ``"week"`` 近 7 天（含今日）/ ``"month"``
+        近 30 天。未知值一律按 ``"today"``（宽容，不抛）。返回
+        ``{"range","days","completed","focus_sec","breaks_cut","streak_days",
+        "avg_completed"}``：``days`` = 该范围覆盖的**天数**（1/7/30，与有没有
+        数据无关），``avg_completed`` = ``completed / days`` 保留 1 位小数。
+
+        今日用 ``self._stats``，历史天用 ``self._history``——**历史里若已有今日
+        那条，必须用 ``self._stats`` 覆盖它，不许把今日算两遍**（跨日归档当天
+        恰好被归档、或外部塞了同日期记录时都会撞上）。历史按 ``date`` 去重
+        （后写覆盖先写，容忍乱序/重复），未来日期与超出范围的日期一律不计。
+
+        **零副作用**（L1）：不调 ``_rollover``、不改 phase/deadline/``_stats``/
+        ``_history``（任何相位、含 IDLE 都可安全调用）。
+        """
+        key = str(rng or "").strip().lower()
+        if key not in ("today", "week", "month"):
+            key = "today"
+        days = {"today": 1, "week": 7, "month": 30}[key]
+        completed = _int(self._stats.completed, 0, 10 ** 6)
+        focus_sec = _int(self._stats.focus_sec, 0, 10 ** 7)
+        breaks_cut = _int(self._stats.breaks_cut, 0, 10 ** 6)
+        today = _today(self._now())
+        if days > 1 and today:
+            # 历史按 date 去重（后写覆盖先写）；今日那条**丢弃**——它由
+            # self._stats 提供，否则今日被算两遍。
+            seen: dict[str, dict] = {}
+            for rec in self._history:
+                if not isinstance(rec, dict):
+                    continue
+                d = str(rec.get("date") or "")
+                if d and d != today:
+                    seen[d] = rec
+            try:
+                base = datetime.fromisoformat(today).date()
+            except ValueError:
+                base = None
+            if base is not None:
+                for d, rec in seen.items():
+                    try:
+                        diff = (base - datetime.fromisoformat(d).date()).days
+                    except (TypeError, ValueError):
+                        continue
+                    # 今日 diff=0 已排除；未来天（diff<0）与范围外一律不计
+                    if not 0 < diff < days:
+                        continue
+                    completed += _int(rec.get("completed"), 0, 10 ** 6)
+                    focus_sec += _int(rec.get("focus_sec"), 0, 10 ** 7)
+                    breaks_cut += _int(rec.get("breaks_cut"), 0, 10 ** 6)
+        return {
+            "range": key,
+            "days": days,
+            "completed": completed,
+            "focus_sec": focus_sec,
+            "breaks_cut": breaks_cut,
+            "streak_days": _int(self._stats.streak_days, 0, 10 ** 4),
+            "avg_completed": round(completed / days, 1),
+        }
 
     # ---- 本轮有效时长（预设覆盖优先，否则全局默认） ----
 
@@ -927,6 +1080,13 @@ class FocusSession:
         today = _today(now)
         if not today or self._stats.date == today:
             return
+        # v0.27.6（§4.5 E）：跨日前把**刚结束的那一天**推进逐日历史，
+        # 否则当日聚合会被直接清零、周/月统计无从谈起。
+        # 幂等由上面的早退保证（同日重复调用到不了这里）；首次启动
+        # ``self._stats.date`` 为空串 → ``_archive_day`` 内部直接 return，
+        # 不会产生一条空记录。
+        self._archive_day(self._stats.date, self._stats.completed,
+                          self._stats.focus_sec, self._stats.breaks_cut)
         # 跨日/首次：日计数归零；streak 按「昨日有完成」延续
         if self._stats.date == _yesterday(today) and self._stats.completed > 0:
             streak = self._stats.streak_days
@@ -934,6 +1094,35 @@ class FocusSession:
             streak = 0
         self._stats = FocusStats(date=today, completed=0, focus_sec=0,
                                  breaks_cut=0, streak_days=streak)
+
+    def _archive_day(self, date, completed, focus_sec, breaks_cut) -> None:
+        """把一天聚合成一条历史记录（幂等：同日重复调用覆盖而非追加）。
+
+        ``date`` 为空或**当日零活动**（completed/focus_sec 都是 0）时不记录——
+        空转日不该占历史额度，也不该让"连续天数"看起来有数据。
+        （``breaks_cut`` 单独 > 0 但既无完成也无专注的天同样不记：休息执法只在
+        专注节律跑起来后才有输入，那种"只打断没专注"的天在语义上是空转。）
+
+        记录形状固定为 ``{"date": str, "completed": int, "focus_sec": int,
+        "breaks_cut": int}``。同日覆盖而非追加：``_rollover`` 的早退已保证跨日
+        只归档一次，这里是二重保险（例如外部直接调 ``_archive_day``）。
+        最后统一 ``[-_HISTORY_MAX_DAYS:]`` 截断——超限丢最旧（§4.5 E）。
+        """
+        day = str(date or "")
+        if not day:
+            return
+        c = _int(completed, 0, 10 ** 6)
+        sec = _int(focus_sec, 0, 10 ** 7)
+        cut = _int(breaks_cut, 0, 10 ** 6)
+        if c == 0 and sec == 0:
+            return
+        rec = {"date": day, "completed": c, "focus_sec": sec,
+               "breaks_cut": cut}
+        if self._history and self._history[-1].get("date") == day:
+            self._history[-1] = rec
+        else:
+            self._history.append(rec)
+        self._history = self._history[-_HISTORY_MAX_DAYS:]
 
     # ---- 内部：持久化（focus_state.json 原子写，proactive.py:307 同款） ----
 
@@ -943,10 +1132,10 @@ class FocusSession:
         try:
             phase = None if self._state == FocusPhase.IDLE else self._state.value
             data = {
-                # v0.27.3：schema 1 → 2（新增 paused/remaining_s/phase_started_at）。
-                # **loader 不读 version**（§5.2 坑 1），故别指望版本号自动分流——
-                # 分流靠显式判 `paused` 键；version 只作档案自描述。
-                "version": 2,
+                # v0.27.6：schema 2 → 3（新增 history 逐日历史）。
+                # **loader 依旧不读 version**（§5.2 坑 1），故别指望版本号自动
+                # 分流——v1/v2 档案无 `history` 键 → 历史为空列表，会话照常恢复。
+                "version": 3,
                 "stats": {
                     "date": self._stats.date,
                     "completed": self._stats.completed,
@@ -954,6 +1143,9 @@ class FocusSession:
                     "breaks_cut": self._stats.breaks_cut,
                     "streak_days": self._stats.streak_days,
                 },
+                # v3：逐日历史（最旧在前，上限 _HISTORY_MAX_DAYS 由 _archive_day
+                # 保证）。写副本，防 dump 期间被并发改动。
+                "history": list(self._history),
                 "phase": phase,
                 "deadline": self._deadline if phase else None,
                 "completed_in_cycle": self._completed_in_cycle if phase else 0,
@@ -996,6 +1188,28 @@ class FocusSession:
                     breaks_cut=_int(s.get("breaks_cut"), 0, 10 ** 6),
                     streak_days=_int(s.get("streak_days"), 0, 10 ** 4),
                 )
+            # v0.27.6（§4.5 E）：逐日历史——**容错**读回。非 list 当空；逐条只认
+            # dict 且 `date` 为非空 str（数值按 _int 钳制 ≥0），截断到上限。
+            # v1/v2 档案无 `history` 键 → 历史为空列表，**绝不因此丢弃整个会话**
+            # （version 依旧不参与分流，见 _persist 注）。
+            # 顺序要紧：必须在下面的 `_rollover(now)` **之前**灌入，否则跨日时
+            # `_rollover` 归档的"昨天"会写进一个还没读回来的空历史里。
+            hist = raw.get("history")
+            if isinstance(hist, list):
+                out = []
+                for item in hist:
+                    if not isinstance(item, dict):
+                        continue
+                    d = str(item.get("date") or "")
+                    if not d:
+                        continue
+                    out.append({
+                        "date": d,
+                        "completed": _int(item.get("completed"), 0, 10 ** 6),
+                        "focus_sec": _int(item.get("focus_sec"), 0, 10 ** 7),
+                        "breaks_cut": _int(item.get("breaks_cut"), 0, 10 ** 6),
+                    })
+                self._history = out[-_HISTORY_MAX_DAYS:]
             now = self._now()
             self._rollover(now)
             phase = raw.get("phase")
@@ -1239,6 +1453,26 @@ class _ResumePomodoroHandler:
                            "active": self._session.active, "paused": False})
 
 
+class _GetFocusStatsHandler:
+    """只读统计查询（v0.27.6 §4.5 E + 裁决 Q5）。
+
+    **任何相位（含 IDLE）都可查、零副作用**：只调 ``stats_range()``（纯读），
+    不改 ``_stats``/``_history``/``_deadline``/相位，也不触发 ``_rollover``。
+    与 ``get_weather`` 等 ``get_*`` 类查询一致：无危险级、不经 confirm。
+    """
+
+    def __init__(self, session) -> None:
+        self._session = session
+
+    def execute(self, args: dict, ctx):
+        from pet.tools_schema import ToolResult
+
+        if self._session is None:
+            return ToolResult(False, "番茄功能未启用（config focus.enabled）", {})
+        st = self._session.stats_range((args or {}).get("range") or "today")
+        return ToolResult(True, format_stats_summary(st), st)
+
+
 def build_focus_tools(session) -> list:
     """番茄工具清单（app 喂 ToolRegistry.register，与天气/记忆工具并列）。"""
     from pet.tools_schema import ToolSchema
@@ -1313,9 +1547,29 @@ def build_focus_tools(session) -> list:
         parameters={"type": "object", "properties": {},
                     "additionalProperties": False},
     )
+    # v0.27.6 统计查询（§4.5 E + 裁决 Q5）：**只读**、无必填项、无危险级。
+    # 与 get_* 类查询同口径（dangerous=False / dangerous_when=None）。
+    stats_schema = ToolSchema(
+        name="get_focus_stats",
+        description=(
+            "查询番茄专注统计（**只读，不改变任何节律状态**；空闲时也可查）。"
+            "可选参数 range：\"today\" 今日（默认）/ \"week\" 近 7 天（含今日）/ "
+            "\"month\" 近 30 天；其余值按今日处理。返回该范围的完成番茄数、累计"
+            "专注时长、休息打断次数、连续天数；近 7/30 天另含覆盖天数与日均"
+            "完成数。逐日历史只保留有活动的天（上限 400 天）。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"range": {"type": "string",
+                                     "enum": ["today", "week", "month"],
+                                     "default": "today"}},
+            "additionalProperties": False,
+        },
+    )
     return [(start_schema, _StartPomodoroHandler(session)),
             (stop_schema, _StopPomodoroHandler(session)),
             (skip_schema, _SkipPomodoroHandler(session)),
             (extend_schema, _ExtendPomodoroHandler(session)),
             (pause_schema, _PausePomodoroHandler(session)),
-            (resume_schema, _ResumePomodoroHandler(session))]
+            (resume_schema, _ResumePomodoroHandler(session)),
+            (stats_schema, _GetFocusStatsHandler(session))]

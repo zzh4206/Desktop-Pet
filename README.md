@@ -357,6 +357,26 @@ python app.py --verbose
 （那三项才有"误点"风险）。预设里的 `short_min`/`long_min`/`cycles` 省略时回落
 全局 `focus.*` 值；预设**只作用于本轮**，回空闲即清除。
 
+**统计与历史（v0.27.6）**：番茄数据除了"今日"，还留下来了逐日历史，可以回看上周、
+上个月干了多少：
+
+- **逐日历史**随 `focus_state.json` 一起保存（同目录、可删），**上限 400 天**，超限
+  **丢最旧**；每天一条，形如 `{"date","completed","focus_sec","breaks_cut"}`。
+- **只记有活动的天**：当天既没完成番茄、也没有专注时长就不落记录——空转日不占额度，
+  也不会让"连续天数"看起来有数据。
+- **跨日自动归档**：新的一天到来时（启动 / 开始新一段时会检查）把**刚结束的那一天**
+  推进历史，再把当日计数清零；同一天重复触发**只覆盖不追加**（幂等）。
+- **聊天工具 `get_focus_stats(range)`**：`range` 取 `"today"`（默认）/ `"week"`
+  （近 7 天含今日）/ `"month"`（近 30 天），回一句可读摘要，例如
+  「今日：完成 3 个番茄 · 专注 75 分钟 · 休息打断 1 次 · 连续 5 天」；近 7/30 天
+  另带「共 N 天、日均 X 个」。**只读**——任何相位（含空闲）都能查，不改节律状态。
+- **托盘 tooltip 摘要**：悬停托盘图标多一行「今日 3 个 · 专注 75 分钟 · 连续 5 天」
+  （与既有的「🍅×N」、需求状态行互不覆盖；关掉番茄功能则整行不显示）。
+- 存档格式随之升到 **schema v3**（新增 `history`）；**v1/v2 老档案仍能照常加载**
+  （无 `history` 即视为历史为空），不需要手工迁移。
+- **QML 面板图表仍是占位（§8）**：本版只做数据面（历史 + 查询工具 + tooltip 摘要），
+  聊天面板里的统计图表**尚未实现**，别以为面板上已经能看到曲线。
+
 ### 主动纠缠（可选）
 
 宠物有自己的「陪伴值」（`attention`）——与心情/饱食/清洁度并列的**第四个独立数值**，
@@ -510,6 +530,7 @@ python -m compileall app.py pet
 | v0.27.3 | 番茄自由度扩展·**模型层②（结构性）：暂停/继续**（本线最高风险版：结构性 + `focus_state.json` **schema v2**）。**模型层**：新增剩余量语义 `_paused_at`/`_remaining_s`——`pause()` 把 `_deadline − now` 冻结进 `_remaining_s` 后置 `_deadline = None`（L2 是绝对 epoch，暂停不能靠"停表"），`resume()` 按 `now + _remaining_s` 重算并**回填已消耗部分** `_phase_started_at = now − (相位时长 − 剩余)`（§5.2 坑 3：不回填则 L3 实耗丢掉"暂停前已专注的那段"）；`tick()` **最前置早退**（紧跟 `_refresh_dnd()`、在 IDLE 判断之前）→ 暂停态**睡多久都不迁移、不补算**；`_focus_elapsed` 另补暂停态兜底分支（按"相位时长 − 冻结剩余"计已消耗量）。**Q1**：暂停期间 `active` **仍为 True**（严格 == state != IDLE，L1 不削弱；久坐/吃鼠标/纠缠门禁继续**静默**＝"我还在专注，只是暂时离开"），但 `pause()` 发 `focus_rest_off`（姿态回 idle 便于辨识）、`resume()` 在 FOCUS 段发 `focus_rest_on`（重新趴下）；**暂停时长不计入 `focus_sec`**。**Q2**：`complete()` 在暂停态**先隐式 `resume()`** 再 `_finish_focus()`（不 resume 则 `_deadline=None` 不封顶会把暂停时长算进专注），不额外计打断/完成；`skip()`/`stop()`/自然迁移**不特判**——`_enter()`/`_enter_idle()` 各自清暂停态即自动离开（关键简化）。**schema v2 三坑全解**：`_persist()` 写 `version: 2` + `paused` + `remaining_s` + `phase_started_at`；loader 不读 `version`（坑 1）→ **显式**加暂停分支，且在 `phase` 判定**之前**、**不做 deadline 三重校验**（暂停态 `_deadline=None` 必过不了 → 会静默落回 IDLE 让暂停的番茄消失，坑 2）→ 语义：**暂停跨重启仍然暂停、剩余时间不变**（app 关多久都算暂停）。非暂停路径**优先**用档案 `phase_started_at`（存在且合理时）否则回退旧反推公式，于是「**延长后重启**」实耗也保真（0.27.0 起挂在 `_focus_elapsed` docstring 的注记本版收口）；**v1 老档案仍能加载**（无 `paused` 字段 → 视为未暂停，走原路径，无需手工迁移）。**入口层（同版接线，非 UI 壳）**：托盘「⏸ 暂停 / ▶️ 继续」**单项**、文案随 `paused` 切换（`focus_availability` 的 `pause` = `active`、新增 `pause_label`；**IDLE 置灰**，符合 L1）→ `app._toggle_focus_pause()` 按 `paused` 分发 `resume()`/`pause()`；可选热键 **id=5** `hotkeys.focus_pause`（**默认空串 = 不注册**，schema 刻意不设 `minLength`；`platform.start_hotkeys` 基类/mac/win 三处加 `pause_key`/`on_pause` 透传，app `_on_hotkey_fired` hid==5 分发）；工具新增 `pause_pomodoro`/`resume_pomodoro`（IDLE／已暂停／未暂停各返回**可读文案**而非静默失败）。本版**不做**：正计时（.4）、无休息（.5）、统计历史（.6）。 |
 | v0.27.4 | 番茄自由度扩展·**模型层③（结构性）：正计时 / 不限时**：新增 `focus.mode`（`"pomodoro"` 默认 / `"stopwatch"`；**可选键、不进 `required`**，老配置不会整段回退）。`stopwatch` 下专注段**不设 deadline**（`_enter` 里按模式决定），只累计实耗；`tick()` 自 v0.25 起就容忍 `_deadline is None`，故**无需新分支**；结束靠 停止（不计完成）/ 提前完成（计入完成、按实耗）/ 跳过（不计完成），**一律回 IDLE、不进 SHORT/LONG**（无休息节律）。暂停在正计时下照样可用：无剩余量可冻结，改为 `resume()` 时**把 `_phase_started_at` 后移暂停时长**，故暂停时长不计入 `focus_sec`。持久化 `version: 2` 增记 `mode`，loader 新增 **stopwatch 分支**（正计时 `_deadline` 恒为 `None`，不分流则**会话重启后凭空消失**，与 v0.27.3 §5.2 坑 2 同型）。托盘在 `stopwatch` 下把时长类入口（⏱ / 🕘 / 📌 / ⭐）**置灰**并改 toggle 文案为「🍅 开始 / 停止正计时」；`app` 经 `set_focus_mode` 与相位、暂停态**三路正交同步**。 |
 | v0.27.5 | 番茄自由度扩展·**休息节律自由度：无休息**：新增 `focus.rest_style`（`"auto"` 默认 / `"none"`；**可选键、不进 `required`**，老配置不会整段回退）。`none` 时 `_finish_focus` 在照常累加 `_completed_in_cycle` 后**直接 `_enter(FOCUS)`**（到 `cycles` 归零以保持计数器有界），**SHORT/LONG 永不出现**；`skip()` 在专注段的落点同样改为专注段（跳过仍**不计完成、不记实耗**，口径不变）。与 `focus.mode` 一样是**配置派生**，`reconfigure` 热重载**只影响下一段、不动当前段**；与正计时叠加时**正计时优先**（它本就不参与休息节律）。`pet/tray.py` **无需改动**——无休息下 SHORT/LONG 不出现，相位可用性天然只剩专注段一态。测试 139→147。 |
+| v0.27.6 | 番茄自由度扩展·**统计面（逐日历史 + 查询工具 + tooltip 摘要）**（§4.5 E + 裁决 Q5，**纯数据面，无配置改动**）。`pet/focus.py`：新增逐日历史 `_history`（**运行时状态，不由配置派生**，故在 `_apply_cfg` 之前初始化）——`_rollover()` 在把当日聚合清零**之前**先归档「刚结束的那一天」（新增 `_archive_day(date, completed, focus_sec, breaks_cut)`：同日重复调用**覆盖不追加**故幂等；`date` 为空或当日零活动（`completed`/`focus_sec` 都是 0）**不记录**——空转日不占额度、也不让"连续天数"看起来有数据；上限 `_HISTORY_MAX_DAYS`=**400 天**，超限 `[-400:]` **丢最旧**）。`_persist()` 的 `version` 由 2 改 **3** 并加 `"history": list(self._history)`；`_load_persisted()` **容错**读回（非 list 当 `[]`、逐条只认 dict 且 `date` 为非空 str、数值经 `_int` 钳制 ≥0、同样截断到 400）且**在 `_rollover` 之前**灌入（否则跨日归档写进空历史）——**v1/v2 档案（无 `history`）照旧可加载、会话不丢**（loader 依旧不读 `version`）。新增**只读**聚合 `stats_range(rng)`：`today`/`week`（近 7 天含今日）/`month`（近 30 天），未知值按 `today`（宽容不抛），返回 `{range,days,completed,focus_sec,breaks_cut,streak_days,avg_completed}`；**今日一律用 `_stats`**（历史里若已有今日那条必丢弃，绝不算两遍），历史按 `date` 去重（后写覆盖先写，容忍乱序/重复），未来日期与范围外不计；**零副作用**（不调 `_rollover`、不动相位/deadline/`_stats`/`_history`）。新增只读属性 `history`（深拷贝副本）与纯函数 `format_stats_summary`/`format_stats_brief`（工具回执 / tooltip 文案共用，坏字段按 0、绝不抛）。工具新增第 7 个 **`get_focus_stats(range)`**（可选 `range` 枚举、**无必填项**、`dangerous=False`/`dangerous_when=None` 与 `get_*` 类查询同口径；**任何相位含 IDLE 都可查、零副作用**，回一句可读摘要；近 7/30 天带「共 N 天、日均 X 个」）。`pet/tray.py`：纯函数 `tooltip_text` 增第 4 段统计摘要（与基础行/「🍅×N」/状态行**四段互不覆盖**）+ 新 setter **`set_focus_stats_summary(text)`**（空串 = 不显示该行、文案变才 `setToolTip`、幂等早返回，与 `set_focus_count`/`set_status` 同风格）；`app.py` 在 `_sync_focus_tray()` 里作为**第四路正交同步**（与 `set_focus_phase`/`set_focus_paused`/`set_focus_mode` 并列，文案由 `format_stats_brief(sess.stats_range("today"))` 派生，关掉番茄功能则整行隐藏）。**QML 面板图表本版不做**（§8 占位登记表已有它，仍是占位）。`focus.py`/`tray.py` 共享层仍平台库-free；`pet/config.py` 与 `config.example.json` **无改动**（本版不引入配置项）。 |
 
 ## 参与贡献
 

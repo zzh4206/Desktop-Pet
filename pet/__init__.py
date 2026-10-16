@@ -121,7 +121,17 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.5"
+__version__ = "0.27.6"
+# v0.27.6：番茄自由度扩展「统计面」（wiki 设计-番茄自由度扩展技术方案 §4.5 E +
+# 裁决 Q5）——纯数据面，无配置改动：`FocusSession._history` 逐日历史（跨日
+# `_rollover` 归档「刚结束的那一天」，同日覆盖不追加；上限 400 天超限丢最旧；
+# **只记有活动的天**）随 `focus_state.json` 落盘（schema v2 → **v3**；v1/v2 档案
+# 无 `history` 仍照常加载）；`stats_range("today"/"week"/"month")` 只读聚合（今日
+# 用 `_stats`、历史天用 `_history`，今日绝不算两遍；未知范围按 today）；工具
+# `get_focus_stats(range)`（第 7 个番茄工具，任何相位含 IDLE 可查、零副作用、
+# 无危险级）+ 托盘 tooltip 统计摘要行（`TrayManager.set_focus_stats_summary`，
+# app 在 `_sync_focus_tray()` 里与相位/暂停态/模式四路正交同步）。**QML 面板
+# 图表仍是占位**（§8，本版不做）。
 # v0.27.3：番茄自由度扩展「模型层②（结构性）：暂停/继续」（wiki 设计-番茄自由度
 # 扩展技术方案 §5.1/§5.2）——本线**最高风险版**（结构性 + `focus_state.json`
 # schema v2）：

@@ -220,15 +220,19 @@ def apply_focus_menu(actions: dict, state, last_work_min=None,
 
 
 def tooltip_text(base: str, focus_count: int = 0,
-                 status: str | None = None) -> str:
+                 status: str | None = None,
+                 focus_stats: str | None = None) -> str:
     """托盘 tooltip 合成（纯函数，便于无 Qt 单测）。
 
     顺序：基础行（v0.17 热键提示）→ v0.25.6 今日番茄「🍅×N」（0 不显示）
-    → v0.19.2 状态行；三段互不覆盖（各自 setter 只改自己那段）。
+    → v0.27.6 统计摘要行（空/None 不显示）→ v0.19.2 状态行；四段互不覆盖
+    （各自 setter 只改自己那段）。
     """
     parts = [base]
     if focus_count:
         parts.append(f"🍅×{int(focus_count)}")
+    if focus_stats:
+        parts.append(focus_stats)
     if status:
         parts.append(status)
     return "\n".join(parts)
@@ -399,10 +403,11 @@ class TrayManager(QObject):
 
     def _apply_tooltip(self) -> None:
         # v0.25.6 番茄线：今日完成数「🍅×N」（0 不显示——没开番茄的托盘与
-        # 旧版逐字一致）；合成逻辑在模块级纯函数 tooltip_text
+        # 旧版逐字一致）；v0.27.6 再加一行统计摘要（空串不显示）；合成逻辑在
+        # 模块级纯函数 tooltip_text
         self._tray.setToolTip(tooltip_text(
             self._base_tooltip, getattr(self, "_focus_count", 0),
-            self._status_line))
+            self._status_line, getattr(self, "_focus_stats_summary", None)))
 
     def set_focus_count(self, count: int) -> None:
         """v0.25.6：今日完成番茄数进 tooltip（app 完成/跨日/启动时调）。
@@ -413,6 +418,21 @@ class TrayManager(QObject):
         if count == getattr(self, "_focus_count", 0):
             return
         self._focus_count = count
+        self._apply_tooltip()
+
+    def set_focus_stats_summary(self, text: str) -> None:
+        """v0.27.6：番茄统计摘要行进 tooltip（如 `今日 3 个 · 专注 75 分钟 ·
+        连续 5 天`；空串/None = **不显示该行**，与开启前逐字一致）。
+
+        与 ``set_focus_count``/``set_status`` 同风格、**互不覆盖**（各占自己那
+        一段）；由 app 在 ``_sync_focus_tray()`` 里与相位/暂停态/模式**正交**地
+        一路独立同步。仅当文案变化才写 QSystemTrayIcon（幂等早返回，tick 每拍
+        调用零成本）。
+        """
+        text = str(text or "")
+        if text == getattr(self, "_focus_stats_summary", ""):
+            return
+        self._focus_stats_summary = text
         self._apply_tooltip()
 
     def set_autostart_state(self, enabled: bool) -> None:

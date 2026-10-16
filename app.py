@@ -1973,6 +1973,19 @@ class PetApp:
                 int(sess.stats.completed) if sess is not None else 0)
         except Exception:
             self.logger.warning("[番茄] tooltip 计数同步失败", exc_info=True)
+        # v0.27.6：统计摘要行（如「今日 3 个 · 专注 75 分钟 · 连续 5 天」）是
+        # **第四路正交同步**——与相位/暂停态/模式各管各的，互不覆盖；文案经
+        # 纯函数 format_stats_brief 从 stats_range("today") 派生（只读、零
+        # 副作用，IDLE 下同样有值），set_focus_stats_summary 自身按文案变幂等
+        # 早返回，故 tick 每拍调用零成本。
+        try:
+            from pet.focus import format_stats_brief
+
+            self.tray.set_focus_stats_summary(
+                format_stats_brief(sess.stats_range("today"))
+                if sess is not None else "")
+        except Exception:
+            self.logger.warning("[番茄] tooltip 统计摘要同步失败", exc_info=True)
         # v0.27.2「记住上次时长」：三入口（托盘/热键/工具）汇到 session 的
         # last_work_min，故此处一处检测即全覆盖；值未变零成本早返回
         try:
