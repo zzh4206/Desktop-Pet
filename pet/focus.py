@@ -195,6 +195,12 @@ _STOPPED = (
     "好，先到这儿，休息一下～",
     "停下了，随时叫我～",
 )
+# v0.27.10：续算的「最后一段」跑完时的**单一**文案——不说"休息一下吧"（本轮
+# 并不进休息，而是直接回待机），也不说"开始下一轮"。
+_RESUME_ONCE_DONE = (
+    "上次那段跑完啦，已回到待机～需要的话再叫我开始🍅",
+    "这一轮收尾了，我先歇着，随时可以再开～",
+)
 
 
 def _today(now: float) -> str:
@@ -415,6 +421,13 @@ class FocusSession:
         # v0.27.9：延长/停止的「轻反馈」节流位——连按「➕ 延长」时 1s 内不重复
         # 弹气泡（气泡虽是单例控件、重复 show 只会替换文本，但音效会重复播）。
         self._last_extend_emit_at = float("-inf")
+        # v0.27.10（用户拍板「续算只续当前段，跑完就停」）：本次运行**从档案
+        # 恢复**的那一段跑完 → 回 IDLE，**不自动进入下一段**。此前重启若接在
+        # 一段快结束的番茄上，会「完成 → 5 分钟短休 → 自动开下一段专注」，
+        # 用户零操作却看到番茄自己在跑（已用状态文件+实验复现）。显式
+        # start/skip/complete/stop 视为「本次运行由用户主导」，清除该标记、
+        # 恢复常规节律。
+        self._resume_once = False
 
         c = cfg or {}
         self._apply_cfg(c)
@@ -673,6 +686,7 @@ class FocusSession:
         self._rollover(now)
         one_shot = _parse_minutes(minutes)
         self._run = None
+        self._resume_once = False     # v0.27.10：显式 start = 本次运行用户主导
         if as_default and one_shot is not None:
             self._work_min = one_shot
         self._completed_in_cycle = 0
@@ -700,6 +714,7 @@ class FocusSession:
         now = self._now()
         self._rollover(now)
         self._run = _preset_overrides(preset)
+        self._resume_once = False     # v0.27.10：显式按预设启动 = 用户主导
         self._completed_in_cycle = 0
         effective = self._work_minutes()
         self._last_work_min = effective
@@ -820,6 +835,8 @@ class FocusSession:
             self.resume()                     # Q2：先隐式继续（不额外计打断）
         if self._state != FocusPhase.FOCUS:
             return
+        # v0.27.10：用户点了「提前完成」= 本次运行由用户主导，正常进休息
+        self._resume_once = False
         self._finish_focus(self._now())
 
     def skip(self) -> None:
@@ -837,6 +854,8 @@ class FocusSession:
         """
         if self._state == FocusPhase.IDLE:
             return
+        # v0.27.10：用户点了「跳过」= 本次运行由用户主导，恢复常规节律
+        self._resume_once = False
         now = self._now()
         phase = self._state
         if self._mode == "stopwatch":
@@ -895,6 +914,13 @@ class FocusSession:
         if phase == FocusPhase.FOCUS:
             self._finish_focus(now)
         elif phase == FocusPhase.SHORT:
+            # v0.27.10：续算的休息段到点 → 回 IDLE，**不自动开下一段专注**
+            # （此前这里会 `_enter(FOCUS)`，用户零操作就看到番茄自己在跑）
+            if self._resume_once:
+                self._resume_once = False
+                self._emit(_RESUME_ONCE_DONE)
+                self._enter_idle(now)
+                return
             self._emit(_REST_DONE)
             self._enter(FocusPhase.FOCUS, self._work_minutes(), now)
         else:  # LONG 自然收尾 → 本轮结束回 IDLE（§3 FOCUS/IDLE 两分支之 IDLE）
@@ -911,6 +937,14 @@ class FocusSession:
         （``_enter_idle`` 本就会归零），也不进短休/长休。
         """
         self._on_focus_complete(now)
+        # v0.27.10：续算的专注段到点 → 完成数/实耗照常记账，但**回 IDLE**、
+        # 不自动进休息（「只续当前段，跑完就停」）。单发一条收尾文案，避免
+        # 先说"休息一下吧"紧接着又回待机的自相矛盾。
+        if self._resume_once:
+            self._resume_once = False
+            self._emit(_RESUME_ONCE_DONE)
+            self._enter_idle(now)
+            return
         self._emit(_FOCUS_DONE)
         if self._mode == "stopwatch":
             self._enter_idle(now)
@@ -959,6 +993,7 @@ class FocusSession:
         self._remaining_s = None
         self._completed_in_cycle = 0
         self._run = None          # v0.27.2：本轮预设覆盖到 IDLE 即清除（D1）
+        self._resume_once = False  # v0.27.10：回 IDLE 即无「续算最后一段」态
         self._reset_break_window()
         self._fsm_event("focus_rest_off")
         self._persist()
@@ -1280,6 +1315,7 @@ class FocusSession:
                         float(st) if isinstance(st, (int, float)) else now)
                 self._completed_in_cycle = _int(
                     raw.get("completed_in_cycle"), 0, self._cycles)
+                self._resume_once = True   # v0.27.10：这段跑完就回 IDLE
                 _log.info("[番茄] 恢复**暂停中**的节律（%s，剩余 %.0fs）",
                           phase, self._remaining_s)
                 # Q1：暂停态姿态＝起身回 idle（不发 focus_rest_on）
@@ -1299,6 +1335,7 @@ class FocusSession:
                     self._phase_started_at = float(st)
                     self._completed_in_cycle = _int(
                         raw.get("completed_in_cycle"), 0, self._cycles)
+                    self._resume_once = True   # v0.27.10：这段跑完就回 IDLE
                     _log.info("[番茄] 恢复进行中的**正计时**（起点 %.0f）",
                               self._phase_started_at)
                     # 重启续算：正计时专注中 → 补发陪伴姿态（同 0.25.5 口径）
@@ -1326,6 +1363,7 @@ class FocusSession:
                         self._deadline - self._phase_minutes(self._state) * 60.0)
                 self._completed_in_cycle = _int(
                     raw.get("completed_in_cycle"), 0, self._cycles)
+                self._resume_once = True   # v0.27.10：这段跑完就回 IDLE
                 _log.info("[番茄] 恢复进行中节律（%s）", phase)
                 # 0.25.5 重启续算：恢复成 FOCUS 中 → 补发陪伴姿态事件。构造期
                 # 没有「进入专注段」这一刻，不补发则重启后宠物不趴下（节律/
