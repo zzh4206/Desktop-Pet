@@ -121,7 +121,19 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.26.6"
+__version__ = "0.24.7"
+# v0.24.7：陪伴值的**可见性**补齐——0.24.0 把它落成第四个独立数值，但状态板一行
+# 都没显示，且托盘状态行的「·有点想你」实为**走不到的死分支**（_need_thresholds
+# 没有 attention 键 → alerts() 对 attention 恒不触线 → low 恒 False）：
+# ① 状态板「养成」段新增「陪伴」行（数值 + 区段名，低于线转 warn，紧跟清洁）。
+#    区段名来自 ZONE_TABLE 新增的 attention 三段（很想你/有点想你/很满足）；
+#    NEED_FIELDS 不含 attention，故 zones() 不会自动带出，状态板显式调 zone()。
+# ② _need_thresholds 补 attention 键 = `attention.pester_threshold`（与「她开始
+#    想要关注」同一条线，避免两套口径漂移；缺键时回落 35）。
+# ③ 陪伴定为**软需求**：低于线不打 ⚠、不点亮托盘红点（红点语义是「你必须处理」：
+#    饿/脏/低落），只给一句人设化暗示「陪伴12·有点想你」。
+# window.set_need_thresholds 按白名单（fullness/cleanliness/mood）过滤，故右键
+# 菜单 ⚠ 语义不变；status_line 的硬需求告警语义亦不变。
 # v0.26.6：语音与气泡结合 + 开关反馈音——``voice.proactive_speak`` 默认改
 # True（用户拍板「之前就有气泡提示，语音应该和它结合」：主开关一开，气泡
 # 含主动关怀与聊天回复**一起朗读**），该键降级为细调项（显式 false 才只剩

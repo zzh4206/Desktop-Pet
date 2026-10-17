@@ -253,6 +253,11 @@ class PetApp:
             "fullness": float(need.get("fullness", 30.0)),
             "cleanliness": float(need.get("cleanliness", 25.0)),
             "mood": float(need.get("mood", 20.0)),
+            # v0.24.7 陪伴低线 = 纠缠阈值（「她开始想要关注」是同一条线，避免
+            # 两套口径漂移）。只喂状态行文案与状态板配色：window._need_thresholds
+            # 按白名单（fullness/cleanliness/mood）过滤，故右键菜单 ⚠ 语义不变。
+            "attention": float((self.cfg.get("attention") or {}).get(
+                "pester_threshold", 35.0)),
         }
         # v0.15.1 接回：新引擎有效部分（motion + wind/sun）经中间层 EngineBridge
         # 叠加到原有引擎 frames；任一环失败 → 恒等（原有引擎兜底，不阻断启动）。
@@ -2313,6 +2318,15 @@ class PetApp:
             rows.append({"type": "field", "name": "清洁",
                          "value": f"{state.cleanliness:.1f} · {_zones['cleanliness']}",
                          "level": "warn" if "cleanliness" in _alerts else "ok"})
+            # v0.24.7 陪伴（第四个独立数值）：此前只有存档/托盘状态行能看到，
+            # 状态板漏了这一行。区段名走 ZONE_TABLE['attention']（NEED_FIELDS 不含
+            # attention，故不能从 _zones 取，显式调 zone()）。
+            from pet.needs import zone as _zone_of
+
+            _att_v = float(getattr(state, "attention", 0.0))
+            rows.append({"type": "field", "name": "陪伴",
+                         "value": f"{_att_v:.1f} · {_zone_of('attention', _att_v)}",
+                         "level": "warn" if "attention" in _alerts else "ok"})
             rows.append({"type": "field", "name": "年龄", "value": f"{state.age:.1f} 天", "level": "ok"})
             rows.append({"type": "field", "name": "养护分", "value": f"{score:.1f}",
                          "level": "ok" if score >= healthy_thr else "warn"})

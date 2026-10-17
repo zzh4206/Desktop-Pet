@@ -48,6 +48,10 @@ ZONE_TABLE: dict[str, tuple[tuple[float, str], ...]] = {
                  (100.0, "吃饱")),
     "cleanliness": ((15.0, "脏透了"), (35.0, "有点脏"), (100.0, "干净")),
     "mood": ((20.0, "低落"), (50.0, "平静"), (75.0, "开心"), (100.0, "雀跃")),
+    # v0.24.7 陪伴（第四个独立数值，0.24.1 起随 state 落库但仍无区段名）：
+    # 低=「想你」而非「你欠我」——与 status_line 的「·有点想你」同一措辞。
+    # 注：NEED_FIELDS 不含 attention，故 zones() 不会自动带出；状态板显式取用。
+    "attention": ((20.0, "很想你"), (50.0, "有点想你"), (100.0, "很满足")),
 }
 
 # ---- 联动系数（点/小时；config.needs 同名键覆盖） ----
@@ -97,10 +101,16 @@ def status_line(state, thresholds: dict) -> tuple[str, bool]:
         except (TypeError, ValueError):
             v = 0.0
         low = v < float(thresholds.get(field, 0.0))
-        alert = alert or low
-        text = f"{INTERACT_FIELD_LABEL.get(field, field)}{v:.0f}" + ("⚠" if low else "")
-        if field == "attention" and low:
-            text += "·有点想你"
+        soft = field == "attention"
+        # v0.24.7：陪伴是**软需求**——低于线不点亮红点、也不打 ⚠（红点/⚠ 的
+        # 语义是「你必须处理」：饿/脏/低落），只给一句人设化暗示「·有点想你」。
+        # 补 attention 阈值之前 low 恒为 False（thresholds 无该键 → 与 0 比），
+        # 那句暗示实为走不到的死分支；这次一并修好。
+        if not soft:
+            alert = alert or low
+        text = f"{INTERACT_FIELD_LABEL.get(field, field)}{v:.0f}"
+        if low:
+            text += "·有点想你" if soft else "⚠"
         parts.append(text)
     return "  ".join(parts), alert
 
