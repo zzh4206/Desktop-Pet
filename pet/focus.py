@@ -181,6 +181,20 @@ _BREAK_CUT = (
     "休息时间还没结束哦，再歇一小会儿眼睛吧～",
     "先别急，让眼睛再休息一下～",
 )
+# v0.27.9（用户拍板「补齐轻反馈」）：延长与停止此前**零反馈**——托盘菜单一关，
+# 用户看不到任何确认（连按三次 +5 分钟界面毫无动静）。跳过/提前完成/开始/到点
+# 本就有气泡+音效，此处补齐这两处，但延长**连按不叠加**（见
+# `_EXTEND_EMIT_GAP_S`）；暂停/继续仍**不给气泡**——Q1 已拍板"姿态回 idle 一眼
+# 可辨"，再加气泡属重复提示。
+_EXTEND_EMIT_GAP_S = 1.0          # 连按延长的气泡节流窗（秒）
+_EXTEND_DONE = (
+    "再撑 {m} 分钟，我陪着你～",
+    "好，再加 {m} 分钟～",
+)
+_STOPPED = (
+    "好，先到这儿，休息一下～",
+    "停下了，随时叫我～",
+)
 
 
 def _today(now: float) -> str:
@@ -398,6 +412,9 @@ class FocusSession:
         # 在 ``_apply_cfg`` **之前**初始化（``_apply_cfg`` 只写配置派生字段，
         # 不得覆盖它）；真正的数据由 ``_load_persisted()`` 在构造末尾灌入。
         self._history: list[dict] = []
+        # v0.27.9：延长/停止的「轻反馈」节流位——连按「➕ 延长」时 1s 内不重复
+        # 弹气泡（气泡虽是单例控件、重复 show 只会替换文本，但音效会重复播）。
+        self._last_extend_emit_at = float("-inf")
 
         c = cfg or {}
         self._apply_cfg(c)
@@ -689,10 +706,15 @@ class FocusSession:
         self._enter(FocusPhase.FOCUS, effective, now)
 
     def stop(self) -> None:
-        """任意态→IDLE，释放全部接管（当前番茄不计完成）。幂等。"""
+        """任意态→IDLE，释放全部接管（当前番茄不计完成）。幂等。
+
+        v0.27.9：给一条**轻反馈**气泡+音效（此前零反馈，托盘菜单一关就看不到
+        任何确认）。IDLE 下早返回、**不发气泡**——L1「IDLE 零副作用」不破。
+        """
         if self._state == FocusPhase.IDLE:
             return
         self._enter_idle(self._now())
+        self._emit(_STOPPED)
 
     def extend(self, minutes: float | int | None = 5) -> None:
         """延长当前段（默认 +5 分钟）。**IDLE 时 no-op**（L1 零副作用）。
@@ -712,6 +734,13 @@ class FocusSession:
             return
         self._deadline += m * 60.0
         self._persist()
+        # v0.27.9：轻反馈。**连按不叠加**——`_EXTEND_EMIT_GAP_S` 窗口内重复按
+        # 只延长时间、不再弹气泡（气泡虽是单例控件、文本会被替换，但音效会
+        # 重复播）；超过窗口再按则重新给一次确认。
+        now = self._now()
+        if now - self._last_extend_emit_at >= _EXTEND_EMIT_GAP_S:
+            self._last_extend_emit_at = now
+            self._emit(random.choice(_EXTEND_DONE).format(m=f"{m:g}"))
 
     def pause(self) -> None:
         """暂停当前段：冻结剩余量（§5.1，v0.27.3）。**IDLE 或已暂停 → no-op**（L1）。

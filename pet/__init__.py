@@ -121,7 +121,7 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.24.7"
+__version__ = "0.27.9"
 # v0.24.7：陪伴值的**可见性**补齐——0.24.0 把它落成第四个独立数值，但状态板一行
 # 都没显示，且托盘状态行的「·有点想你」实为**走不到的死分支**（_need_thresholds
 # 没有 attention 键 → alerts() 对 attention 恒不触线 → low 恒 False）：
