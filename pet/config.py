@@ -946,6 +946,90 @@ def save_focus_work_min(config_path: str, minutes: float) -> dict:
     return sec
 
 
+_FOCUS_PRESETS_MAX = 20          # 托盘子菜单不宜过长（v0.27.8）
+
+
+def save_focus_presets(config_path: str, presets) -> dict:
+    """把「命名预设」整组写回 ``focus.presets``（原子替换，v0.27.8）。
+
+    托盘「➕ 新建预设… / ✏️ 编辑… / 🗑 删除」用。只动这一个键，``focus``
+    其余键原样保留（对齐 ``save_focus_work_min`` 的「只动传入键」语义）。
+
+    入参逐项**按 schema 清洗**再写——这一步不能省：``focus`` 段任意一处不合规
+    都会让 ``_validate_section`` 把**整段**打回默认，用户会连默认时长和已有预设
+    一起丢。清洗规则：
+    ``name`` 去空白后必须非空；``work_min`` 1–180、``short_min`` 1–60、
+    ``long_min`` 1–120、``cycles`` 1–12（取整）；**只写 schema 允许的 5 个键**
+    （``additionalProperties: false``，多写一个键整段就回退）；非法项**丢弃**；
+    整组最多 ``_FOCUS_PRESETS_MAX`` 条。
+
+    **空列表是合法入参**（删掉最后一个预设要能落盘成 ``[]``）。
+    返回写入后的 focus 段；读/写失败返 {}（调用方只记日志，本次会话仍按内存值生效）。
+    """
+    import json as _json
+    import math as _math
+
+    def _clamp(v, lo, hi, as_int=False):
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        if _math.isnan(x) or _math.isinf(x):
+            return None
+        x = min(max(x, lo), hi)
+        return int(round(x)) if as_int else x
+
+    clean = []
+    for p in (presets or []):
+        if not isinstance(p, dict):
+            continue
+        name = str(p.get("name") or "").strip()
+        if not name:
+            continue
+        w = _clamp(p.get("work_min"), 1, 180)
+        if w is None:
+            continue                  # work_min 是 required，缺了整条不合法
+        item = {"name": name, "work_min": w}
+        s = _clamp(p.get("short_min"), 1, 60)
+        lo = _clamp(p.get("long_min"), 1, 120)
+        c = _clamp(p.get("cycles"), 1, 12, as_int=True)
+        if s is not None:
+            item["short_min"] = s
+        if lo is not None:
+            item["long_min"] = lo
+        if c is not None:
+            item["cycles"] = c
+        clean.append(item)
+        if len(clean) >= _FOCUS_PRESETS_MAX:
+            break
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+    except (OSError, ValueError):
+        log.warning("[番茄] 用户 config 读取失败，预设未写入", exc_info=True)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    sec = raw.get("focus")
+    if not isinstance(sec, dict):
+        sec = {}
+    sec["presets"] = clean
+    raw["focus"] = sec
+    tmp = config_path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(raw, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, config_path)
+    except (OSError, ValueError):
+        log.warning("[番茄] 预设写入失败", exc_info=True)
+        return {}
+    return sec
+
+
 def save_pester_enabled(config_path: str, enabled: bool) -> dict:
     """v0.24.5：把 ``attention.pester.enabled`` 写回用户 config（原子替换）。
 

@@ -121,7 +121,7 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.7"
+__version__ = "0.27.8"
 # v0.27.6：番茄自由度扩展「统计面」（wiki 设计-番茄自由度扩展技术方案 §4.5 E +
 # 裁决 Q5）——纯数据面，无配置改动：`FocusSession._history` 逐日历史（跨日
 # `_rollover` 归档「刚结束的那一天」，同日覆盖不追加；上限 400 天超限丢最旧；

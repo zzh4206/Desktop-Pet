@@ -50,6 +50,11 @@ _FOCUS_MINUTE_LABEL_FMT = "⏱ {m} 分钟"
 _FOCUS_LAST_LABEL_FMT = "🕘 上次使用 {m} 分钟"
 _FOCUS_SET_DEFAULT_LABEL_FMT = "⭐ 把 {m} 分钟设为默认"
 _FOCUS_PRESET_LABEL_FMT = "📌 {name}（{m} 分钟）"
+# v0.27.8：预设改为**子菜单**——增/删/改都能在托盘里完成（不必手改 config.json）
+_FOCUS_PRESET_START_LABEL = "▶️ 启动"
+_FOCUS_PRESET_EDIT_LABEL = "✏️ 编辑…"
+_FOCUS_PRESET_DELETE_LABEL = "🗑 删除"
+_FOCUS_PRESET_ADD_LABEL = "➕ 新建预设…"
 _FOCUS_RELOAD_LABEL = "🔄 重载番茄配置"
 # 托盘**只做显示**，不 import pet.focus（保持共享层解耦）；无 last_work_min
 # 信息时文案兜底用库默认 25（app 建立会话后立刻用真实值覆盖，见
@@ -320,8 +325,13 @@ class TrayManager(QObject):
         self._on_focus_default = None      # cb()：「⭐ 设为默认」
         self._on_focus_reload = None       # cb()：「🔄 重载番茄配置」
         self._focus_presets: list = []
-        self._focus_preset_actions: list = []
+        self._focus_preset_actions: list = []   # 每项的「▶️ 启动」动作（trigger 即启动）
+        self._focus_preset_menus: list = []     # v0.27.8：每项的子菜单（重建时撤掉）
         self._focus_preset_sep = None
+        self._act_focus_preset_add = None       # v0.27.8：「➕ 新建预设…」
+        self._on_focus_preset_edit = None       # v0.27.8：cb(preset)
+        self._on_focus_preset_delete = None     # v0.27.8：cb(preset)
+        self._on_focus_preset_add = None        # v0.27.8：cb()
         self._focus_last_work_min = 0.0    # 0 → 文案用 _FOCUS_FALLBACK_MIN 兜底
         self._focus_phase = _PHASE_IDLE
         self._focus_paused = False         # v0.27.3 暂停态（暂停项文案/可用性）
@@ -623,6 +633,18 @@ class TrayManager(QObject):
         """命名预设项 → app._start_focus_preset(preset)（本轮覆盖，§4.4 D1）。"""
         self._on_focus_preset = cb
 
+    def set_focus_preset_edit_callback(self, cb) -> None:
+        """预设子菜单「✏️ 编辑…」→ app._edit_focus_preset(preset)（v0.27.8）。"""
+        self._on_focus_preset_edit = cb
+
+    def set_focus_preset_delete_callback(self, cb) -> None:
+        """预设子菜单「🗑 删除」→ app._delete_focus_preset(preset)（v0.27.8）。"""
+        self._on_focus_preset_delete = cb
+
+    def set_focus_preset_add_callback(self, cb) -> None:
+        """「➕ 新建预设…」→ app._add_focus_preset()（v0.27.8）。"""
+        self._on_focus_preset_add = cb
+
     def set_focus_default_callback(self, cb) -> None:
         """「⭐ 把 N 分钟设为默认」→ app._set_focus_default()（as_default=True，§4.1）。"""
         self._on_focus_default = cb
@@ -656,6 +678,18 @@ class TrayManager(QObject):
         if self._on_focus_preset is not None:
             self._on_focus_preset(preset)
 
+    def _emit_focus_preset_edit(self, preset) -> None:
+        if self._on_focus_preset_edit is not None:
+            self._on_focus_preset_edit(preset)
+
+    def _emit_focus_preset_delete(self, preset) -> None:
+        if self._on_focus_preset_delete is not None:
+            self._on_focus_preset_delete(preset)
+
+    def _emit_focus_preset_add(self) -> None:
+        if self._on_focus_preset_add is not None:
+            self._on_focus_preset_add()
+
     def _emit_focus_default(self) -> None:
         if self._on_focus_default is not None:
             self._on_focus_default()
@@ -665,52 +699,93 @@ class TrayManager(QObject):
             self._on_focus_reload()
 
     def set_focus_presets(self, presets) -> None:
-        """重建「命名预设」分组（v0.27.2 §4.4 D1；app 装载/重载 config 后调）。
+        """重建「命名预设」分组（v0.27.2 §4.4 D1；v0.27.8 起每项改为**子菜单**）。
 
-        ``presets`` 为空 → **不建项、不加分隔符**（空分组留在菜单里只会多一条
-        无意义的分隔线）；非空 → 在「⭐ 把 N 分钟设为默认」之前插入「分隔符 +
-        每个预设一项」，点击即以该预设启动**本轮**（``FocusSession.start_preset``
-        的本轮覆盖，不改全局默认）。幂等：重复调用先撤掉旧项再重建。
+        v0.27.8：每个预设从「一项直接启动」升级为子菜单
+        （``📌 名称（N 分钟）`` ▸ ``▶️ 启动`` / ``✏️ 编辑…`` / ``🗑 删除``），
+        并新增 ``➕ 新建预设…`` —— 这样**增/删/改都能在托盘里完成**，不必去手改
+        ``config.json``。``_focus_preset_actions`` 仍只存每项的「▶️ 启动」动作
+        （保持 v0.27.2 起"trigger 即启动"的语义不变）。
+
+        ``presets`` 为空 → **不建分隔符**（空分组的光杆分隔线很丑），但
+        ``➕ 新建预设…`` **仍然保留**（否则第一个预设永远无法从托盘创建）。
+        幂等：重复调用先撤掉旧子菜单/旧项/旧分隔符/旧新建项再重建。
         """
         menu = getattr(self, "_focus_menu", None)
         if menu is None:
             return
+        # 撤旧：子菜单 → 启动项 → 新建项 → 分隔符（顺序无关，各撤各的）
+        for sub in list(getattr(self, "_focus_preset_menus", [])):
+            try:
+                menu.removeAction(sub.menuAction())
+                sub.deleteLater()
+            except RuntimeError:      # 底层 C++ 对象已销毁（重建竞态）
+                pass
+        self._focus_preset_menus = []
         for act in list(getattr(self, "_focus_preset_actions", [])):
-            menu.removeAction(act)
-            act.deleteLater()
+            try:
+                menu.removeAction(act)
+                act.deleteLater()
+            except RuntimeError:
+                pass
         self._focus_preset_actions = []
+        add_old = getattr(self, "_act_focus_preset_add", None)
+        if add_old is not None:
+            try:
+                menu.removeAction(add_old)
+                add_old.deleteLater()
+            except RuntimeError:
+                pass
+            self._act_focus_preset_add = None
         old_sep = getattr(self, "_focus_preset_sep", None)
         if old_sep is not None:
-            menu.removeAction(old_sep)
-            old_sep.deleteLater()
+            try:
+                menu.removeAction(old_sep)
+                old_sep.deleteLater()
+            except RuntimeError:
+                pass
             self._focus_preset_sep = None
+
         items = [dict(p) for p in (presets or []) if isinstance(p, dict)
                  and str(p.get("name") or "").strip()]
         self._focus_presets = items
-        if not items:
-            self._apply_focus_menu()
-            return
         anchor = getattr(self, "_act_focus_default", None)
-        sep = QAction(menu)
-        sep.setSeparator(True)
-        if anchor is not None:
-            menu.insertAction(anchor, sep)
-        else:
-            menu.addAction(sep)
-        self._focus_preset_sep = sep
-        for p in items:
-            name = str(p.get("name") or "").strip()
-            m = _fmt_minutes(p.get("work_min"))
-            text = (_FOCUS_PRESET_LABEL_FMT.format(name=name, m=m)
-                    if m else f"📌 {name}")
-            act = QAction(text, menu)
-            act.triggered.connect(
-                (lambda *_a, _p=dict(p): self._emit_focus_preset(_p)))
+
+        def _insert(a):
             if anchor is not None:
-                menu.insertAction(anchor, act)
+                menu.insertAction(anchor, a)
             else:
-                menu.addAction(act)
-            self._focus_preset_actions.append(act)
+                menu.addAction(a)
+
+        if items:
+            sep = QAction(menu)
+            sep.setSeparator(True)
+            _insert(sep)
+            self._focus_preset_sep = sep
+            for p in items:
+                name = str(p.get("name") or "").strip()
+                m = _fmt_minutes(p.get("work_min"))
+                text = (_FOCUS_PRESET_LABEL_FMT.format(name=name, m=m)
+                        if m else f"📌 {name}")
+                sub = QMenu(text, menu)
+                start = sub.addAction(_FOCUS_PRESET_START_LABEL)
+                start.triggered.connect(
+                    (lambda *_a, _p=dict(p): self._emit_focus_preset(_p)))
+                sub.addSeparator()
+                edit = sub.addAction(_FOCUS_PRESET_EDIT_LABEL)
+                edit.triggered.connect(
+                    (lambda *_a, _p=dict(p): self._emit_focus_preset_edit(_p)))
+                dele = sub.addAction(_FOCUS_PRESET_DELETE_LABEL)
+                dele.triggered.connect(
+                    (lambda *_a, _p=dict(p): self._emit_focus_preset_delete(_p)))
+                _insert(sub.menuAction())
+                self._focus_preset_actions.append(start)
+                self._focus_preset_menus.append(sub)
+
+        add_act = QAction(_FOCUS_PRESET_ADD_LABEL, menu)
+        add_act.triggered.connect(self._emit_focus_preset_add)
+        _insert(add_act)
+        self._act_focus_preset_add = add_act
         self._apply_focus_menu()
 
     def set_focus_last_work_min(self, minutes) -> None:

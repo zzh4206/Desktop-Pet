@@ -63,7 +63,8 @@ import signal
 
 from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QSpinBox)
 
 from pet import __version__ as PKG_VERSION
 from pet.asset_provider import AIArtProvider, EmojiProvider, _mood_from_state
@@ -134,6 +135,53 @@ class _ChatEmotionWarmWorker(QThread):
         from pet.chat_emotion import ChatEmotionEngine
         engine = ChatEmotionEngine(self._model_path, self._threshold)
         self.ready.emit(engine)
+
+
+class _FocusPresetDialog(QDialog):
+    """新建/编辑番茄预设（v0.27.8）：名称 + 专注/短休/长休/周期。
+
+    只做输入与范围限制，**不碰配置**——落盘由 ``PetApp._apply_focus_presets``
+    调 ``pet.config.save_focus_presets``（原子写 + 逐项按 schema 清洗）。
+    刻意**不加父窗口**（与既有 ``QDialog()`` 用法一致），避免托盘菜单弹出期间
+    模态窗口与托盘事件循环互相等待。
+    """
+
+    def __init__(self, preset=None, fallback=None):
+        super().__init__()
+        self.setWindowTitle("番茄预设")
+        p = dict(preset or {})
+        fb = dict(fallback or {})
+        self._name = QLineEdit(str(p.get("name") or ""))
+        self._name.setPlaceholderText("例如：写作 / 刷题 / 深度工作")
+        form = QFormLayout(self)
+        form.addRow("名称", self._name)
+        self._spins = {}
+        for key, label, lo, hi in (
+            ("work_min", "专注（分钟）", 1, 180),
+            ("short_min", "短休（分钟）", 1, 60),
+            ("long_min", "长休（分钟）", 1, 120),
+            ("cycles", "几个番茄后长休", 1, 12),
+        ):
+            sp = QSpinBox()
+            sp.setRange(lo, hi)
+            try:
+                sp.setValue(int(round(float(p.get(key, fb.get(key, lo))))))
+            except (TypeError, ValueError):
+                sp.setValue(int(lo))
+            self._spins[key] = sp
+            form.addRow(label, sp)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def preset(self) -> dict:
+        """返回可直接交给 ``save_focus_presets`` 的 dict（名称已去空白）。"""
+        out = {"name": self._name.text().strip()}
+        for key, sp in self._spins.items():
+            out[key] = sp.value()
+        return out
 
 
 class PetApp:
@@ -382,6 +430,10 @@ class PetApp:
         # v0.27.2 启动类四个入口（§4.1 A 时长 / §4.4 D1 预设 / 设为默认 / D3 重载）
         self.tray.set_focus_minutes_callback(self._start_focus_minutes)
         self.tray.set_focus_preset_callback(self._start_focus_preset)
+        # v0.27.8 预设增删改（都在托盘里完成，不必手改 config.json）
+        self.tray.set_focus_preset_edit_callback(self._edit_focus_preset)
+        self.tray.set_focus_preset_delete_callback(self._delete_focus_preset)
+        self.tray.set_focus_preset_add_callback(self._add_focus_preset)
         self.tray.set_focus_default_callback(self._set_focus_default)
         self.tray.set_focus_reload_callback(self._reload_focus_config)
         self.tray.set_focus_visible(self._focus_session is not None)
@@ -1866,6 +1918,113 @@ class PetApp:
         self._pre_focus_start()
         sess.start_preset(preset)
         self._sync_focus_tray()
+
+    # ---- v0.27.8：预设增/删/改（全部在托盘内完成，不必手改 config.json） ----
+
+    def _add_focus_preset(self) -> None:
+        """「➕ 新建预设…」：弹窗填写 → 原子落盘 → 热重载。"""
+        self._focus_preset_dialog(None)
+
+    def _edit_focus_preset(self, preset) -> None:
+        """「✏️ 编辑…」：以现有值预填弹窗，保存后**替换原项**（支持改名）。"""
+        self._focus_preset_dialog(preset)
+
+    def _delete_focus_preset(self, preset) -> None:
+        """「🗑 删除」：按名称移除该预设并落盘。"""
+        sess = getattr(self, "_focus_session", None)
+        name = str((preset or {}).get("name") or "").strip()
+        if sess is None or not name:
+            return
+        old = [dict(p) for p in (sess.presets or [])]
+        kept = [p for p in old if str(p.get("name") or "").strip() != name]
+        if len(kept) == len(old):
+            return                      # 已被删过（重复点击/菜单陈旧）
+        self._apply_focus_presets(kept, f"已删除预设「{name}」")
+
+    def _focus_preset_dialog(self, preset) -> None:
+        """新建（``preset=None``）或编辑预设的对话框入口。"""
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        fc = dict(self.cfg.get("focus") or {})
+        fallback = {
+            "work_min": fc.get("work_min", 25),
+            "short_min": fc.get("short_min", 5),
+            "long_min": fc.get("long_min", 15),
+            "cycles": fc.get("cycles", 4),
+        }
+        try:
+            dlg = _FocusPresetDialog(preset=preset, fallback=fallback)
+            accepted = dlg.exec() == dlg.Accepted
+            item = dlg.preset() if accepted else None
+        except Exception:
+            self.logger.warning("[番茄] 预设对话框异常", exc_info=True)
+            return
+        if not accepted or item is None:
+            return
+        name = str(item.get("name") or "").strip()
+        if not name:
+            self.bubble.show("预设名称不能为空～", kind=BubbleType.WARNING,
+                             anchor=self._pet_anchor())
+            return
+        old = [dict(p) for p in (sess.presets or [])]
+        if preset is None:
+            # 新建：同名视为覆盖（不产生两条同名项）
+            out = [p for p in old
+                   if str(p.get("name") or "").strip() != name]
+            out.append(item)
+            msg = f"已保存预设「{name}」"
+        else:
+            orig = str((preset or {}).get("name") or "").strip()
+            out, placed = [], False
+            for p in old:
+                nm = str(p.get("name") or "").strip()
+                if nm == orig:
+                    out.append(item)    # 原地替换（顺序不变）
+                    placed = True
+                elif nm != name:
+                    out.append(p)       # 改名撞到的旧同名项被丢弃
+            if not placed:
+                out.append(item)
+            msg = f"已更新预设「{name}」"
+        self._apply_focus_presets(out, msg)
+
+    def _apply_focus_presets(self, presets, ok_msg: str) -> None:
+        """落盘 ``focus.presets`` → 会话热更新 → 重建托盘 → 气泡。
+
+        落盘走 ``save_focus_presets``（原子写 + **逐项按 schema 清洗**）：不清洗
+        直接写，会让整个 ``focus`` 段在下次启动被 ``_validate_section`` 打回默认。
+        ``reconfigure`` 只影响下一段，**不动当前段的 ``_deadline``**。
+        """
+        sess = getattr(self, "_focus_session", None)
+        if sess is None:
+            return
+        try:
+            from pet.config import save_focus_presets
+            sec = save_focus_presets(self._paths["config_path"], presets)
+        except Exception:
+            self.logger.warning("[番茄] 预设落盘失败", exc_info=True)
+            sec = {}
+        if not sec:
+            self.bubble.show("预设没保存上（配置写入失败）",
+                             kind=BubbleType.WARNING, anchor=self._pet_anchor())
+            return
+        # 只改内存里的 presets，**不整段替换** self.cfg["focus"]——否则会把内存里
+        # 更新的 last_work_min 冲回磁盘旧值
+        focus_cfg = dict(self.cfg.get("focus") or {})
+        focus_cfg["presets"] = [dict(p) for p in (sec.get("presets") or [])]
+        self.cfg["focus"] = focus_cfg
+        try:
+            sess.reconfigure(focus_cfg)
+        except Exception:
+            self.logger.warning("[番茄] 预设热更新失败", exc_info=True)
+        try:
+            self.tray.set_focus_presets(sess.presets)
+            self.tray.set_focus_last_work_min(sess.last_work_min)
+        except Exception:
+            self.logger.warning("[番茄] 托盘预设重建失败", exc_info=True)
+        self._sync_focus_tray()
+        self.bubble.show(ok_msg, kind=BubbleType.INFO, anchor=self._pet_anchor())
 
     def _set_focus_default(self) -> None:
         """「⭐ 把 N 分钟设为默认」：显式 ``start(N, as_default=True)``（§4.1）。
