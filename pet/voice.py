@@ -355,13 +355,18 @@ def _as_float(value, default: float) -> float:
 
 @dataclass
 class VoiceSettings:
-    """语音配置快照（v0.26.0）——**全部默认关**，对齐 sound 先例调研 F10。
+    """语音配置快照（v0.26.0）——总开关默认关，对齐 sound 先例调研 F10。
 
     ``from_config`` 容错读取 config 的 ``voice`` 段（布局见
     设计-语音模块技术方案.md §4）：``enabled/provider/voice/rate/
     speak_chat/quiet_hours`` 在 ``voice.tts`` 子段，``proactive_speak/
     asset_root/dedup_sec`` 在 ``voice`` 段。段缺失或类型错一律回落默认，
     绝不抛异常——配置写坏不能让宠物起不来。
+
+    v0.26.6 语义修正（用户拍板「语音要和气泡结合」）：``proactive_speak``
+    默认改为 **True**——主开关一开，气泡（含主动关怀）与聊天回复**一起朗读**，
+    这才是用户点「语音播报」时的预期；该键降级为**细调项**（显式写 false 才
+    压掉主动气泡）。``enabled`` 仍默认 False，故未开启前一切静默。
 
     注意（语义非对称，接线时须知）：``quiet_hours`` 字段默认 ``(23, 8)``，
     即**未配置 quiet_hours 时深夜静默仍然默认生效**；而独立的纯函数
@@ -375,7 +380,7 @@ class VoiceSettings:
     voice: str = ""
     rate: int = 0
     speak_chat: bool = True
-    proactive_speak: bool = False
+    proactive_speak: bool = True
     quiet_hours: tuple[int, int] = (23, 8)
     dedup_sec: float = 3.0
 
@@ -399,13 +404,15 @@ class VoiceSettings:
             settings.voice = _as_str(tts_sec.get("voice"), "")
             settings.rate = _as_int(tts_sec.get("rate"), 0)
             settings.speak_chat = _as_bool(tts_sec.get("speak_chat"), True)
-            # proactive_speak 冻结在 voice 段；容忍误写进 tts 子段
+            # proactive_speak 冻结在 voice 段；容忍误写进 tts 子段。
+            # v0.26.6：默认 True（气泡与聊天一起朗读，用户拍板「语音要和
+            # 气泡结合」）；显式写 false 才压掉主动气泡。
             if "proactive_speak" in voice_sec:
                 settings.proactive_speak = _as_bool(
-                    voice_sec.get("proactive_speak"), False)
+                    voice_sec.get("proactive_speak"), True)
             else:
                 settings.proactive_speak = _as_bool(
-                    tts_sec.get("proactive_speak"), False)
+                    tts_sec.get("proactive_speak"), True)
             root = voice_sec.get("asset_root")
             if isinstance(root, str) and root:
                 settings.asset_root = root
@@ -451,7 +458,8 @@ class SpeakGate:
 
     1. ``settings.enabled`` 假 → ``disabled``
     2. 来源开关：``proactive`` 且 ``proactive_speak`` 假 → ``proactive_off``；
-       ``chat`` 且 ``speak_chat`` 假 → ``chat_off``
+       ``chat`` 且 ``speak_chat`` 假 → ``chat_off``（v0.26.6 起
+       ``proactive_speak`` 默认 True，即气泡与聊天同开；显式关掉才只剩聊天）
     3. ``dnd`` → ``dnd``
     4. ``fullscreen`` → ``fullscreen``（对齐 _auto_bubble 的全屏丢弃语义）
     5. 深夜静默 → ``quiet_hours``
@@ -639,10 +647,15 @@ class VoiceService:
 
     def speak(self, text: str, source: str = "chat", key: str | None = None,
               *, now: float | None = None, dnd: bool = False,
-              fullscreen: bool = False) -> bool:
+              fullscreen: bool = False, force: bool = False) -> bool:
         """过门禁后入队播报；被拒/降级返 False（永不外抛）。
 
         ``now`` 为 None 时取 ``time.time()``；测试与离线补播请显式注入。
+
+        ``force=True`` **跳过全部门禁**（开关/来源/深夜/去重），直接入队。
+        仅供给**界面反馈音**用（如托盘勾选「语音播报」时的"已开启"确认）——
+        它必须能在深夜、在主开关刚打开的那一刻出声，否则用户又会"开了没
+        反馈"。**不做内容播报**：内容播报一律走门禁，别拿它绕开静默策略。
         """
         try:
             if now is None:
@@ -650,6 +663,9 @@ class VoiceService:
             stamp = float(now)
             item = SpeakItem(text="" if text is None else str(text), key=key,
                              source=source, at=stamp)
+            if force:
+                log.debug("[语音] 强制播报（界面反馈）：%s", item.text[:40])
+                return self.queue.enqueue(item)
             allowed, reason = self.gate.allow(item, now=stamp, dnd=dnd,
                                               fullscreen=fullscreen)
             if not allowed:

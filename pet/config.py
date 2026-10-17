@@ -41,13 +41,14 @@ _SAFE_DEFAULTS: dict = {
                     "fatigue_times": 5, "fatigue_window_min": 10},
     # v0.19.0 F4：交互音效管线（默认关；资产 assets/sounds/ 后补不阻塞）
     "sound": {"enabled": False, "volume": 0.6},
-    # v0.26 语音线（pet/voice.py）：全部默认关（对齐 sound 先例）。
+    # v0.26 语音线（pet/voice.py）：总开关默认关（对齐 sound 先例）。
     # tts.provider="asset"=罐头音包直放（资产 assets/voice/<key>.<ext>，占位
     # 音频程序生成、正式音包由用户后续录制替换）；"system"=mac `say` 动态合成。
-    # proactive_speak 独立开关（主动关怀气泡默认不朗读，防深夜出声）；
-    # quiet_hours 深夜静默窗口（跨午夜写法 [23, 8]）；dedup_sec 连发去重窗。
+    # proactive_speak（v0.26.6 语义修正）=**细调项**：默认 True，主开关一开
+    # 气泡与聊天一起朗读（用户拍板「语音要和气泡结合」）；显式写 false 才只剩
+    # 聊天朗读。quiet_hours 深夜静默窗口（跨午夜写法 [23, 8]）；dedup_sec 去重窗。
     "voice": {
-        "proactive_speak": False, "dedup_sec": 3.0, "asset_root": "",
+        "proactive_speak": True, "dedup_sec": 3.0, "asset_root": "",
         "tts": {
             "enabled": False, "provider": "asset", "voice": "", "rate": 0,
             "speak_chat": True, "quiet_hours": [23, 8],

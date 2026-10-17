@@ -885,7 +885,8 @@ class PetApp:
         长文案 5s 读不完），None 走默认 5s。其余主动气泡行为不变。
         """
         self._auto_bubble(
-            text, duration_ms=int(duration_s * 1000) if duration_s else 5000)
+            text, duration_ms=int(duration_s * 1000) if duration_s else 5000,
+            source="proactive")   # scheduler 主动气泡：显式声明（v0.26.6 不变量）
 
     def _auto_bubble(self, text: str, kind=BubbleType.INFO,
                      duration_ms: int = 5000, anchor: tuple | None = None,
@@ -1014,6 +1015,9 @@ class PetApp:
 
         即时生效 = 直接改在跑的 settings（无需重建服务）；写回失败只记日志
         （本次会话仍生效，只是下次启动回默认）。
+
+        v0.26.6：开启时**立刻播一句确认音**（``force`` 跳过静默/去重门禁）——
+        否则点了开关没有任何反馈，用户会以为没生效（2026-10-17 实机反馈）。
         """
         svc = getattr(self, "_voice", None)
         if svc is None:
@@ -1024,6 +1028,11 @@ class PetApp:
                 svc.stop()   # 关闭即打断在播语音，符合直觉
         except Exception:
             self.logger.warning("语音开关即时生效失败", exc_info=True)
+        if enabled:
+            try:
+                svc.speak("语音播报已开启", source="system", force=True)
+            except Exception:
+                self.logger.warning("语音开启确认音失败", exc_info=True)
         try:
             from pet.config import save_voice_enabled
 

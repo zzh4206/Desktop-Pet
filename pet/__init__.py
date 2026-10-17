@@ -121,7 +121,14 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.8"
+__version__ = "0.26.6"
+# v0.26.6：语音与气泡结合 + 开关反馈音——``voice.proactive_speak`` 默认改
+# True（用户拍板「之前就有气泡提示，语音应该和它结合」：主开关一开，气泡
+# 含主动关怀与聊天回复**一起朗读**），该键降级为细调项（显式 false 才只剩
+# 聊天）；``VoiceService.speak`` 增 ``force``（跳过全部门禁，**仅供界面反馈
+# 音**）——托盘勾选「语音播报」时立刻播一句"语音播报已开启"，修掉"点了开关
+# 没有任何反馈"；顺带给 0.27 线新增的 scheduler 气泡调用补显式
+# ``source="proactive"``（本线不变量测试抓到漏声明）。
 # v0.27.6：番茄自由度扩展「统计面」（wiki 设计-番茄自由度扩展技术方案 §4.5 E +
 # 裁决 Q5）——纯数据面，无配置改动：`FocusSession._history` 逐日历史（跨日
 # `_rollover` 归档「刚结束的那一天」，同日覆盖不追加；上限 400 天超限丢最旧；

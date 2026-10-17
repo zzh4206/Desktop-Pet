@@ -53,7 +53,7 @@
     "volume": 0.6
   },
   "voice": {
-    "proactive_speak": false,
+    "proactive_speak": true,
     "dedup_sec": 3,
     "asset_root": "",
     "tts": {
