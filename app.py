@@ -516,6 +516,17 @@ class PetApp:
                 behaviors=tuple(_pester_cfg.get("behaviors")
                                 or _att.get("behaviors")
                                 or ("run_to_cursor", "bubble_whine")),
+                fast_drop=float((_att.get("decay_curve") or {}).get(
+                    "fast_drop", 25.0)),
+                tau_fast_h=float((_att.get("decay_curve") or {}).get(
+                    "tau_fast_h", 2.5)),
+                slow_drop=float((_att.get("decay_curve") or {}).get(
+                    "slow_drop", 50.0)),
+                tau_slow_h=float((_att.get("decay_curve") or {}).get(
+                    "tau_slow_h", 24.0)),
+                bell_share=float((_att.get("bell") or {}).get("share", 0.4)),
+                bell_sigma_min=float((_att.get("bell") or {}).get("sigma_min", 15.0)),
+                bands=tuple(_att.get("bands") or ()),
                 pester_enabled=(self._attention_master and _pester_on),
             ),
             attention=self.store.get().attention,

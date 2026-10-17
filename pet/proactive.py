@@ -858,10 +858,10 @@ class ProactiveScheduler:
         _log.info("[纠缠] 触发(%s, attention=%.0f, LLM 抽样 %d/%d)",
                   decision.behavior, decision.attention,
                   getattr(st, "llm", 0), getattr(st, "total", 0))
-        self._emit_pester_bubble(now)
+        self._emit_pester_bubble(now, decision.tone)
         return True
 
-    def _emit_pester_bubble(self, now: float) -> None:
+    def _emit_pester_bubble(self, now: float, cat: str = "low_attention") -> None:
         """发撒娇气泡：轮到时走**异步** LLM，否则即时罐头。
 
         异步路径**只发一条**气泡（LLM 成功发其文案、失败/空回落罐头）——
@@ -870,7 +870,6 @@ class ProactiveScheduler:
         voice = self._pester_voice
         if voice is None:
             return
-        cat = "low_attention"
         mem = self._relation_snapshot()
         if self._pester_llm_fetch is not None and voice.next_uses_llm():
             facts = voice.facts_for(cat, mem, now)

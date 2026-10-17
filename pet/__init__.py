@@ -121,7 +121,18 @@
 # 不注入 + 近期加分，top-k×recall_chars 拼前缀）+ NOTES.md 发现级记忆（system
 # prompt 规则 5/6：旧记忆需验证后采信、持久发现写入 NOTES.md，任务起跑注入
 # 头部）；归档存原始 instruction 防 memory 自噬膨胀；config.swe.memory 段。
-__version__ = "0.27.9"
+__version__ = "0.24.8"
+# v0.24.8：陪伴度**半连续化**（PM 拍板三项）——
+# ① 五档取代单阈值 35：L0 委屈(0-30)/L1 很想很想你(30-50)/L2 很想你(50-70)/
+#    L3 有点想你(70-85)/L4 安好(85-100)，每档自带动作集 + 每小时上限 + 文案语气；
+#    全局 hourly/daily 仍是硬顶，档位只能收紧（`should_pester` 的档位门）。
+# ② 衰减改**双时间常数**（短=情绪 τ2.5h 掉 25 / 长=情感 τ24h 掉 50）：attention
+#    跟随基准曲线，地板 25 = 「不会不在意，只是收声」；Stage 只改相对速度。
+#    1h≈89.7 / 2.5h 轻看 / 5h 很想你 / 20h 很想很想你 / 72h 委屈。
+# ③ 交互 = **钟形输入**（改微分方程边界）：增益拆「即时 60% + 高斯速率 40%」，
+#    dA/dt = −decay(T) + Σu_i(t)，∫u_i = 0.4·gain，σ 默认 15min。
+# 兼容：`decay_model="linear"` / `bell_share=0` 可复原旧行为；`pester_threshold`
+# 降级为旧的兜底键。文案语气由决议 `tone` 驱动（不再写死 low_attention）。
 # v0.24.7：陪伴值的**可见性**补齐——0.24.0 把它落成第四个独立数值，但状态板一行
 # 都没显示，且托盘状态行的「·有点想你」实为**走不到的死分支**（_need_thresholds
 # 没有 attention 键 → alerts() 对 attention 恒不触线 → low 恒 False）：

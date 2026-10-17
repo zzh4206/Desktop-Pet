@@ -122,6 +122,25 @@ _SAFE_DEFAULTS: dict = {
     # 语义 → **无需提 CONFIG_VERSION**（技术方案 §6）。
     "attention": {
         "enabled": True,
+        # v0.24.8 半连续五档（每档自带动作集/每小时上限/文案语气）
+        "bands": [
+            {"key": "very_low", "up_to": 30.0, "name": "委屈",
+             "behaviors": ["run_to_cursor", "bubble_whine"],
+             "per_hour": 2, "tone": "ignored"},
+            {"key": "low", "up_to": 50.0, "name": "很想很想你",
+             "behaviors": ["run_to_cursor"], "per_hour": 1, "tone": "pat_failed"},
+            {"key": "mid", "up_to": 70.0, "name": "很想你",
+             "behaviors": ["run_to_cursor"], "per_hour": 1, "tone": "low_attention"},
+            {"key": "soft", "up_to": 85.0, "name": "有点想你",
+             "behaviors": ["bubble_whine"], "per_hour": 1, "tone": "low_attention"},
+            {"key": "ok", "up_to": 100.0, "name": "安好",
+             "behaviors": [], "per_hour": 0, "tone": ""},
+        ],
+        # 双时间常数衰减：短=情绪、长=情感（PM 拍板）
+        "decay_curve": {"fast_drop": 25.0, "tau_fast_h": 2.5,
+                        "slow_drop": 50.0, "tau_slow_h": 24.0},
+        # 交互 = 钟形输入（share 走钟形、其余即时；sigma 为钟形宽度/分钟）
+        "bell": {"share": 0.4, "sigma_min": 15.0},
         "pester": {
             "enabled": True, "hourly_limit": 2,
             "behaviors": ["run_to_cursor", "bubble_whine"],
@@ -521,6 +540,48 @@ _SECTION_SCHEMAS: dict[str, dict] = {
         "type": "object",
         "properties": {
             "enabled": {"type": "boolean"},
+            "bands": {
+                "type": "array", "minItems": 1, "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"},
+                        "up_to": {"type": "number", "minimum": 0, "maximum": 100},
+                        "name": {"type": "string"},
+                        "behaviors": {
+                            "type": "array", "maxItems": 4,
+                            "items": {"type": "string",
+                                      "enum": ["run_to_cursor", "bubble_whine"]},
+                        },
+                        "per_hour": {"type": "integer", "minimum": 0, "maximum": 20},
+                        "tone": {"type": "string",
+                                 "enum": ["", "low_attention", "pat_failed", "ignored"]},
+                    },
+                    "required": ["key", "up_to", "name", "behaviors",
+                                 "per_hour", "tone"],
+                    "additionalProperties": False,
+                },
+            },
+            "decay_curve": {
+                "type": "object",
+                "properties": {
+                    "fast_drop": {"type": "number", "minimum": 0, "maximum": 100},
+                    "tau_fast_h": {"type": "number", "minimum": 0.1, "maximum": 720},
+                    "slow_drop": {"type": "number", "minimum": 0, "maximum": 100},
+                    "tau_slow_h": {"type": "number", "minimum": 0.1, "maximum": 720},
+                },
+                "required": ["fast_drop", "tau_fast_h", "slow_drop", "tau_slow_h"],
+                "additionalProperties": False,
+            },
+            "bell": {
+                "type": "object",
+                "properties": {
+                    "share": {"type": "number", "minimum": 0, "maximum": 1},
+                    "sigma_min": {"type": "number", "minimum": 1, "maximum": 180},
+                },
+                "required": ["share", "sigma_min"],
+                "additionalProperties": False,
+            },
             "pester_threshold": {"type": "number", "minimum": 0, "maximum": 100},
             "daily_limit": {"type": "integer", "minimum": 0, "maximum": 50},
             "backoff_s": {

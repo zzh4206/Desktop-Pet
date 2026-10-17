@@ -100,6 +100,21 @@
   },
   "attention": {
     "enabled": true,
+    "bands": [
+      {"key": "very_low", "up_to": 30, "name": "委屈",
+       "behaviors": ["run_to_cursor", "bubble_whine"], "per_hour": 2, "tone": "ignored"},
+      {"key": "low", "up_to": 50, "name": "很想很想你",
+       "behaviors": ["run_to_cursor"], "per_hour": 1, "tone": "pat_failed"},
+      {"key": "mid", "up_to": 70, "name": "很想你",
+       "behaviors": ["run_to_cursor"], "per_hour": 1, "tone": "low_attention"},
+      {"key": "soft", "up_to": 85, "name": "有点想你",
+       "behaviors": ["bubble_whine"], "per_hour": 1, "tone": "low_attention"},
+      {"key": "ok", "up_to": 100, "name": "安好",
+       "behaviors": [], "per_hour": 0, "tone": ""}
+    ],
+    "decay_curve": {"fast_drop": 25, "tau_fast_h": 2.5,
+                    "slow_drop": 50, "tau_slow_h": 24},
+    "bell": {"share": 0.4, "sigma_min": 15},
     "pester": {
       "enabled": true,
       "hourly_limit": 2,

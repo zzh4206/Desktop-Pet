@@ -20,6 +20,7 @@ wiki 设计-纠缠互动技术方案.md §2.1 + 资料-桌宠与虚拟陪伴全�
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -29,6 +30,36 @@ from pet.pet_state import Stage
 def _clamp01(v: float) -> float:
     """0-100 clamp（attention 是第四独立数值，与心情同量纲）。"""
     return max(0.0, min(100.0, v))
+
+
+@dataclass(frozen=True)
+class Band:
+    """半连续陪伴度的一档：名字 + 动作集 + 每小时上限 + 文案语气。
+
+    v0.24.8：取代「单阈值 35 + 断崖触发」。``up_to`` 为**上沿（不含）**，
+    按 ``bands`` 顺序自上而下取首个 ``attention < up_to`` 的档——所以请按
+    ``up_to`` 升序声明（默认表即升序）。
+    """
+
+    key: str
+    up_to: float
+    name: str
+    behaviors: tuple = ()
+    per_hour: int = 0
+    tone: str = ""
+
+
+# 出厂五档（依据 wiki 设计-陪伴度分档与动作.md §2）：
+# L0 委屈（动作最勤但语气收敛，对应 protest→despair 的转向）
+# L1 很想很想你（奔光标 + 白跑一趟语气） L2 很想你（奔光标） L3 有点想你（只冒泡）
+# L4 安好（不打扰）。全局 hourly/daily 仍是硬顶，档位上限只能收紧。
+DEFAULT_BANDS: tuple = (
+    Band("very_low", 30.0, "委屈", ("run_to_cursor", "bubble_whine"), 2, "ignored"),
+    Band("low", 50.0, "很想很想你", ("run_to_cursor",), 1, "pat_failed"),
+    Band("mid", 70.0, "很想你", ("run_to_cursor",), 1, "low_attention"),
+    Band("soft", 85.0, "有点想你", ("bubble_whine",), 1, "low_attention"),
+    Band("ok", 100.0, "安好", (), 0, ""),
+)
 
 
 @dataclass(frozen=True)
@@ -43,7 +74,8 @@ class AttentionConfig:
     gain: dict[str, float] = field(default_factory=lambda: {
         "pet": 40.0, "poke": 25.0, "chat": 30.0,
     })
-    pester_threshold: float = 35.0   # attention 低于此线才可能纠缠
+    pester_threshold: float = 35.0   # @deprecated v0.24.8：改为分档后仅供
+    #   旧配置/状态行低线兜底；纠缠判定看 ``bands``（见 should_pester）
     hourly_limit: int = 2            # 频控：最近 1 小时上限
     daily_limit: int = 3             # 日频：最近 24 小时上限
     backoff_s: tuple = (300.0, 1800.0, 7200.0)  # 退避阶梯（秒）：连续被无视第 1/2/3+ 次
@@ -51,6 +83,26 @@ class AttentionConfig:
     pester_enabled: bool = True      # v0.24.5 托盘「安静模式」总闸（config
     #   ``attention.pester.enabled``）：False → ``should_pester`` 恒 None，
     #   但 decay/gain 照常演化（数值不被 gate，只 gate 行为——技术方案 §6 验收）
+
+    # ---- v0.24.8 双时间常数衰减（PM 拍板：短的模拟情绪、长的模拟情感） ----
+    # attention 不再匀速线性漏掉，而是跟随一条**基准曲线**：
+    #   baseline(T) = 100 − fast_drop·(1 − e^(−T/τf)) − slow_drop·(1 − e^(−T/τs))
+    # T = 距上次互动的小时数（按 Stage 相对速度缩放）。前置「情绪」掉得快、
+    # 后置「情感」慢且长尾，且**带地板值** 100−fast_drop−slow_drop（默认 25，
+    # 即永远不会「不在意了」，只是收声）——这正是依赖与依恋分离的形状。
+    fast_drop: float = 25.0          # 情绪分量最终掉多少分
+    tau_fast_h: float = 2.5          # 情绪时间常数（小时）
+    slow_drop: float = 50.0          # 情感分量最终掉多少分
+    tau_slow_h: float = 24.0         # 情感时间常数（小时）
+    bands: tuple = DEFAULT_BANDS     # 五档（空 → 回退 DEFAULT_BANDS）
+    decay_model: str = "biexp"       # "linear" = 旧匀速衰减（保留供测试/兼容）
+
+    # ---- v0.24.8 交互 = 钟形输入（PM：「给一个小的钟形输入，改变微分方程的边界」）----
+    # 交互不再是阶跃 +gain，而是把 gain 拆成「即时一小份 + 钟形一份」：
+    #   dA/dt = −decay(T) + Σ u_i(t)，u_i 为高斯速率（∫u_i = gain·bell_share）
+    # 于是 attention 是**平滑灌入**的（钟形速率 → S 形抬升），整体仍增强。
+    bell_share: float = 0.4          # 走钟形的那一份占比（0 = 纯阶跃，旧行为）
+    bell_sigma_min: float = 15.0     # 钟形宽度 σ（分钟）；脉冲跨度约 ±2σ
 
 
 @dataclass(frozen=True)
@@ -78,10 +130,37 @@ class RelationMemory:
 
 @dataclass(frozen=True)
 class PesterDecision:
-    """should_pester 命中时返回的决策。"""
+    """should_pester 命中时返回的决策。
+
+    v0.24.8：附 ``band_key`` / ``tone``——文案语气不再写死 ``low_attention``，
+    由**档位**决定（委屈档用 ``ignored`` 池、白跑一趟档用 ``pat_failed`` 池）。
+    """
 
     behavior: str
     attention: float
+    band_key: str = ""
+    tone: str = ""
+
+
+def _normalize_bands(bands) -> tuple:
+    """config 里的档位（可能是 dict 列表）→ ``Band`` 元组；空 → 出厂五档。"""
+    out = []
+    for b in bands or ():
+        if isinstance(b, Band):
+            out.append(b)
+            continue
+        try:
+            out.append(Band(
+                key=str(b.get("key") or ""),
+                up_to=float(b.get("up_to", 100.0)),
+                name=str(b.get("name") or ""),
+                behaviors=tuple(b.get("behaviors") or ()),
+                per_hour=int(b.get("per_hour", 0) or 0),
+                tone=str(b.get("tone") or ""),
+            ))
+        except Exception:  # 坏条目跳过（fail-open 到出厂档）
+            continue
+    return tuple(out) or DEFAULT_BANDS
 
 
 class AttentionEngine:
@@ -102,6 +181,12 @@ class AttentionEngine:
         self._focus_state_fn = focus_state_fn
         self._relation = relation or RelationMemory()
         self._last_update = now_fn()
+        # v0.24.8：T 的锚点 = max(会话起点, 上次互动)。这样**离线时段不计衰减**
+        # （与旧行为一致，也避免"刚开就委屈"）；一旦有交互，T 归零重新起算。
+        self._t0 = self._last_update
+        self._hours_seen = 0.0
+        self._bands = _normalize_bands(self._cfg.bands)
+        self._pending_pulses: list = []   # v0.24.8 未灌完的钟形输入 [(中心, 幅度, σ秒)]
         self._ignore_count = 0
         self._next_try_at = 0.0
         self._last_behavior: str | None = None
@@ -125,10 +210,22 @@ class AttentionEngine:
 
     # ---- 交互 / 衰减 ----
     def on_interaction(self, kind: str, now: float | None = None) -> float:
-        """交互 → attention 增益 + 清退避 + 更新关系记忆。返回新 attention。"""
+        """交互 → attention 增益 + 清退避 + 更新关系记忆。返回新 attention。
+
+        v0.24.8：增益拆两份——``1−bell_share`` 即时生效，其余以**钟形速率**
+        灌入（见 ``_settle_pulses``）。所以本方法返回的是「即时那一份 + 已灌
+        完的历史脉冲」，完整抬升要等到脉冲窗口走完。
+        """
         now = self._now(now)
-        gain = self._cfg.gain.get(kind, 0.0)
-        self._attention = _clamp01(self._attention + float(gain))
+        gain = float(self._cfg.gain.get(kind, 0.0))
+        self._settle_pulses(now)          # 先把之前的钟形结清，避免混算
+        share = min(1.0, max(0.0, float(self._cfg.bell_share)))
+        self._attention = _clamp01(self._attention + gain * (1.0 - share))
+        if share > 0.0 and gain != 0.0:
+            sigma = max(1.0, float(self._cfg.bell_sigma_min) * 60.0)
+            # 中心 now+2σ：t≈now 处≈0 起步，约 now+4σ 灌完（高斯 CDF 的形状）
+            self._pending_pulses.append(
+                (now + 2.0 * sigma, gain * share, sigma, 0.0))
         self._ignore_count = 0
         self._next_try_at = 0.0
         pat = self._relation.pat_count
@@ -144,18 +241,106 @@ class AttentionEngine:
             feed_count=feed,
             last_interact_at=now,
         )
+        # v0.24.8：交互把「距离」归零——双指数基准曲线从头起算（下一次
+        # apply_decay 的损失量按 baseline(0)→baseline(ΔT) 取，恒为 0 起步）
+        self._hours_seen = 0.0
         return self._attention
 
     def apply_decay(self, stage: Stage, now: float | None = None) -> float:
-        """wall-clock 衰减（离线补衰减），速率取 stage 分档。返回新 attention。"""
+        """wall-clock 衰减（离线补衰减），速率取 stage 分档。返回新 attention。
+
+        v0.24.8 双时间常数模型（PM 拍板）：两个不同时间常数的指数项相加——
+        **短的模拟情绪**（τ≈2.5h，掉得快、先来）、**长的模拟情感**（τ≈24h，
+        慢、长尾）。做法不是「按当前值乘速率」，而是把 attention 拉向一条随
+        距离 T 变化的**基准曲线**：
+
+            baseline(T) = 100 − fast_drop·(1−e^(−T/τf)) − slow_drop·(1−e^(−T/τs))
+
+        每次只扣掉「曲线在这一步的下降量」，所以：
+        * 交互增益把数值抬到曲线**之上**后，会随曲线回落，不会被强行拉回；
+        * 曲线自身饱和 → 长期不理她衰减趋于 0，停在地板
+          100−fast_drop−slow_drop（默认 25，即「不会不在意，只是收声」）；
+        * Stage 只改相对速度（decay_per_hour / FINAL 的比值），不改曲线形状。
+        ``decay_model="linear"`` 保留旧的匀速实现（测试/回退用）。
+        """
         now = self._now(now)
         name = getattr(stage, "name", stage)  # 兼容 Stage enum / 字符串
-        rate = self._cfg.decay_per_hour.get(name, 2.5)
-        dt_hours = (now - self._last_update) / 3600.0
-        if dt_hours > 0:
-            self._attention = _clamp01(self._attention - float(rate) * dt_hours)
+        self._settle_pulses(now)   # 先把钟形输入灌入，再按曲线扣衰减
+        if str(self._cfg.decay_model).lower() == "linear":
+            rate = self._cfg.decay_per_hour.get(name, 2.5)
+            dt_hours = (now - self._last_update) / 3600.0
+            if dt_hours > 0:
+                self._attention = _clamp01(self._attention - float(rate) * dt_hours)
+            self._last_update = now
+            return self._attention
+        h_new = self._hours_at(now)
+        lost = self._baseline(self._hours_seen, name) - self._baseline(h_new, name)
+        if lost > 0:
+            self._attention = _clamp01(self._attention - float(lost))
+        self._hours_seen = h_new
         self._last_update = now
         return self._attention
+
+    # ---- v0.24.8 基准曲线 / 档位 / 钟形输入 ----
+
+    def _settle_pulses(self, now: float) -> float:
+        """把钟形输入在本时刻**应已灌入**的量加到 attention，返回本步增量。
+
+        每个脉冲是高斯**速率** u(t)=amp/(σ√2π)·e^{−(t−c)²/2σ²}，累计灌入
+        = amp·Φ((t−c)/σ)（Φ 为正态 CDF，用 ``math.erf`` 算）。按「已灌比例」
+        记账，故重复调用不会重复计账；比例到 99.9% 即出列。
+        """
+        if not self._pending_pulses:
+            return 0.0
+        added = 0.0
+        keep = []
+        for center, amp, sigma, done in self._pending_pulses:
+            frac = 0.5 * (1.0 + math.erf((float(now) - center)
+                                        / (sigma * math.sqrt(2.0))))
+            frac = min(1.0, max(0.0, frac))
+            step = amp * max(0.0, frac - done)
+            if step:
+                added += step
+            if frac < 0.999:
+                keep.append((center, amp, sigma, max(done, frac)))
+        self._pending_pulses = keep
+        if added:
+            self._attention = _clamp01(self._attention + added)
+        return added
+
+    def _hours_at(self, now: float) -> float:
+        """距「上次互动（或本会话起点）」的小时数，恒 ≥ 0。"""
+        anchor = max(self._t0, float(self._relation.last_interact_at or 0.0))
+        return max(0.0, (float(now) - anchor) / 3600.0)
+
+    def _stage_speed(self, name: str) -> float:
+        """Stage 相对速度（FINAL 为 1.0）——沿用既有 decay_per_hour 的口径。"""
+        ref = float(self._cfg.decay_per_hour.get("FINAL", 1.5) or 0.0)
+        if ref <= 0:
+            return 1.0
+        return max(0.1, float(self._cfg.decay_per_hour.get(name, 2.5) or 0.0) / ref)
+
+    def _baseline(self, hours: float, stage_name: str = "FINAL") -> float:
+        """基准曲线：给定「距离」小时数应处的 attention。"""
+        h = max(0.0, float(hours)) * self._stage_speed(stage_name)
+        tau_f = max(1e-6, float(self._cfg.tau_fast_h))
+        tau_s = max(1e-6, float(self._cfg.tau_slow_h))
+        fast = 1.0 - math.exp(-h / tau_f)
+        slow = 1.0 - math.exp(-h / tau_s)
+        return _clamp01(100.0 - float(self._cfg.fast_drop) * fast
+                        - float(self._cfg.slow_drop) * slow)
+
+    def band_for(self, attention: float | None = None) -> Band:
+        """attention → 所属档（首个 ``att < up_to``；都不过 → 最后一档）。"""
+        a = self._attention if attention is None else float(attention)
+        for b in self._bands:
+            if a < b.up_to:
+                return b
+        return self._bands[-1]
+
+    @property
+    def bands(self) -> tuple:
+        return self._bands
 
     def _focus_active(self) -> bool:
         """focus 防御探测：focus_state_fn 为 None / 抛异常 / 返回非 "FOCUS"
@@ -205,22 +390,30 @@ class AttentionEngine:
         # 3 focus 防御探测
         if self._focus_active():
             return None
-        # 4 阈值门（attention 高于线 = 不饿不缠）
-        if self._attention > self._cfg.pester_threshold:
+        # 4 档位门（v0.24.8 取代单阈值）：落档决定动作集/上限/语气；
+        #   当前档没有动作 = 这一档不打扰（L4 安好）。
+        band = self.band_for(self._attention)
+        if not band.behaviors:
             return None
         # 5 退避门
         if now < self._next_try_at:
             return None
-        # 6 频控门（最近 3600s）
+        # 6 频控门（最近 3600s）：全局上限与档位上限取小——档位只能收紧
         hour_ago = now - 3600.0
-        if sum(1 for t in self._pester_times if t > hour_ago) >= self._cfg.hourly_limit:
+        in_hour = sum(1 for t in self._pester_times if t > hour_ago)
+        cap_h = self._cfg.hourly_limit
+        if band.per_hour > 0:
+            cap_h = min(cap_h, band.per_hour)
+        if in_hour >= cap_h:
             return None
         # 7 日频门（最近 86400s）
         day_ago = now - 86400.0
         if sum(1 for t in self._pester_times if t > day_ago) >= self._cfg.daily_limit:
             return None
-        # 选行为：排除 last_behavior（池 >1 时），确定性取首个
-        behaviors = list(self._cfg.behaviors)
+        # 选行为：优先本档动作集（空则回退全局池）；排除 last_behavior，确定性取首个
+        behaviors = list(band.behaviors) or list(self._cfg.behaviors)
+        if not behaviors:
+            return None
         if self._last_behavior in behaviors and len(behaviors) > 1:
             candidates = [b for b in behaviors if b != self._last_behavior]
             behavior = candidates[0] if candidates else behaviors[0]
@@ -228,7 +421,9 @@ class AttentionEngine:
             behavior = behaviors[0]
         self._pester_times.append(now)
         self._last_behavior = behavior
-        return PesterDecision(behavior=behavior, attention=self._attention)
+        return PesterDecision(behavior=behavior, attention=self._attention,
+                              band_key=band.key,
+                              tone=band.tone or "low_attention")
 
     def on_pester_ignored(self, behavior: str, now: float | None = None) -> None:
         """被无视 → 退让：只按阶梯加深退避（300→1800→7200 封顶），
